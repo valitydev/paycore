@@ -9,11 +9,10 @@ namespaces:
                 machine_id: payproc
         processor:
             url: http://party-management:8022/v1/stateproc/party
-    domain-config:
-        processor:
-            url: http://dominant:8022/v1/stateproc
+
 storage:
     type: memory
+
 woody_server:
     max_concurrent_connections: 8000
     http_keep_alive_timeout: 15S

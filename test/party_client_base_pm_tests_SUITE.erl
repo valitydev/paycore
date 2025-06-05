@@ -88,8 +88,9 @@ init_per_suite(Config) ->
                 memory => 2048
             }},
             {service_urls, #{
-                'Repository' => <<"http://dominant:8022/v1/domain/repository">>,
-                'RepositoryClient' => <<"http://dominant:8022/v1/domain/repository_client">>
+                'AuthorManagement' => <<"http://dmt:8022/v1/domain/author">>,
+                'Repository' => <<"http://dmt:8022/v1/domain/repository">>,
+                'RepositoryClient' => <<"http://dmt:8022/v1/domain/repository_client">>
             }}
         ]},
         {party_client, []}
@@ -169,7 +170,7 @@ contract_create_and_get_test(C) ->
     {ok, Contract} = party_client_thrift:get_contract(PartyId, ContractId, Client, Context),
     #domain_Contract{id = ContractId} = Contract,
     Timestamp = genlib_rfc3339:format(genlib_time:unow() + 10, millisecond),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     {ok, PartyRevision} = party_client_thrift:get_revision(PartyId, Client, Context),
     Varset = #payproc_ComputeContractTermsVarset{},
     {ok, _Terms} = party_client_thrift:compute_contract_terms(
@@ -280,7 +281,7 @@ get_revision_test(C) ->
 -spec compute_provider_ok(config()) -> any().
 compute_provider_ok(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{
         currency = ?cur(<<"RUB">>)
     },
@@ -299,7 +300,7 @@ compute_provider_ok(C) ->
 -spec compute_provider_not_found(config()) -> any().
 compute_provider_not_found(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     {error, #payproc_ProviderNotFound{}} =
         party_client_thrift:compute_provider(
             ?prv(2),
@@ -312,7 +313,7 @@ compute_provider_not_found(C) ->
 -spec compute_provider_terminal_terms_ok(config()) -> any().
 compute_provider_terminal_terms_ok(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{
         currency = ?cur(<<"RUB">>)
     },
@@ -335,7 +336,7 @@ compute_provider_terminal_terms_ok(C) ->
 -spec compute_provider_terminal_terms_not_found(config()) -> any().
 compute_provider_terminal_terms_not_found(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     {error, #payproc_TerminalNotFound{}} =
         party_client_thrift:compute_provider_terminal_terms(
             ?prv(1),
@@ -367,7 +368,7 @@ compute_provider_terminal_terms_not_found(C) ->
 -spec compute_globals_ok(config()) -> any().
 compute_globals_ok(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{},
     {ok, #domain_Globals{
         external_account_set = {value, ?eas(1)}
@@ -376,7 +377,7 @@ compute_globals_ok(C) ->
 -spec compute_routing_ruleset_ok(config()) -> any().
 compute_routing_ruleset_ok(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{
         party_id = <<"67890">>
     },
@@ -402,7 +403,7 @@ compute_routing_ruleset_ok(C) ->
 -spec compute_routing_ruleset_unreducable(config()) -> any().
 compute_routing_ruleset_unreducable(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{},
     {ok, #domain_RoutingRuleset{
         name = <<"Rule#1">>,
@@ -426,7 +427,7 @@ compute_routing_ruleset_unreducable(C) ->
 -spec compute_routing_ruleset_not_found(config()) -> any().
 compute_routing_ruleset_not_found(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
-    {ok, DomainRevision} = dmt_client_cache:update(),
+    {ok, DomainRevision} = ensure_latest_version_checked_out(),
     {error, #payproc_RuleSetNotFound{}} =
         (catch party_client_thrift:compute_routing_ruleset(
             ?ruleset(5),
@@ -442,11 +443,11 @@ compute_routing_ruleset_not_found(C) ->
 
 -spec init_domain() -> {ok, integer()}.
 init_domain() ->
-    {ok, _} = dmt_client_cache:update(),
+    {ok, _} = ensure_latest_version_checked_out(),
     ok = party_domain_fixtures:cleanup(),
-    {ok, _} = dmt_client_cache:update(),
+    {ok, _} = ensure_latest_version_checked_out(),
     ok = party_domain_fixtures:apply_domain_fixture(),
-    {ok, _Revision} = dmt_client_cache:update().
+    {ok, _Revision} = ensure_latest_version_checked_out().
 
 create_party(C) ->
     {ok, TestId, Client, Context} = test_init_info(C),
@@ -462,20 +463,11 @@ create_contract(PartyId, C) ->
         template = undefined,
         payment_institution = #domain_PaymentInstitutionRef{id = 2}
     },
-    PayoutToolParams = make_battle_ready_payout_tool_params(),
     ContractId = <<TestId/binary, ".contract">>,
     Changeset = [
         {contract_modification, #payproc_ContractModificationUnit{
             id = ContractId,
             modification = {creation, ContractParams}
-        }},
-        {contract_modification, #payproc_ContractModificationUnit{
-            id = ContractId,
-            modification =
-                {payout_tool_modification, #payproc_PayoutToolModificationUnit{
-                    payout_tool_id = <<"1">>,
-                    modification = {creation, PayoutToolParams}
-                }}
         }}
     ],
     create_and_accept_claim(PartyId, Changeset, Client, Context),
@@ -493,8 +485,7 @@ create_shop(PartyId, ContractId, C) ->
         category = #domain_CategoryRef{id = 2},
         location = {url, <<"https://somename.somedomain/p/123?redirect=1">>},
         details = Details,
-        contract_id = ContractId,
-        payout_tool_id = get_first_payout_tool_id(PartyId, ContractId, Client, Context)
+        contract_id = ContractId
     },
     ShopAccountParams = #payproc_ShopAccountParams{currency = Currency},
     Changeset = [
@@ -514,6 +505,12 @@ create_and_accept_claim(PartyId, Changeset, Client, Context) ->
     {ok, Claim} = party_client_thrift:create_claim(PartyId, Changeset, Client, Context),
     #payproc_Claim{id = ClaimId, revision = Revision} = Claim,
     ok = party_client_thrift:accept_claim(PartyId, ClaimId, Revision, Client, Context).
+
+ensure_latest_version_checked_out() ->
+    Version = dmt_client:get_latest_version(),
+    %% NOTE This call updates local cache under with checked out objects of a version
+    _ = dmt_client:checkout_all(Version),
+    {ok, Version}.
 
 %% Config helpers
 
@@ -560,19 +557,6 @@ make_battle_ready_contractor() ->
             russian_bank_account = BankAccount
         }}}.
 
--spec make_battle_ready_payout_tool_params() -> dmsl_payproc_thrift:'PayoutToolParams'().
-make_battle_ready_payout_tool_params() ->
-    #payproc_PayoutToolParams{
-        currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-        tool_info =
-            {russian_bank_account, #domain_RussianBankAccount{
-                account = <<"4276300010908312893">>,
-                bank_name = <<"SomeBank">>,
-                bank_post_account = <<"123129876">>,
-                bank_bik = <<"66642666">>
-            }}
-    }.
-
 -spec make_test_cashflow() -> dmsl_domain_thrift:'CashFlowPosting'().
 make_test_cashflow() ->
     ?cfpost(
@@ -585,17 +569,3 @@ make_test_cashflow() ->
                     ?share(5, 100, operation_amount, round_half_towards_zero)
                 ])}}
     ).
-
-%% Other helpers
-
--spec get_first_payout_tool_id(binary(), binary(), party_client:client(), party_client:context()) ->
-    dmsl_domain_thrift:'PayoutToolID'().
-get_first_payout_tool_id(PartyId, ContractId, Client, Context) ->
-    {ok, Contract} = party_client_thrift:get_contract(PartyId, ContractId, Client, Context),
-    #domain_Contract{payout_tools = PayoutTools} = Contract,
-    case PayoutTools of
-        [Tool | _] ->
-            Tool#domain_PayoutTool.id;
-        [] ->
-            error(no_payout_tools)
-    end.

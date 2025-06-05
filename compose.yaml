@@ -16,35 +16,36 @@ services:
     command: /sbin/init
 
   party-management:
-    image: ghcr.io/valitydev/party-management:sha-76058e0
+    image: ghcr.io/valitydev/party-management:sha-6b6d4a5
     command: /opt/party-management/bin/party-management foreground
     depends_on:
-      machinegun:
+      db:
         condition: service_healthy
-      dominant:
-        condition: service_healthy
+      dmt:
+        condition: service_started
       shumway:
-        condition: service_healthy
-    ports:
-      - "8022"
+        condition: service_started
     healthcheck:
       test: "/opt/party-management/bin/party-management ping"
       interval: 10s
       timeout: 5s
       retries: 10
+    volumes:
+      - ./test/party-management/sys.config:/opt/party-management/releases/0.1/sys.config
 
-  dominant:
-    image: ghcr.io/valitydev/dominant:sha-eb1cccb
-    depends_on:
-      - machinegun
-    ports:
-      - "8022"
-    command: /opt/dominant/bin/dominant foreground
+  dmt:
+    image: ghcr.io/valitydev/dominant-v2:sha-109d2ea
+    command: /opt/dmt/bin/dmt foreground
     healthcheck:
-      test: "/opt/dominant/bin/dominant ping"
+      test: "/opt/dmt/bin/dmt ping"
       interval: 5s
-      timeout: 1s
-      retries: 20
+      timeout: 3s
+      retries: 12
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./test/dmt/sys.config:/opt/dmt/releases/0.1/sys.config
 
   machinegun:
     image: ghcr.io/valitydev/machinegun:sha-7f0a21a
@@ -61,32 +62,36 @@ services:
       retries: 20
 
   shumway:
-    image: docker.io/rbkmoney/shumway:44eb989065b27be619acd16b12ebdb2288b46c36
+    image: ghcr.io/valitydev/shumway:sha-658587c
     restart: unless-stopped
     depends_on:
-      - shumway-db
-    ports:
-      - "8022"
+      db:
+        condition: service_healthy
     entrypoint:
       - java
       - -Xmx512m
       - -jar
       - /opt/shumway/shumway.jar
-      - --spring.datasource.url=jdbc:postgresql://shumway-db:5432/shumway
-      - --spring.datasource.username=postgres
+      - --spring.datasource.url=jdbc:postgresql://db:5432/shumway
+      - --spring.datasource.username=shumway
       - --spring.datasource.password=postgres
-      - --management.metrics.export.statsd.enabled=false
+      - --management.endpoint.metrics.enabled=false
+      - --management.endpoint.prometheus.enabled=false
     healthcheck:
-      test: curl http://localhost:8022/
-      interval: 5s
-      timeout: 1s
-      retries: 20
+      disable: true
 
-  shumway-db:
-    image: docker.io/library/postgres:9.6
-    ports:
-      - "5432"
+  db:
+    image: postgres:15-bookworm
+    command: -c 'max_connections=1000'
     environment:
-      - POSTGRES_DB=shumway
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      POSTGRES_MULTIPLE_DATABASES: "dmt,party_management,shumway"
+      POSTGRES_PASSWORD: "postgres"
+    volumes:
+      - ./test/postgres/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hellgate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped

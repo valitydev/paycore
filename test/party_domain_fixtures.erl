@@ -2,7 +2,7 @@
 
 -include("party_domain_fixtures.hrl").
 
--include_lib("damsel/include/dmsl_domain_conf_thrift.hrl").
+-include_lib("damsel/include/dmsl_domain_conf_v2_thrift.hrl").
 
 -export([construct_domain_fixture/0]).
 -export([apply_domain_fixture/0]).
@@ -34,15 +34,30 @@ apply_domain_fixture() ->
 
 -spec apply_domain_fixture([dmsl_domain_thrift:'DomainObject'()]) -> ok.
 apply_domain_fixture(Fixture) ->
-    _NextRevision = dmt_client:insert(Fixture),
+    _NextRevision = dmt_client:insert(Fixture, ensure_stub_author()),
     ok.
 
 -spec cleanup() -> ok.
 cleanup() ->
-    #domain_conf_Snapshot{domain = Domain, version = Head} = dmt_client:checkout(latest),
-    Objects = maps:values(Domain),
-    _NextRevision = dmt_client:remove(Head, Objects),
+    Version = dmt_client:get_latest_version(),
+    Objects = lists:map(
+        fun(#domain_conf_v2_VersionedObject{object = Object}) -> Object end, dmt_client:checkout_all(Version)
+    ),
+    _NextRevision = dmt_client:remove(Version, Objects, ensure_stub_author()),
     ok.
+
+ensure_stub_author() ->
+    %% TODO DISCUSS Stubs and fallback authors
+    ensure_author(~b"unknown", ~b"unknown@local").
+
+ensure_author(Name, Email) ->
+    try
+        #domain_conf_v2_Author{id = ID} = dmt_client:get_author_by_email(Email),
+        ID
+    catch
+        throw:#domain_conf_v2_AuthorNotFound{} ->
+            dmt_client:create_author(Name, Email)
+    end.
 
 -spec construct_domain_fixture() -> [dmsl_domain_thrift:'DomainObject'()].
 construct_domain_fixture() ->
@@ -86,28 +101,6 @@ construct_domain_fixture() ->
                         {merchant, settlement},
                         {system, settlement},
                         ?share(45, 1000, operation_amount)
-                    )
-                ]}
-        },
-        payouts = #domain_PayoutsServiceTerms{
-            payout_methods =
-                {decisions, [
-                    #domain_PayoutMethodDecision{
-                        if_ = {constant, true},
-                        then_ = {value, ordsets:from_list([?pomt(russian_bank_account)])}
-                    }
-                ]},
-            fees =
-                {value, [
-                    ?cfpost(
-                        {merchant, settlement},
-                        {merchant, payout},
-                        ?share(750, 1000, operation_amount)
-                    ),
-                    ?cfpost(
-                        {merchant, settlement},
-                        {system, settlement},
-                        ?share(250, 1000, operation_amount)
                     )
                 ]}
         },
@@ -171,9 +164,6 @@ construct_domain_fixture() ->
         construct_payment_method(mastercard, ?pmt_bank_card(mastercard)),
         construct_payment_method(maestro, ?pmt_bank_card(maestro)),
         construct_payment_method(euroset, ?pmt(payment_terminal, #domain_PaymentServiceRef{id = <<"euroset">>})),
-
-        construct_payout_method(?pomt(russian_bank_account)),
-        construct_payout_method(?pomt(international_bank_account)),
 
         construct_proxy(?prx(1), <<"Dummy proxy">>),
         construct_inspector(?insp(1), <<"Dummy Inspector">>, ?prx(1)),
@@ -315,9 +305,9 @@ construct_domain_fixture() ->
             ref = ?prv(1),
             data = #domain_Provider{
                 name = <<"Brovider">>,
+                realm = test,
                 description = <<"A provider but bro">>,
                 proxy = #domain_Proxy{ref = ?prx(1), additional = #{}},
-                abs_account = <<"1234567890">>,
                 terms = #domain_ProvisionTermSet{
                     payments = #domain_PaymentsProvisionTerms{
                         currencies = {value, ?ordset([?cur(<<"RUB">>)])},
@@ -490,18 +480,6 @@ construct_payment_method(Name, ?pmt(_, _) = Ref) when is_atom(Name) ->
     {payment_method, #domain_PaymentMethodObject{
         ref = Ref,
         data = #domain_PaymentMethodDefinition{
-            name = Def,
-            description = Def
-        }
-    }}.
-
--spec construct_payout_method(dmsl_domain_thrift:'PayoutMethodRef'()) ->
-    {payout_method, dmsl_domain_thrift:'PayoutMethodObject'()}.
-construct_payout_method(?pomt(M) = Ref) ->
-    Def = erlang:atom_to_binary(M, unicode),
-    {payout_method, #domain_PayoutMethodObject{
-        ref = Ref,
-        data = #domain_PayoutMethodDefinition{
             name = Def,
             description = Def
         }

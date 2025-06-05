@@ -11,7 +11,6 @@
 -define(pmt_bank_card(T),
     ?pmt(bank_card, #domain_BankCardPaymentMethod{payment_system = #domain_PaymentSystemRef{id = atom_to_binary(T)}})
 ).
--define(pomt(M), #domain_PayoutMethodRef{id = M}).
 -define(cat(ID), #domain_CategoryRef{id = ID}).
 -define(prx(ID), #domain_ProxyRef{id = ID}).
 -define(tmpl(ID), #domain_ContractTemplateRef{id = ID}).

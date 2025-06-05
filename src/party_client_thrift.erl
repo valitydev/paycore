@@ -25,7 +25,6 @@
 -export([compute_routing_ruleset/5]).
 -export([compute_payment_institution_terms/4]).
 -export([compute_payment_institution/5]).
--export([compute_payout_cash_flow/4]).
 
 -export([block_shop/5]).
 -export([unblock_shop/5]).
@@ -67,7 +66,6 @@
 -type meta_data() :: dmsl_domain_thrift:'PartyMetaData'().
 -type timestamp() :: dmsl_base_thrift:'Timestamp'().
 -type party_revision_param() :: dmsl_payproc_thrift:'PartyRevisionParam'().
--type payout_params() :: dmsl_payproc_thrift:'PayoutParams'().
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type provider() :: dmsl_domain_thrift:'Provider'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
@@ -109,7 +107,6 @@
 -export_type([meta_data/0]).
 -export_type([timestamp/0]).
 -export_type([party_revision_param/0]).
--export_type([payout_params/0]).
 -export_type([provider_ref/0]).
 -export_type([provider/0]).
 -export_type([terminal_ref/0]).
@@ -147,7 +144,6 @@
 -type shop_account_not_found() :: dmsl_payproc_thrift:'ShopAccountNotFound'().
 -type account_not_found() :: dmsl_payproc_thrift:'AccountNotFound'().
 -type payment_institution_not_found() :: dmsl_payproc_thrift:'PaymentInstitutionNotFound'().
--type not_permitted() :: dmsl_payproc_thrift:'OperationNotPermitted'().
 -type event_not_found() :: dmsl_payproc_thrift:'EventNotFound'().
 -type invalid_request() :: dmsl_base_thrift:'InvalidRequest'().
 -type provider_not_found() :: dmsl_payproc_thrift:'ProviderNotFound'().
@@ -236,8 +232,8 @@ remove_metadata(PartyId, Ns, Client, Context) ->
 
 -spec get_contract(party_id(), contract_id(), client(), context()) -> result(contract(), Error) when
     Error :: contract_not_found().
-get_contract(PartyId, ContractId, Client, Context) ->
-    call('GetContract', [PartyId, ContractId], Client, Context).
+get_contract(PartyId, ContractID, Client, Context) ->
+    call('GetContract', [PartyId, ContractID], Client, Context).
 
 -spec compute_contract_terms(ID, ContractID, TS, Revision, Domain, VS, client(), context()) ->
     result(terms(), Error)
@@ -249,8 +245,8 @@ when
     Domain :: domain_revision(),
     VS :: contract_terms_varset(),
     Error :: party_not_exists_yet() | contract_not_found().
-compute_contract_terms(PartyId, ContractId, Timestamp, PartyRevision, DomainRevision, Varset, Client, Context) ->
-    Args = [PartyId, ContractId, Timestamp, PartyRevision, DomainRevision, Varset],
+compute_contract_terms(PartyId, ContractID, Timestamp, PartyRevision, DomainRevision, Varset, Client, Context) ->
+    Args = [PartyId, ContractID, Timestamp, PartyRevision, DomainRevision, Varset],
     call('ComputeContractTerms', Args, Client, Context).
 
 -spec compute_provider(Ref, Domain, Varset, client(), context()) -> result(provider(), Error) when
@@ -302,42 +298,35 @@ compute_payment_institution_terms(Ref, Varset, Client, Context) ->
 compute_payment_institution(Ref, Domain, Varset, Client, Context) ->
     call('ComputePaymentInstitution', [Ref, Domain, Varset], Client, Context).
 
--spec compute_payout_cash_flow(party_id(), payout_params(), client(), context()) ->
-    result(final_cash_flow(), Error)
-when
-    Error :: party_not_exists_yet() | shop_not_found() | not_permitted().
-compute_payout_cash_flow(PartyId, Params, Client, Context) ->
-    call('ComputePayoutCashFlow', [PartyId, Params], Client, Context).
-
 -spec get_shop(party_id(), shop_id(), client(), context()) -> result(shop(), Error) when
     Error :: party_not_found() | shop_not_found().
-get_shop(PartyId, ShopId, Client, Context) ->
-    call('GetShop', [PartyId, ShopId], Client, Context).
+get_shop(PartyId, ShopID, Client, Context) ->
+    call('GetShop', [PartyId, ShopID], Client, Context).
 
 -spec get_shop_contract(party_id(), shop_id(), client(), context()) -> result(shop_contract(), Error) when
     Error :: party_not_found() | shop_not_found() | contract_not_found().
-get_shop_contract(PartyId, ShopId, Client, Context) ->
-    call('GetShopContract', [PartyId, ShopId], Client, Context).
+get_shop_contract(PartyId, ShopID, Client, Context) ->
+    call('GetShopContract', [PartyId, ShopID], Client, Context).
 
 -spec block_shop(party_id(), shop_id(), block_reason(), client(), context()) -> void(Error) when
     Error :: shop_not_found() | invalid_shop_status().
-block_shop(PartyId, ShopId, Reason, Client, Context) ->
-    call('BlockShop', [PartyId, ShopId, Reason], Client, Context).
+block_shop(PartyId, ShopID, Reason, Client, Context) ->
+    call('BlockShop', [PartyId, ShopID, Reason], Client, Context).
 
 -spec unblock_shop(party_id(), shop_id(), unblock_reason(), client(), context()) -> void(Error) when
     Error :: shop_not_found() | invalid_shop_status().
-unblock_shop(PartyId, ShopId, Reason, Client, Context) ->
-    call('UnblockShop', [PartyId, ShopId, Reason], Client, Context).
+unblock_shop(PartyId, ShopID, Reason, Client, Context) ->
+    call('UnblockShop', [PartyId, ShopID, Reason], Client, Context).
 
 -spec suspend_shop(party_id(), shop_id(), client(), context()) -> void(Error) when
     Error :: shop_not_found() | invalid_shop_status().
-suspend_shop(PartyId, ShopId, Client, Context) ->
-    call('SuspendShop', [PartyId, ShopId], Client, Context).
+suspend_shop(PartyId, ShopID, Client, Context) ->
+    call('SuspendShop', [PartyId, ShopID], Client, Context).
 
 -spec activate_shop(party_id(), shop_id(), client(), context()) -> void(Error) when
     Error :: shop_not_found() | invalid_shop_status().
-activate_shop(PartyId, ShopId, Client, Context) ->
-    call('ActivateShop', [PartyId, ShopId], Client, Context).
+activate_shop(PartyId, ShopID, Client, Context) ->
+    call('ActivateShop', [PartyId, ShopID], Client, Context).
 
 -spec compute_shop_terms(
     party_id(),
@@ -349,8 +338,8 @@ activate_shop(PartyId, ShopId, Client, Context) ->
     context()
 ) -> result(terms(), Error) when
     Error :: shop_not_found() | invalid_shop_status() | party_not_exists_yet().
-compute_shop_terms(PartyId, ShopId, Timestamp, PartyRevision, Varset, Client, Context) ->
-    call('ComputeShopTerms', [PartyId, ShopId, Timestamp, PartyRevision, Varset], Client, Context).
+compute_shop_terms(PartyId, ShopID, Timestamp, PartyRevision, Varset, Client, Context) ->
+    call('ComputeShopTerms', [PartyId, ShopID, Timestamp, PartyRevision, Varset], Client, Context).
 
 -spec get_claim(party_id(), claim_id(), client(), context()) -> result(claim(), Error) when Error :: claim_not_found().
 get_claim(PartyId, ClaimId, Client, Context) ->

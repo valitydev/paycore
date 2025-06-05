@@ -101,7 +101,6 @@ get_aggressive_function_cache_mode('GetClaims') -> temporary;
 get_aggressive_function_cache_mode('GetEvents') -> temporary;
 get_aggressive_function_cache_mode('GetShopAccount') -> temporary;
 get_aggressive_function_cache_mode('ComputePaymentInstitutionTerms') -> temporary;
-get_aggressive_function_cache_mode('ComputePayoutCashFlow') -> temporary;
 get_aggressive_function_cache_mode(_Other) -> no_cache.
 
 % Retry
