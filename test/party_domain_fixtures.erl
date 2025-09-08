@@ -108,11 +108,13 @@ construct_domain_fixture() ->
     Decision1 =
         {delegates, [
             #domain_RoutingDelegate{
-                allowed = {condition, {party, #domain_PartyCondition{id = <<"12345">>}}},
+                allowed =
+                    {condition, {party, #domain_PartyCondition{party_ref = #domain_PartyConfigRef{id = <<"12345">>}}}},
                 ruleset = ?ruleset(2)
             },
             #domain_RoutingDelegate{
-                allowed = {condition, {party, #domain_PartyCondition{id = <<"67890">>}}},
+                allowed =
+                    {condition, {party, #domain_PartyCondition{party_ref = #domain_PartyConfigRef{id = <<"67890">>}}}},
                 ruleset = ?ruleset(3)
             },
             #domain_RoutingDelegate{
@@ -130,7 +132,8 @@ construct_domain_fixture() ->
     Decision3 =
         {candidates, [
             #domain_RoutingCandidate{
-                allowed = {condition, {party, #domain_PartyCondition{id = <<"67890">>}}},
+                allowed =
+                    {condition, {party, #domain_PartyCondition{party_ref = #domain_PartyConfigRef{id = <<"67890">>}}}},
                 terminal = ?trm(2)
             },
             #domain_RoutingCandidate{
@@ -390,6 +393,24 @@ construct_domain_fixture() ->
                                 ])}
                     }
                 }
+            }
+        }},
+        {party_config, #domain_PartyConfigObject{
+            ref = #domain_PartyConfigRef{id = <<"12345">>},
+            data = #domain_PartyConfig{
+                name = <<"12345">>,
+                block = {unblocked, #domain_Unblocked{reason = ~"whatever reason", since = ~"1970-01-01T00:00:00Z"}},
+                suspension = {active, #domain_Active{since = ~"1970-01-01T00:00:00Z"}},
+                contact_info = #domain_PartyContactInfo{registration_email = <<"party@example.com">>}
+            }
+        }},
+        {party_config, #domain_PartyConfigObject{
+            ref = #domain_PartyConfigRef{id = <<"67890">>},
+            data = #domain_PartyConfig{
+                name = <<"67890">>,
+                block = {unblocked, #domain_Unblocked{reason = ~"whatever reason", since = ~"1970-01-01T00:00:00Z"}},
+                suspension = {active, #domain_Active{since = ~"1970-01-01T00:00:00Z"}},
+                contact_info = #domain_PartyContactInfo{registration_email = <<"party@example.com">>}
             }
         }}
     ].

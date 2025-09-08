@@ -13,7 +13,7 @@
 
 %% Domain types
 
--type party_id() :: dmsl_domain_thrift:'PartyID'().
+-type party_id() :: dmsl_base_thrift:'ID'().
 -type shop_id() :: dmsl_domain_thrift:'ShopID'().
 -type wallet_id() :: dmsl_domain_thrift:'WalletID'().
 -type account_id() :: dmsl_domain_thrift:'AccountID'().

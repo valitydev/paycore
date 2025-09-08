@@ -4,6 +4,7 @@
 -include("party_domain_fixtures.hrl").
 
 -include_lib("damsel/include/dmsl_payproc_thrift.hrl").
+-include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -215,7 +216,7 @@ compute_routing_ruleset_ok(C) ->
     {ok, _PartyId, Client, Context} = test_init_info(C),
     {ok, DomainRevision} = ensure_latest_version_checked_out(),
     Varset = #payproc_Varset{
-        party_id = <<"67890">>
+        party_ref = #domain_PartyConfigRef{id = <<"67890">>}
     },
     {ok, #domain_RoutingRuleset{
         name = <<"Rule#1">>,
@@ -246,11 +247,15 @@ compute_routing_ruleset_unreducable(C) ->
         decisions =
             {delegates, [
                 #domain_RoutingDelegate{
-                    allowed = {condition, {party, #domain_PartyCondition{id = <<"12345">>}}},
+                    allowed =
+                        {condition,
+                            {party, #domain_PartyCondition{party_ref = #domain_PartyConfigRef{id = <<"12345">>}}}},
                     ruleset = ?ruleset(2)
                 },
                 #domain_RoutingDelegate{
-                    allowed = {condition, {party, #domain_PartyCondition{id = <<"67890">>}}},
+                    allowed =
+                        {condition,
+                            {party, #domain_PartyCondition{party_ref = #domain_PartyConfigRef{id = <<"67890">>}}}},
                     ruleset = ?ruleset(3)
                 },
                 #domain_RoutingDelegate{
