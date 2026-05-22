@@ -9,4 +9,4 @@
 +swtdcpu very_low
 +swtdio very_low
 
--erl_epmd_port ${ERL_DIST_PORT}
+-erl_epmd_port 31337
