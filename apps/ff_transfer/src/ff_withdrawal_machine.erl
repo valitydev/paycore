@@ -176,17 +176,9 @@ init({Events, Ctx}, #{}, _, _Opts) ->
 
 -spec process_timeout(machine(), handler_args(), handler_opts()) -> result().
 process_timeout(Machine, _, _Opts) ->
-    try
-        St = ff_machine:collapse(ff_withdrawal, Machine),
-        Withdrawal = withdrawal(St),
-        process_result(ff_withdrawal:process_transfer(Withdrawal), St)
-    catch
-        Class:Reason:Stacktrace ->
-            logger:error("Exception ~s in ~s.~s: ~p with stacktrace ~p", [
-                Class, ?MODULE, ?FUNCTION_NAME, Reason, Stacktrace
-            ]),
-            erlang:raise(Class, Reason, Stacktrace)
-    end.
+    St = ff_machine:collapse(ff_withdrawal, Machine),
+    Withdrawal = withdrawal(St),
+    process_result(ff_withdrawal:process_transfer(Withdrawal), St).
 
 -spec process_call(call(), machine(), handler_args(), handler_opts()) -> no_return().
 process_call({start_adjustment, Params}, Machine, _, _Opts) ->
