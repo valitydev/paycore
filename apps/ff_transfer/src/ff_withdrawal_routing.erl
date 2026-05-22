@@ -377,7 +377,7 @@ validate_currencies(_NotReducedSelector, _VS) ->
     {ok, valid}
     | {error, Error :: term()}.
 validate_cash_limit({value, CashRange}, #{cost := Cash}) ->
-    case hg_cash_range:is_inside(Cash, CashRange) of
+    case ff_range:is_inside(Cash, CashRange) of
         within ->
             {ok, valid};
         _NotInRange ->

@@ -3,6 +3,10 @@
 
 -module(ff_range).
 
+-include_lib("damsel/include/dmsl_domain_thrift.hrl").
+
+-type cash_range() :: dmsl_domain_thrift:'CashRange'().
+-type cash() :: dmsl_domain_thrift:'Cash'().
 -type range(T) :: {'maybe'(bound(T)), 'maybe'(bound(T))}.
 -type bound(T) :: {exclusive | inclusive, ord(T)}.
 
@@ -13,10 +17,29 @@
 -export_type([range/1]).
 -export_type([bound/1]).
 
+-export([is_inside/2]).
 -export([intersect/2]).
 -export([contains/2]).
 
 %%
+
+-spec is_inside(cash(), cash_range()) -> within | {exceeds, lower | upper}.
+is_inside(Cash, #domain_CashRange{lower = Lower, upper = Upper} = CashRange) ->
+    case
+        {
+            compare_cash(fun erlang:'>'/2, Cash, Lower),
+            compare_cash(fun erlang:'<'/2, Cash, Upper)
+        }
+    of
+        {true, true} ->
+            within;
+        {false, true} ->
+            {exceeds, lower};
+        {true, false} ->
+            {exceeds, upper};
+        _ ->
+            error({misconfiguration, {'Invalid cash range specified', CashRange, Cash}})
+    end.
 
 -spec intersect(range(T), range(T)) -> range(T) | undefined.
 intersect(R1, R2) ->
@@ -34,6 +57,18 @@ contains(R1, R2) ->
     intersect(R1, R2) =:= R2.
 
 %%
+
+-define(CASH(Amount, SymCode), #domain_Cash{
+    amount = Amount,
+    currency = #domain_CurrencyRef{symbolic_code = SymCode}
+}).
+
+compare_cash(_, V, {inclusive, V}) ->
+    true;
+compare_cash(F, ?CASH(A, C), {_, ?CASH(Am, C)}) ->
+    F(A, Am);
+compare_cash(_, _, _) ->
+    error.
 
 compare_bounds(B1, B1) ->
     eq;
