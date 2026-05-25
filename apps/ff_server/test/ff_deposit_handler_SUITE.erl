@@ -248,30 +248,45 @@ trace_deposit_ok_test(_C) ->
     },
     {ok, _DepositState} = call_deposit('Create', {Params, ff_entity_context_codec:marshal(Context)}),
     TraceUrl = <<"http://localhost:8022/traces/internal/deposit_v1/", DepositID/binary>>,
-    {ok, TraceBody} = await_http_body(TraceUrl),
-    [
-        #{
-            <<"args">> := [
-                [
-                    #{<<"created">> := _},
-                    #{<<"status_changed">> := <<"pending">>}
-                ],
-                #{<<"NS">> := _}
-            ],
-            <<"events">> := [
-                #{<<"event_id">> := 1, <<"event_payload">> := #{<<"created">> := _}, <<"event_timestamp">> := _},
-                #{<<"event_id">> := 2, <<"event_payload">> := #{<<"status_changed">> := _}, <<"event_timestamp">> := _}
-            ],
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"init">>
-        },
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>}
-    ] = json:decode(TraceBody),
-    ok.
+    CheckerFun = fun(TraceBody) ->
+        try
+            [
+                #{
+                    <<"args">> := [
+                        [
+                            #{<<"created">> := _},
+                            #{<<"status_changed">> := <<"pending">>}
+                        ],
+                        #{<<"NS">> := _}
+                    ],
+                    <<"events">> := [
+                        #{
+                            <<"event_id">> := 1,
+                            <<"event_payload">> := #{<<"created">> := _},
+                            <<"event_timestamp">> := _
+                        },
+                        #{
+                            <<"event_id">> := 2,
+                            <<"event_payload">> := #{<<"status_changed">> := _},
+                            <<"event_timestamp">> := _
+                        }
+                    ],
+                    <<"task_status">> := <<"finished">>,
+                    <<"task_type">> := <<"init">>
+                },
+                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
+                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
+                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
+                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
+                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>}
+            ] = json:decode(TraceBody),
+            true
+        catch
+            _:_ ->
+                false
+        end
+    end,
+    await_http_body(TraceUrl, CheckerFun).
 
 -spec create_negative_ok_test(config()) -> test_return().
 create_negative_ok_test(_C) ->
@@ -357,21 +372,30 @@ call_deposit(Fun, Args) ->
     }),
     ff_woody_client:call(Client, Request).
 
-await_http_body(Url) ->
-    await_http_body(Url, genlib_retry:linear(10, 200)).
+await_http_body(Url, CheckerFun) ->
+    await_http_body(Url, CheckerFun, genlib_retry:linear(10, 500)).
 
-await_http_body(Url, Retry0) ->
+await_http_body(Url, CheckerFun, Retry0) ->
     case hackney:get(Url) of
         {ok, 200, _Headers, Ref} ->
-            hackney:body(Ref);
+            {ok, Body} = hackney:body(Ref),
+            case CheckerFun(Body) of
+                true ->
+                    ok;
+                false ->
+                    retry_await_http_body(Url, Retry0)
+            end;
         _ ->
-            case genlib_retry:next_step(Retry0) of
-                {wait, To, Retry1} ->
-                    timer:sleep(To),
-                    await_http_body(Url, Retry1);
-                finish ->
-                    error({await_http_body_failed, Url})
-            end
+            retry_await_http_body(Url, Retry0)
+    end.
+
+retry_await_http_body(Url, Retry0) ->
+    case genlib_retry:next_step(Retry0) of
+        {wait, To, Retry1} ->
+            timer:sleep(To),
+            await_http_body(Url, Retry1);
+        finish ->
+            error({await_http_body_failed, Url})
     end.
 
 make_cash({Amount, Currency}) ->
