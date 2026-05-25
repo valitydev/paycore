@@ -78,7 +78,8 @@
     | {party, notfound}
     | ff_party:validate_deposit_creation_error()
     | {inconsistent_currency, {Deposit :: currency_id(), Source :: currency_id(), Wallet :: currency_id()}}
-    | {realms_mismatch, {ff_payment_institution:realm(), ff_payment_institution:realm()}}.
+    | {realms_mismatch, {ff_payment_institution:realm(), ff_payment_institution:realm()}}
+    | {payment_institution, notfound}.
 
 -export_type([deposit/0]).
 -export_type([deposit_state/0]).
@@ -509,13 +510,19 @@ validate_deposit_currency(Body, Source, Wallet, DomainRevision) ->
     end.
 
 -spec validate_deposit_realms(source(), wallet(), domain_revision()) ->
-    {ok, valid} | {error, {realms_mismatch, {ff_payment_institution:realm(), ff_payment_institution:realm()}}}.
+    {ok, valid}
+    | {error, {realms_mismatch, {ff_payment_institution:realm(), ff_payment_institution:realm()}}}
+    | {error, {payment_institution, notfound}}.
 validate_deposit_realms(Source, #domain_WalletConfig{payment_institution = PaymentInstitutionRef}, DomainRevision) ->
-    {ok, WalletRealm} = ff_payment_institution:get_realm(PaymentInstitutionRef, DomainRevision),
-    SourceRealm = ff_source:realm(Source),
-    case WalletRealm =:= SourceRealm of
-        true -> {ok, valid};
-        false -> {error, {realms_mismatch, {WalletRealm, SourceRealm}}}
+    case ff_payment_institution:get_realm(PaymentInstitutionRef, DomainRevision) of
+        {ok, WalletRealm} ->
+            SourceRealm = ff_source:realm(Source),
+            case WalletRealm =:= SourceRealm of
+                true -> {ok, valid};
+                false -> {error, {realms_mismatch, {WalletRealm, SourceRealm}}}
+            end;
+        {error, notfound} ->
+            {error, {payment_institution, notfound}}
     end.
 
 %% Limit helpers

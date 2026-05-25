@@ -99,6 +99,8 @@
 -type st() :: st(model()).
 -type machine() :: machine(model()).
 -type history() :: [machinery:event(timestamped_event(event()))].
+-type trace_unit() :: map().
+-type trace() :: [trace_unit()].
 
 %%
 
@@ -141,7 +143,7 @@ get(Mod, NS, ID, Range) ->
         collapse(Mod, Machine)
     end).
 
--spec trace(namespace(), id()) -> _.
+-spec trace(namespace(), id()) -> {ok, trace()} | {error, term()}.
 trace(NS, ID) ->
     maybe
         {ok, MachineTrace} ?= machinery:trace(NS, ID, fistful:backend(NS)),
@@ -198,13 +200,9 @@ json_compatible_value(V) when is_map(V) ->
         #{},
         V
     );
-%% tagged tuple - special case or not???
 json_compatible_value({K, V}) when is_atom(K) ->
     #{K => json_compatible_value(V)};
 json_compatible_value(V) when is_tuple(V) ->
-    %% MAYBE ???
-    %% Elements = [json_compatible_value(E) || E <- tuple_to_list(V)],
-    %% #{<<"__tuple__">> => Elements};
     [json_compatible_value(E) || E <- tuple_to_list(V)];
 json_compatible_value(true) ->
     true;
@@ -254,13 +252,9 @@ json_compatible_key(K) when is_binary(K) ->
             Binary;
         _ ->
             base64:encode(K)
-        %% MAYBE ???
-        %% unicode:characters_to_binary(io_lib:format("~p", [K]))
     catch
         _:_ ->
             base64:encode(K)
-        %% MAYBE ???
-        %% unicode:characters_to_binary(io_lib:format("~p", [K]))
     end;
 json_compatible_key(K) ->
     unicode:characters_to_binary(io_lib:format("~p", [K])).

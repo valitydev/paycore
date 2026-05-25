@@ -125,10 +125,8 @@ repair_failed_session_with_failure(C) ->
             code => SessionID
         }},
     ?assertMatch({finished, Expected}, get_session_status(SessionID)),
-    timer:sleep(1000),
     TraceUrl = <<"http://localhost:8022/traces/internal/withdrawal_session_v2/", SessionID/binary>>,
-    {ok, 200, _Headers, Ref} = hackney:get(TraceUrl),
-    {ok, Body} = hackney:body(Ref),
+    {ok, Body} = await_http_body(TraceUrl),
     [
         #{
             <<"args">> := [#{<<"created">> := _}],
@@ -225,3 +223,20 @@ call_repair(Args) ->
         event_handler => ff_woody_event_handler
     }),
     ff_woody_client:call(Client, Request).
+
+await_http_body(Url) ->
+    await_http_body(Url, genlib_retry:linear(10, 200)).
+
+await_http_body(Url, Retry0) ->
+    case hackney:get(Url) of
+        {ok, 200, _Headers, Ref} ->
+            hackney:body(Ref);
+        _ ->
+            case genlib_retry:next_step(Retry0) of
+                {wait, To, Retry1} ->
+                    timer:sleep(To),
+                    await_http_body(Url, Retry1);
+                finish ->
+                    error({await_http_body_failed, Url})
+            end
+    end.

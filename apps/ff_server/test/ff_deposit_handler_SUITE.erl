@@ -247,10 +247,8 @@ trace_deposit_ok_test(_C) ->
         description = Description
     },
     {ok, _DepositState} = call_deposit('Create', {Params, ff_entity_context_codec:marshal(Context)}),
-    timer:sleep(1000),
     TraceUrl = <<"http://localhost:8022/traces/internal/deposit_v1/", DepositID/binary>>,
-    {ok, 200, _Headers, Ref} = hackney:get(TraceUrl),
-    {ok, TraceBody} = hackney:body(Ref),
+    {ok, TraceBody} = await_http_body(TraceUrl),
     [
         #{
             <<"args">> := [
@@ -358,6 +356,23 @@ call_deposit(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
+
+await_http_body(Url) ->
+    await_http_body(Url, genlib_retry:linear(10, 200)).
+
+await_http_body(Url, Retry0) ->
+    case hackney:get(Url) of
+        {ok, 200, _Headers, Ref} ->
+            hackney:body(Ref);
+        _ ->
+            case genlib_retry:next_step(Retry0) of
+                {wait, To, Retry1} ->
+                    timer:sleep(To),
+                    await_http_body(Url, Retry1);
+                finish ->
+                    error({await_http_body_failed, Url})
+            end
+    end.
 
 make_cash({Amount, Currency}) ->
     #'fistful_base_Cash'{

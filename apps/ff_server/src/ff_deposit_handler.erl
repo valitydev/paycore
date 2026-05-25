@@ -59,10 +59,14 @@ handle_function_('Create', {MarshaledParams, MarshaledContext}, Opts) ->
             woody_error:raise(business, #fistful_InvalidOperationAmount{
                 amount = ff_codec:marshal(cash, Amount)
             });
-        {error, {realms_mismatch, {WalletRealm, DestinationRealm}}} ->
+        {error, {realms_mismatch, {WalletRealm, SourceRealm}}} ->
             woody_error:raise(business, #fistful_RealmsMismatch{
                 wallet_realm = WalletRealm,
-                destination_realm = DestinationRealm
+                destination_realm = SourceRealm
+            });
+        {error, {payment_institution, notfound}} ->
+            woody_error:raise(business, #fistful_OperationNotPermitted{
+                details = <<"payment institution not found">>
             })
     end;
 handle_function_('Get', {ID, EventRange}, _Opts) ->
