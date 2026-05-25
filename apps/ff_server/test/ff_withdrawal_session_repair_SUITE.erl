@@ -126,59 +126,66 @@ repair_failed_session_with_failure(C) ->
         }},
     ?assertMatch({finished, Expected}, get_session_status(SessionID)),
     TraceUrl = <<"http://localhost:8022/traces/internal/withdrawal_session_v2/", SessionID/binary>>,
-    {ok, Body} = await_http_body(TraceUrl),
-    [
-        #{
-            <<"args">> := [#{<<"created">> := _}],
-            <<"error">> := null,
-            <<"events">> := [
+    CheckerFun = fun(TraceBody) ->
+        try
+            [
                 #{
-                    <<"event_id">> := 1,
-                    <<"event_payload">> := #{<<"created">> := _},
-                    <<"event_timestamp">> := _
-                }
-            ],
-            <<"finished">> := _,
-            <<"otel_trace_id">> := null,
-            <<"retry_attempts">> := 0,
-            <<"retry_interval">> := 0,
-            <<"running">> := _,
-            <<"scheduled">> := _,
-            <<"task_id">> := _,
-            <<"task_metadata">> := #{<<"range">> := #{}},
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"init">>
-        },
-        #{
-            <<"error">> := <<"{exception,error,{badmatch,{error,notfound}}}">>,
-            <<"task_status">> := <<"error">>,
-            <<"task_type">> := <<"timeout">>
-        },
-        #{
-            <<"args">> := #{
-                <<"set_session_result">> := #{<<"failed">> := #{<<"code">> := _}}
-            },
-            <<"error">> := null,
-            <<"events">> := [
+                    <<"args">> := [#{<<"created">> := _}],
+                    <<"error">> := null,
+                    <<"events">> := [
+                        #{
+                            <<"event_id">> := 1,
+                            <<"event_payload">> := #{<<"created">> := _},
+                            <<"event_timestamp">> := _
+                        }
+                    ],
+                    <<"finished">> := _,
+                    <<"otel_trace_id">> := null,
+                    <<"retry_attempts">> := 0,
+                    <<"retry_interval">> := 0,
+                    <<"running">> := _,
+                    <<"scheduled">> := _,
+                    <<"task_id">> := _,
+                    <<"task_metadata">> := #{<<"range">> := #{}},
+                    <<"task_status">> := <<"finished">>,
+                    <<"task_type">> := <<"init">>
+                },
                 #{
-                    <<"event_id">> := 2,
-                    <<"event_payload">> := #{
-                        <<"finished">> := #{<<"failed">> := #{<<"code">> := _}}
+                    <<"error">> := <<"{exception,error,{badmatch,{error,notfound}}}">>,
+                    <<"task_status">> := <<"error">>,
+                    <<"task_type">> := <<"timeout">>
+                },
+                #{
+                    <<"args">> := #{
+                        <<"set_session_result">> := #{<<"failed">> := #{<<"code">> := _}}
                     },
-                    <<"event_timestamp">> := _
+                    <<"error">> := null,
+                    <<"events">> := [
+                        #{
+                            <<"event_id">> := 2,
+                            <<"event_payload">> := #{
+                                <<"finished">> := #{<<"failed">> := #{<<"code">> := _}}
+                            },
+                            <<"event_timestamp">> := _
+                        }
+                    ],
+                    <<"task_status">> := <<"finished">>,
+                    <<"task_type">> := <<"repair">>
+                },
+                #{
+                    <<"error">> :=
+                        <<"{exception,error,{unable_to_finish_session,{error,notfound}}}">>,
+                    <<"task_status">> := <<"error">>,
+                    <<"task_type">> := <<"timeout">>
                 }
-            ],
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"repair">>
-        },
-        #{
-            %% Error because can`t notify withdrawal machine
-            <<"error">> := <<"{exception,error,{unable_to_finish_session,{error,notfound}}}">>,
-            <<"task_status">> := <<"error">>,
-            <<"task_type">> := <<"timeout">>
-        }
-    ] = json:decode(Body),
-    ok.
+            ] = json:decode(TraceBody),
+            true
+        catch
+            _:_ ->
+                false
+        end
+    end,
+    await_http_body(TraceUrl, CheckerFun).
 
 %%  Internals
 
@@ -224,19 +231,28 @@ call_repair(Args) ->
     }),
     ff_woody_client:call(Client, Request).
 
-await_http_body(Url) ->
-    await_http_body(Url, genlib_retry:linear(10, 200)).
+await_http_body(Url, CheckerFun) ->
+    await_http_body(Url, CheckerFun, genlib_retry:linear(10, 500)).
 
-await_http_body(Url, Retry0) ->
+await_http_body(Url, CheckerFun, Retry0) ->
     case hackney:get(Url) of
         {ok, 200, _Headers, Ref} ->
-            hackney:body(Ref);
+            {ok, Body} = hackney:body(Ref),
+            case CheckerFun(Body) of
+                true ->
+                    ok;
+                false ->
+                    retry_await_http_body(Url, CheckerFun, Retry0)
+            end;
         _ ->
-            case genlib_retry:next_step(Retry0) of
-                {wait, To, Retry1} ->
-                    timer:sleep(To),
-                    await_http_body(Url, Retry1);
-                finish ->
-                    error({await_http_body_failed, Url})
-            end
+            retry_await_http_body(Url, CheckerFun, Retry0)
+    end.
+
+retry_await_http_body(Url, CheckerFun, Retry0) ->
+    case genlib_retry:next_step(Retry0) of
+        {wait, To, Retry1} ->
+            timer:sleep(To),
+            await_http_body(Url, CheckerFun, Retry1);
+        finish ->
+            error({await_http_body_failed, Url})
     end.

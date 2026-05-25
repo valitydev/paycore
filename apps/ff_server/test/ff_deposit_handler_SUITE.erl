@@ -383,17 +383,17 @@ await_http_body(Url, CheckerFun, Retry0) ->
                 true ->
                     ok;
                 false ->
-                    retry_await_http_body(Url, Retry0)
+                    retry_await_http_body(Url, CheckerFun, Retry0)
             end;
         _ ->
-            retry_await_http_body(Url, Retry0)
+            retry_await_http_body(Url, CheckerFun, Retry0)
     end.
 
-retry_await_http_body(Url, Retry0) ->
+retry_await_http_body(Url, CheckerFun, Retry0) ->
     case genlib_retry:next_step(Retry0) of
         {wait, To, Retry1} ->
             timer:sleep(To),
-            await_http_body(Url, Retry1);
+            await_http_body(Url, CheckerFun, Retry1);
         finish ->
             error({await_http_body_failed, Url})
     end.
