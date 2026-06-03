@@ -89,7 +89,7 @@
   0},
  {<<"machinery">>,
   {git,"https://github.com/valitydev/machinery-erlang.git",
-       {ref,"24982b9ae38e029d23b724b0cbf7105c1ad978c9"}},
+       {ref,"aa589e32e482097518581611cca709afeb389ebe"}},
   0},
  {<<"metrics">>,{pkg,<<"metrics">>,<<"1.0.1">>},2},
  {<<"mg_proto">>,
