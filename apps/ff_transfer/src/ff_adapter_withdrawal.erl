@@ -74,7 +74,7 @@
 }.
 
 -type finish_status() :: success | {success, transaction_info()} | {failure, failure()}.
--type timer() :: machinery:timer().
+-type timer() :: prg_machine_action:timer().
 -type transaction_info() :: ff_adapter:transaction_info().
 -type failure() :: ff_adapter:failure().
 

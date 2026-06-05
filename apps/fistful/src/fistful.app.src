@@ -11,6 +11,7 @@
         ff_core,
         snowflake,
         progressor,
+        prg_machine,
         machinery,
         machinery_extra,
         woody,

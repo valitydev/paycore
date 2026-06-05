@@ -319,42 +319,32 @@ start_app(progressor = AppName) ->
             {namespaces, #{
                 invoice => #{
                     processor => #{
-                        client => hg_progressor,
+                        client => prg_machine,
                         options => #{
-                            party_client => #{},
-                            ns => <<"invoice">>,
-                            handler => hg_machine
+                            ns => invoice,
+                            env_enter => fun(WoodyCtx) ->
+                                ok = hg_context:save(hg_context:create(#{
+                                    woody_context => WoodyCtx,
+                                    party_client => party_client:create_client()
+                                }))
+                            end,
+                            env_leave => fun() -> hg_context:cleanup() end
                         }
                     },
                     worker_pool_size => 150
                 },
                 invoice_template => #{
                     processor => #{
-                        client => hg_progressor,
+                        client => prg_machine,
                         options => #{
-                            party_client => #{},
-                            ns => <<"invoice_template">>,
-                            handler => hg_machine
-                        }
-                    }
-                },
-                customer => #{
-                    processor => #{
-                        client => hg_progressor,
-                        options => #{
-                            party_client => #{},
-                            ns => <<"customer">>,
-                            handler => hg_machine
-                        }
-                    }
-                },
-                recurrent_paytools => #{
-                    processor => #{
-                        client => hg_progressor,
-                        options => #{
-                            party_client => #{},
-                            ns => <<"recurrent_paytools">>,
-                            handler => hg_machine
+                            ns => invoice_template,
+                            env_enter => fun(WoodyCtx) ->
+                                ok = hg_context:save(hg_context:create(#{
+                                    woody_context => WoodyCtx,
+                                    party_client => party_client:create_client()
+                                }))
+                            end,
+                            env_leave => fun() -> hg_context:cleanup() end
                         }
                     }
                 }

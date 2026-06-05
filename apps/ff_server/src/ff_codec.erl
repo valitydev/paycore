@@ -586,7 +586,7 @@ maybe_marshal(_Type, undefined) ->
 maybe_marshal(Type, Value) ->
     marshal(Type, Value).
 
--spec parse_timestamp(binary()) -> machinery:timestamp().
+-spec parse_timestamp(binary()) -> prg_machine:timestamp().
 parse_timestamp(Bin) ->
     try
         MicroSeconds = genlib_rfc3339:parse(Bin, microsecond),

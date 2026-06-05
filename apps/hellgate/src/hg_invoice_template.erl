@@ -6,7 +6,8 @@
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_payproc_thrift.hrl").
 
--define(NS, <<"invoice_template">>).
+-define(NS, invoice_template).
+-define(EVENT_FORMAT_VERSION, 1).
 
 %% Woody handler called by hg_woody_service_wrapper
 -behaviour(hg_woody_service_wrapper).
@@ -14,7 +15,7 @@
 -export([handle_function/3]).
 
 %% Machine callbacks
--behaviour(hg_machine).
+-behaviour(prg_machine).
 
 -export([namespace/0]).
 
@@ -22,6 +23,10 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([marshal_event_body/1]).
+-export([unmarshal_event_body/2]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
 
 %% API
 
@@ -34,6 +39,8 @@
 %% Internal types
 
 -type invoice_template_change() :: dmsl_payproc_thrift:'InvoiceTemplateChange'().
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
 
 %% API
 
@@ -167,10 +174,12 @@ validate_price({unlim, _}, _Shop) ->
 
 start(ID, Params) ->
     EncodedParams = marshal_invoice_template_params(Params),
-    map_start_error(hg_machine:start(?NS, ID, EncodedParams)).
+    map_start_error(prg_machine:start(?NS, ID, EncodedParams)).
 
 call(ID, Function, Args) ->
-    case hg_machine:thrift_call(?NS, ID, invoice_templating, {'InvoiceTemplating', Function}, Args) of
+    case hg_invoicing_machine_client:thrift_call(
+        ?NS, ID, invoice_templating, {'InvoiceTemplating', Function}, Args
+    ) of
         ok ->
             ok;
         {ok, Reply} ->
@@ -182,7 +191,7 @@ call(ID, Function, Args) ->
     end.
 
 get_history(TplID) ->
-    unmarshal_history(map_history_error(hg_machine:get_history(?NS, TplID))).
+    map_history_error(prg_machine:get_history(?NS, TplID)).
 
 -spec map_error(notfound | any()) -> no_return().
 map_error(notfound) ->
@@ -198,12 +207,14 @@ map_start_error({error, Reason}) ->
 map_history_error({ok, Result}) ->
     Result;
 map_history_error({error, notfound}) ->
-    throw(#payproc_InvoiceTemplateNotFound{}).
+    throw(#payproc_InvoiceTemplateNotFound{});
+map_history_error({error, Reason}) ->
+    error(Reason).
 
 %% Machine
 
 -type create_params() :: dmsl_payproc_thrift:'InvoiceTemplateCreateParams'().
--type call() :: hg_machine:thrift_call().
+-type call() :: {{atom(), atom()}, woody:args()}.
 
 -define(tpl_created(InvoiceTpl),
     {invoice_template_created, #payproc_InvoiceTemplateCreated{invoice_template = InvoiceTpl}}
@@ -222,15 +233,15 @@ assert_invoice_template_not_deleted({_, _, [?tpl_deleted()]}) ->
 assert_invoice_template_not_deleted(_) ->
     ok.
 
--spec namespace() -> hg_machine:ns().
+-spec namespace() -> prg_machine:namespace().
 namespace() ->
     ?NS.
 
--spec init(binary(), hg_machine:machine()) -> hg_machine:result().
+-spec init(binary(), machine()) -> prg_result().
 init(EncodedParams, #{id := ID}) ->
     Params = unmarshal_invoice_template_params(EncodedParams),
     Tpl = create_invoice_template(ID, Params),
-    #{events => [marshal_event_payload([?tpl_created(Tpl)])]}.
+    #{events => [[?tpl_created(Tpl)]]}.
 
 create_invoice_template(ID, P) ->
     #domain_InvoiceTemplate{
@@ -247,24 +258,24 @@ create_invoice_template(ID, P) ->
         mutations = P#payproc_InvoiceTemplateCreateParams.mutations
     }.
 
--spec process_repair(hg_machine:args(), hg_machine:machine()) -> no_return().
+-spec process_repair(prg_machine:args(), machine()) -> no_return().
 process_repair(_Args, _Machine) ->
     erlang:error({not_implemented, repair}).
 
--spec process_signal(hg_machine:signal(), hg_machine:machine()) -> hg_machine:result().
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, _Machine) ->
     #{};
 process_signal({repair, _}, _Machine) ->
     #{}.
 
--spec process_call(call(), hg_machine:machine()) -> {hg_machine:response(), hg_machine:result()}.
+-spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
 process_call(Call, #{history := History}) ->
-    St = collapse_history(unmarshal_history(History)),
+    St = collapse_history(History),
     try handle_call(Call, St) of
         {ok, Changes} ->
-            {ok, #{events => [marshal_event_payload(Changes)]}};
+            {ok, #{events => [Changes]}};
         {Reply, Changes} ->
-            {{ok, Reply}, #{events => [marshal_event_payload(Changes)]}}
+            {{ok, Reply}, #{events => [Changes]}}
     catch
         throw:Exception ->
             {{exception, Exception}, #{}}
@@ -334,9 +345,56 @@ marshal_invoice_template_params(Params) ->
     Type = {struct, struct, {dmsl_payproc_thrift, 'InvoiceTemplateCreateParams'}},
     hg_proto_utils:serialize(Type, Params).
 
--spec marshal_event_payload([invoice_template_change()]) -> hg_machine:event_payload().
-marshal_event_payload(Changes) when is_list(Changes) ->
-    wrap_event_payload({invoice_template_changes, Changes}).
+-spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Changes) when is_list(Changes) ->
+    #{data := Data} = wrap_event_payload({invoice_template_changes, Changes}),
+    Msgp = mg_msgpack_marshalling:marshal(Data),
+    {?EVENT_FORMAT_VERSION, msgpack_payload_to_binary(Msgp)}.
+
+-spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
+unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
+    decode_event_body(Payload);
+unmarshal_event_body(Format, _Payload) ->
+    erlang:error({unknown_event_format, Format}).
+
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    msgpack_payload_to_binary(mg_msgpack_marshalling:marshal(AuxSt)).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(<<>>) ->
+    #{};
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    try
+        mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))
+    catch
+        _:_ ->
+            binary_to_term(Payload, [safe])
+    end.
+
+msgpack_payload_to_binary(Msgp) ->
+    term_to_binary(Msgp).
+
+decode_event_body(Payload) ->
+    case try_unmarshal_msgpack_payload(Payload) of
+        {ok, Data} ->
+            changes_from_msgpack_data(Data);
+        {error, _} ->
+            unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Payload}})
+    end.
+
+try_unmarshal_msgpack_payload(Payload) ->
+    try
+        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))}
+    catch
+        _:_ ->
+            {error, invalid_msgpack_payload}
+    end.
+
+changes_from_msgpack_data({bin, Bin}) when is_binary(Bin) ->
+    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Bin}});
+changes_from_msgpack_data(Data) ->
+    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => Data}).
 
 wrap_event_payload(Payload) ->
     Type = {struct, union, {dmsl_payproc_thrift, 'EventPayload'}},
@@ -353,15 +411,7 @@ unmarshal_invoice_template_params(EncodedParams) ->
     Type = {struct, struct, {dmsl_payproc_thrift, 'InvoiceTemplateCreateParams'}},
     hg_proto_utils:deserialize(Type, EncodedParams).
 
--spec unmarshal_history([hg_machine:event()]) -> [hg_machine:event([invoice_template_change()])].
-unmarshal_history(Events) ->
-    [unmarshal_event(Event) || Event <- Events].
-
--spec unmarshal_event(hg_machine:event()) -> hg_machine:event([invoice_template_change()]).
-unmarshal_event({ID, Dt, Payload}) ->
-    {ID, Dt, unmarshal_event_payload(Payload)}.
-
--spec unmarshal_event_payload(hg_machine:event_payload()) -> [invoice_template_change()].
+-spec unmarshal_event_payload(map()) -> [invoice_template_change()].
 unmarshal_event_payload(#{format_version := 1, data := {bin, Changes}}) ->
     Type = {struct, union, {dmsl_payproc_thrift, 'EventPayload'}},
     {invoice_template_changes, Buf} = hg_proto_utils:deserialize(Type, Changes),

@@ -139,7 +139,7 @@
     dmsl_payproc_thrift:'InvoicePaymentChargebackChangePayload'().
 
 -type action() ::
-    hg_machine_action:t().
+    prg_machine_action:t().
 
 -type activity() ::
     preparing_initial_cash_flow
@@ -271,9 +271,9 @@ merge_change(?chargeback_cash_flow_changed(CashFlow), State) ->
 
 -spec process_timeout(activity(), state(), action(), opts()) -> result().
 process_timeout(preparing_initial_cash_flow, State, _Action, Opts) ->
-    update_cash_flow(State, hg_machine_action:new(), Opts);
+    update_cash_flow(State, prg_machine_action:new(), Opts);
 process_timeout(updating_cash_flow, State, _Action, Opts) ->
-    update_cash_flow(State, hg_machine_action:instant(), Opts);
+    update_cash_flow(State, prg_machine_action:instant(), Opts);
 process_timeout(finalising_accounter, State, Action, Opts) ->
     finalise(State, Action, Opts).
 
@@ -301,7 +301,7 @@ do_create(Opts, CreateParams = ?chargeback_params(Levy, Body, _Reason)) ->
     _ = validate_eligibility_time(ServiceTerms),
     _ = validate_provider_terms(ProviderTerms),
     Chargeback = build_chargeback(Opts, CreateParams, Revision, CreatedAt),
-    Action = hg_machine_action:instant(),
+    Action = prg_machine_action:instant(),
     Result = {[?chargeback_created(Chargeback)], Action},
     {Chargeback, Result}.
 
@@ -311,7 +311,7 @@ do_cancel(State, ?cancel_params()) ->
     %       there actually is a cashflow to cancel
     % _ = validate_cash_flow_held(State),
     _ = validate_chargeback_is_pending(State),
-    Action = hg_machine_action:instant(),
+    Action = prg_machine_action:instant(),
     Status = ?chargeback_status_cancelled(),
     Result = {[?chargeback_target_status_changed(Status)], Action},
     {ok, Result}.
@@ -378,7 +378,7 @@ build_chargeback(Opts, Params = ?chargeback_params(Levy, Body, Reason), Revision
 -spec build_reject_result(state(), reject_params()) -> result() | no_return().
 build_reject_result(State, ?reject_params(ParamsLevy)) ->
     Levy = get_levy(State),
-    Action = hg_machine_action:instant(),
+    Action = prg_machine_action:instant(),
     LevyChange = levy_change(ParamsLevy, Levy),
     Status = ?chargeback_status_rejected(),
     StatusChange = [?chargeback_target_status_changed(Status)],
@@ -389,7 +389,7 @@ build_reject_result(State, ?reject_params(ParamsLevy)) ->
 build_accept_result(State, ?accept_params(ParamsLevy, ParamsBody)) ->
     Body = get_body(State),
     Levy = get_levy(State),
-    Action = hg_machine_action:instant(),
+    Action = prg_machine_action:instant(),
     BodyChange = body_change(ParamsBody, Body),
     LevyChange = levy_change(ParamsLevy, Levy),
     Status = ?chargeback_status_accepted(),
@@ -402,7 +402,7 @@ build_reopen_result(State, ?reopen_params(ParamsLevy, ParamsBody) = Params) ->
     Body = get_body(State),
     Levy = get_levy(State),
     Stage = get_reopen_stage(State, Params),
-    Action = hg_machine_action:instant(),
+    Action = prg_machine_action:instant(),
     BodyChange = body_change(ParamsBody, Body),
     LevyChange = levy_change(ParamsLevy, Levy),
     StageChange = [?chargeback_stage_changed(Stage)],

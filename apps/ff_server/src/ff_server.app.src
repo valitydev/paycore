@@ -15,6 +15,7 @@
         fistful_proto,
         ff_validator,
         fistful,
+        prg_machine,
         ff_transfer,
         thrift
     ]},

@@ -109,7 +109,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
     ChangeOpts = #{
         invoice_id => Invoice#domain_Invoice.id
     },
-    {collapse_changes(Events, undefined, ChangeOpts), {Events, hg_machine_action:instant()}}.
+    {collapse_changes(Events, undefined, ChangeOpts), {Events, prg_machine_action:instant()}}.
 
 -spec merge_change(
     hg_invoice_payment:change(),
@@ -147,7 +147,7 @@ process_signal(timeout, St, Options) ->
     ).
 
 process_timeout(St) ->
-    Action = hg_machine_action:new(),
+    Action = prg_machine_action:new(),
     process_timeout(hg_invoice_payment:get_activity(St), Action, St).
 
 process_timeout({payment, processing_capture}, Action, St) ->
@@ -172,7 +172,7 @@ process_processing_capture(Action, St) ->
         hg_session:wrap_event(?captured(?CAPTURE_REASON, Cost), hg_session:create()),
         hg_session:wrap_event(?captured(?CAPTURE_REASON, Cost), ?session_finished(?session_succeeded()))
     ],
-    {next, {Events, hg_machine_action:set_timeout(0, Action)}}.
+    {next, {Events, prg_machine_action:set_timeout(0, Action)}}.
 
 hold_payment_cashflow(St) ->
     PlanID = hg_invoice_payment:construct_payment_plan_id(St),

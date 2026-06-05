@@ -10,6 +10,7 @@
         fault_detector_proto,
         herd,
         progressor,
+        prg_machine,
         hg_progressor,
         hg_proto,
         routing,

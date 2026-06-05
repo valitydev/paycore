@@ -148,14 +148,16 @@ handle_function_('ExplainRoute', {InvoiceID, PaymentID}, _Opts) ->
 
 ensure_started(ID, TemplateID, Params, Allocation, Mutations, DomainRevision) ->
     Invoice = hg_invoice:create(ID, TemplateID, Params, Allocation, Mutations, DomainRevision),
-    case hg_machine:start(hg_invoice:namespace(), ID, hg_invoice:marshal_invoice(Invoice)) of
+    case prg_machine:start(hg_invoice:namespace(), ID, hg_invoice:marshal_invoice(Invoice)) of
         {ok, _} -> ok;
         {error, exists} -> ok;
         {error, Reason} -> erlang:error(Reason)
     end.
 
 call(ID, Function, Args) ->
-    case hg_machine:thrift_call(hg_invoice:namespace(), ID, invoicing, {'Invoicing', Function}, Args) of
+    case hg_invoicing_machine_client:thrift_call(
+        hg_invoice:namespace(), ID, invoicing, {'Invoicing', Function}, Args
+    ) of
         ok -> ok;
         {ok, Reply} -> Reply;
         {exception, Exception} -> erlang:throw(Exception);
@@ -164,7 +166,7 @@ call(ID, Function, Args) ->
     end.
 
 repair(ID, Args) ->
-    case hg_machine:repair(hg_invoice:namespace(), ID, Args) of
+    case prg_machine:repair(hg_invoice:namespace(), ID, Args) of
         {ok, _Result} -> ok;
         {error, notfound} -> erlang:throw(#payproc_InvoiceNotFound{});
         {error, working} -> erlang:throw(#base_InvalidRequest{errors = [<<"No need to repair">>]});
@@ -225,11 +227,11 @@ get_state(ID, AfterID, Limit) ->
     hg_invoice:collapse_history(get_history(ID, AfterID, Limit)).
 
 get_history(ID) ->
-    History = hg_machine:get_history(hg_invoice:namespace(), ID),
+    History = prg_machine:get_history(hg_invoice:namespace(), ID),
     hg_invoice:unmarshal_history(map_history_error(History)).
 
 get_history(ID, AfterID, Limit) ->
-    History = hg_machine:get_history(hg_invoice:namespace(), ID, AfterID, Limit),
+    History = prg_machine:get_history(hg_invoice:namespace(), ID, AfterID, Limit),
     hg_invoice:unmarshal_history(map_history_error(History)).
 
 get_public_history(InvoiceID, #payproc_EventRange{'after' = AfterID, limit = Limit}) ->
@@ -239,9 +241,14 @@ publish_invoice_event(InvoiceID, {ID, Dt, Event}) ->
     #payproc_Event{
         id = ID,
         source = {invoice_id, InvoiceID},
-        created_at = Dt,
+        created_at = format_event_timestamp(Dt),
         payload = ?invoice_ev(Event)
     }.
+
+format_event_timestamp(Dt) when is_binary(Dt) ->
+    Dt;
+format_event_timestamp(Dt) ->
+    hg_datetime:format_dt(Dt).
 
 map_history_error({ok, Result}) ->
     Result;

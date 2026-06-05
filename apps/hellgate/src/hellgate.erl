@@ -35,10 +35,6 @@ stop() ->
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
-    MachineHandlers = [
-        hg_invoice,
-        hg_invoice_template
-    ],
     PartyClient = party_client:create_client(),
     DefaultTimeout = genlib_app:env(hellgate, default_woody_handling_timeout, ?DEFAULT_HANDLING_TIMEOUT),
     Opts = #{
@@ -52,19 +48,18 @@ init([]) ->
                 %% for debugging only
                 %% hg_profiler:get_child_spec(),
                 party_client:child_spec(party_client, PartyClient),
-                hg_machine:get_child_spec(MachineHandlers),
-                get_api_child_spec(MachineHandlers, Opts)
+                prg_machine:get_child_spec([hg_invoice, hg_invoice_template]),
+                get_api_child_spec(Opts)
             ]
         }}.
 
-get_api_child_spec(MachineHandlers, Opts) ->
+get_api_child_spec(Opts) ->
     {ok, Ip} = inet:parse_address(genlib_app:env(?MODULE, ip, "::")),
     HealthRoutes =
         construct_health_routes(liveness, genlib_app:env(?MODULE, health_check_liveness, #{})) ++
             construct_health_routes(readiness, genlib_app:env(?MODULE, health_check_readiness, #{})),
     EventHandlerOpts = genlib_app:env(?MODULE, scoper_event_handler_options, #{}),
     PrometeusRoute = get_prometheus_route(),
-    ProcessTracingRoute = hg_progressor_handler:get_routes(),
     woody_server:child_spec(
         ?MODULE,
         #{
@@ -73,13 +68,12 @@ get_api_child_spec(MachineHandlers, Opts) ->
             transport_opts => genlib_app:env(?MODULE, transport_opts, #{}),
             protocol_opts => genlib_app:env(?MODULE, protocol_opts, #{}),
             event_handler => {scoper_woody_event_handler, EventHandlerOpts},
-            handlers => hg_machine:get_service_handlers(MachineHandlers, Opts) ++
-                [
-                    construct_service_handler(invoicing, hg_invoice_handler, Opts),
-                    construct_service_handler(invoice_templating, hg_invoice_template, Opts),
-                    construct_service_handler(proxy_host_provider, hg_proxy_host_provider, Opts)
-                ],
-            additional_routes => [PrometeusRoute | HealthRoutes] ++ ProcessTracingRoute,
+            handlers => [
+                construct_service_handler(invoicing, hg_invoice_handler, Opts),
+                construct_service_handler(invoice_templating, hg_invoice_template, Opts),
+                construct_service_handler(proxy_host_provider, hg_proxy_host_provider, Opts)
+            ],
+            additional_routes => [PrometeusRoute | HealthRoutes],
             shutdown_timeout => genlib_app:env(?MODULE, shutdown_timeout, 0)
         }
     ).
@@ -107,6 +101,7 @@ get_prometheus_route() ->
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
     ok = setup_metrics(),
+    ok = application:set_env(prg_machine, woody_context_loader, fun woody_rpc_context/0),
     supervisor:start_link(?MODULE, []).
 
 -spec stop(any()) -> ok.
@@ -118,3 +113,15 @@ stop(_State) ->
 setup_metrics() ->
     ok = woody_ranch_prometheus_collector:setup(),
     ok = woody_hackney_prometheus_collector:setup().
+
+-spec woody_rpc_context() -> woody_context:ctx().
+woody_rpc_context() ->
+    try hg_context:load() of
+        Ctx ->
+            hg_context:get_woody_context(Ctx)
+    catch
+        Class:Reason ->
+            _ = logger:warning("Failed to load context with error class '~s' and reason: ~p", [Class, Reason]),
+            _ = logger:info("Creating empty fallback context"),
+            woody_context:new()
+    end.

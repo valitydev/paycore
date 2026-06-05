@@ -1,10 +1,8 @@
 %%%
-%%% Test machine
+%%% Test machine — hooks prg_machine timeout processing for CT
 %%%
 
 -module(ff_ct_machine).
-
--dialyzer({nowarn_function, dispatch_signal/4}).
 
 -export([load_per_suite/0]).
 -export([unload_per_suite/0]).
@@ -12,17 +10,18 @@
 -export([set_hook/2]).
 -export([clear_hook/1]).
 
+-define(DISPATCH_TABLE, prg_machine_dispatch).
+
 -spec load_per_suite() -> ok.
 load_per_suite() ->
-    meck:new(machinery, [no_link, passthrough]),
-    meck:expect(machinery, dispatch_signal, fun dispatch_signal/4),
-    meck:expect(machinery, dispatch_call, fun dispatch_call/4).
+    meck:new(prg_machine, [no_link, passthrough]),
+    meck:expect(prg_machine, process, fun process/3).
 
 -spec unload_per_suite() -> ok.
 unload_per_suite() ->
-    meck:unload(machinery).
+    meck:unload(prg_machine).
 
--type hook() :: fun((machinery:machine(_, _), module(), _Args) -> _).
+-type hook() :: fun((prg_machine:machine(), module(), _) -> _).
 
 -spec set_hook(timeout, hook()) -> ok.
 set_hook(timeout = On, Fun) when is_function(Fun, 3) ->
@@ -33,21 +32,23 @@ clear_hook(timeout = On) ->
     _ = persistent_term:erase({?MODULE, hook, On}),
     ok.
 
-dispatch_signal({init, Args}, Machine, {Handler, HandlerArgs}, Opts) ->
-    Handler:init(Args, Machine, HandlerArgs, Opts);
-dispatch_signal(timeout, Machine, {Handler, HandlerArgs}, Opts) when Handler =/= fistful ->
-    _ =
-        case persistent_term:get({?MODULE, hook, timeout}, undefined) of
-            Fun when is_function(Fun) ->
-                Fun(Machine, Handler, HandlerArgs);
-            undefined ->
-                ok
-        end,
-    Handler:process_timeout(Machine, HandlerArgs, Opts);
-dispatch_signal(timeout, Machine, {Handler, HandlerArgs}, Opts) ->
-    Handler:process_timeout(Machine, HandlerArgs, Opts);
-dispatch_signal({notification, Args}, Machine, {Handler, HandlerArgs}, Opts) ->
-    Handler:process_notification(Args, Machine, HandlerArgs, Opts).
+process({timeout, _BinArgs, #{process_id := ID} = _Process} = Call, #{ns := NS} = Opts, BinCtx) ->
+    case persistent_term:get({?MODULE, hook, timeout}, undefined) of
+        Fun when is_function(Fun, 3) ->
+            Handler = handler_module(NS),
+            {ok, Machine} = prg_machine:get(NS, ID),
+            _ = Fun(Machine, Handler, undefined),
+            meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]]);
+        undefined ->
+            meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]])
+    end;
+process(Call, Opts, BinCtx) ->
+    meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]]).
 
-dispatch_call(Args, Machine, {Handler, HandlerArgs}, Opts) ->
-    Handler:process_call(Args, Machine, HandlerArgs, Opts).
+handler_module(NS) ->
+    case ets:lookup(?DISPATCH_TABLE, NS) of
+        [{NS, Handler}] ->
+            Handler;
+        [] ->
+            erlang:error({unknown_namespace, NS})
+    end.

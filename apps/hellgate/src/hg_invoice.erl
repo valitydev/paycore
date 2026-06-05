@@ -20,8 +20,10 @@
 -include("hg_invoice.hrl").
 
 -include_lib("damsel/include/dmsl_repair_thrift.hrl").
+-include_lib("mg_proto/include/mg_proto_state_processing_thrift.hrl").
 
--define(NS, <<"invoice">>).
+-define(NS, invoice).
+-define(EVENT_FORMAT_VERSION, 1).
 
 -export([process_callback/2]).
 -export([process_session_change_by_tag/2]).
@@ -46,7 +48,7 @@
 
 %% Machine callbacks
 
--behaviour(hg_machine).
+-behaviour(prg_machine).
 
 -export([namespace/0]).
 
@@ -54,6 +56,11 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([marshal_event_body/1]).
+-export([unmarshal_event_body/2]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
+-export([apply_event/2]).
 
 %% Internal
 
@@ -88,13 +95,17 @@
     invoice
     | {payment, payment_id()}.
 
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
+-type action() :: prg_machine_action:t().
+
 %% API
 
--spec get(hg_machine:id()) -> {ok, st()} | {error, notfound}.
+-spec get(prg_machine:id()) -> {ok, st()} | {error, notfound}.
 get(ID) ->
-    case hg_machine:get_history(?NS, ID) of
+    case prg_machine:get_history(?NS, ID) of
         {ok, History} ->
-            {ok, collapse_history(unmarshal_history(History))};
+            {ok, collapse_history(History)};
         Error ->
             Error
     end.
@@ -137,8 +148,8 @@ get_payment_opts(Revision, #st{invoice = Invoice} = St) ->
     }.
 
 -spec create(
-    hg_machine:id(),
-    undefined | hg_machine:id(),
+    prg_machine:id(),
+    undefined | prg_machine:id(),
     invoice_params(),
     undefined | allocation(),
     [hg_invoice_mutation:mutation()],
@@ -228,7 +239,7 @@ get_payment_state(PaymentSession) ->
     {ok, callback_response()} | {error, invalid_callback | notfound | failed} | no_return().
 process_callback(Tag, Callback) ->
     process_with_tag(Tag, fun(MachineID) ->
-        case hg_machine:call(?NS, MachineID, {callback, Tag, Callback}) of
+        case prg_machine:call(?NS, MachineID, {callback, Tag, Callback}) of
             {ok, _} = Ok ->
                 Ok;
             {exception, invalid_callback} ->
@@ -242,7 +253,7 @@ process_callback(Tag, Callback) ->
     ok | {error, notfound | failed} | no_return().
 process_session_change_by_tag(Tag, SessionChange) ->
     process_with_tag(Tag, fun(MachineID) ->
-        case hg_machine:call(?NS, MachineID, {session_change, Tag, SessionChange}) of
+        case prg_machine:call(?NS, MachineID, {session_change, Tag, SessionChange}) of
             ok ->
                 ok;
             {exception, invalid_callback} ->
@@ -262,9 +273,9 @@ process_with_tag(Tag, F) ->
 
 %%
 
--spec fail(hg_machine:id()) -> ok.
+-spec fail(prg_machine:id()) -> ok.
 fail(ID) ->
-    try hg_machine:call(?NS, ID, fail) of
+    try prg_machine:call(?NS, ID, fail) of
         {error, failed} ->
             ok;
         {error, Error} ->
@@ -278,26 +289,26 @@ fail(ID) ->
 
 %%
 
--spec namespace() -> hg_machine:ns().
+-spec namespace() -> prg_machine:namespace().
 namespace() ->
     ?NS.
 
--spec init(binary(), hg_machine:machine()) -> hg_machine:result().
+-spec init(binary(), machine()) -> prg_result().
 init(Invoice, _Machine) ->
     UnmarshalledInvoice = unmarshal_invoice(Invoice),
-    % TODO ugly, better to roll state and events simultaneously, hg_party-like
-    handle_result(#{
-        changes => [?invoice_created(UnmarshalledInvoice)],
-        action => set_invoice_timer(hg_machine_action:new(), #st{invoice = UnmarshalledInvoice}),
-        state => #st{}
-    }).
+    Changes = [?invoice_created(UnmarshalledInvoice)],
+    #{
+        events => [Changes],
+        action => set_invoice_timer(prg_machine_action:new(), #st{invoice = UnmarshalledInvoice}),
+        auxst => #{}
+    }.
 
 %%
 
--spec process_repair(hg_machine:args(), hg_machine:machine()) -> hg_machine:result() | no_return().
-process_repair(Args, #{history := History}) ->
-    St = collapse_history(unmarshal_history(History)),
-    handle_result(handle_repair(Args, St)).
+-spec process_repair(prg_machine:args(), machine()) -> prg_result() | no_return().
+process_repair(Args, Machine) ->
+    St = collapse_st(Machine),
+    to_prg_result(handle_repair(Args, St)).
 
 handle_repair({changes, Changes, RepairAction, Params}, St) ->
     Result =
@@ -326,9 +337,10 @@ handle_repair({scenario, Scenario}, #st{activity = {payment, PaymentID}} = St) -
             try_to_get_repair_state(Scenario, St)
     end.
 
--spec process_signal(hg_machine:signal(), hg_machine:machine()) -> hg_machine:result().
-process_signal(Signal, #{history := History}) ->
-    handle_result(handle_signal(Signal, collapse_history(unmarshal_history(History)))).
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
+process_signal(Signal, Machine) ->
+    St = collapse_st(Machine),
+    to_prg_result(handle_signal(Signal, St)).
 
 handle_signal(timeout, #st{activity = {payment, PaymentID}} = St) ->
     % there's a payment pending
@@ -341,18 +353,18 @@ handle_signal(timeout, #st{activity = invoice} = St) ->
 construct_repair_action(CA) when CA /= undefined ->
     lists:foldl(
         fun merge_repair_action/2,
-        hg_machine_action:new(),
+        prg_machine_action:new(),
         [{timer, CA#repair_ComplexAction.timer}, {remove, CA#repair_ComplexAction.remove}]
     );
 construct_repair_action(undefined) ->
-    hg_machine_action:new().
+    prg_machine_action:new().
 
 merge_repair_action({timer, {set_timer, #repair_SetTimerAction{timer = Timer}}}, Action) ->
-    hg_machine_action:set_timer(Timer, Action);
+    prg_machine_action:set_timer(Timer, Action);
 merge_repair_action({timer, {unset_timer, #repair_UnsetTimerAction{}}}, Action) ->
-    hg_machine_action:unset_timer(Action);
+    prg_machine_action:unset_timer(Action);
 merge_repair_action({remove, #repair_RemoveAction{}}, Action) ->
-    hg_machine_action:mark_removal(Action);
+    prg_machine_action:mark_removal(Action);
 merge_repair_action({_, undefined}, Action) ->
     Action.
 
@@ -369,22 +381,25 @@ handle_expiration(St) ->
 
 %%
 
--type thrift_call() :: hg_machine:thrift_call().
+-type thrift_call() :: {hg_proto_utils:thrift_fun_ref(), [term()]}.
 -type callback_call() :: {callback, tag(), callback()}.
 -type session_change_call() :: {session_change, tag(), session_change()}.
 -type call() :: thrift_call() | callback_call() | session_change_call().
 -type call_result() :: #{
     changes => [invoice_change()],
-    action => hg_machine_action:t(),
+    action => action(),
     response => ok | term(),
     state => st()
 }.
 
--spec process_call(call(), hg_machine:machine()) -> {hg_machine:response(), hg_machine:result()}.
-process_call(Call, #{history := History}) ->
-    St = collapse_history(unmarshal_history(History)),
+-spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
+process_call(Call, Machine) ->
+    St = collapse_st(Machine),
     try
-        handle_result(handle_call(Call, St))
+        CallResult = handle_call(Call, St),
+        _ = log_changes(maps:get(changes, CallResult, []), validate_changes(CallResult)),
+        Response = maps:get(response, CallResult, ok),
+        {call_response(Response), to_prg_result(CallResult)}
     catch
         throw:Exception ->
             {{exception, Exception}, #{}}
@@ -413,7 +428,7 @@ handle_call({{'Invoicing', 'CapturePayment'}, {_InvoiceID, PaymentID, Params}}, 
     #{
         response => ok,
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     };
 handle_call({{'Invoicing', 'CancelPayment'}, {_InvoiceID, PaymentID, Reason}}, St0) ->
@@ -424,7 +439,7 @@ handle_call({{'Invoicing', 'CancelPayment'}, {_InvoiceID, PaymentID, Reason}}, S
     #{
         response => ok,
         changes => wrap_payment_changes(PaymentID, Changes, hg_datetime:format_now()),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     };
 handle_call({{'Invoicing', 'Fulfill'}, {_InvoiceID, Reason}}, St0) ->
@@ -442,7 +457,7 @@ handle_call({{'Invoicing', 'Rescind'}, {_InvoiceID, Reason}}, St0) ->
     #{
         response => ok,
         changes => [?invoice_status_changed(?invoice_cancelled(hg_utils:format_reason(Reason)))],
-        action => hg_machine_action:unset_timer(),
+        action => prg_machine_action:unset_timer(),
         state => St
     };
 handle_call({{'Invoicing', 'RefundPayment'}, {_InvoiceID, PaymentID, Params}}, St0) ->
@@ -512,7 +527,7 @@ set_invoice_timer(Action, #st{invoice = Invoice} = St) ->
     set_invoice_timer(Invoice#domain_Invoice.status, Action, St).
 
 set_invoice_timer(?invoice_unpaid(), Action, #st{invoice = #domain_Invoice{due = Due}}) ->
-    hg_machine_action:set_deadline(Due, Action);
+    prg_machine_action:set_deadline(Due, Action);
 set_invoice_timer(_Status, Action, _St) ->
     Action.
 
@@ -561,7 +576,7 @@ do_register_payment(PaymentID, PaymentParams, St) ->
     #{
         response => get_payment_state(PaymentSession),
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     }.
 
@@ -574,7 +589,7 @@ do_start_payment(PaymentID, PaymentParams, St) ->
     #{
         response => get_payment_state(PaymentSession),
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     }.
 
@@ -605,7 +620,7 @@ handle_payment_result({next, {Changes, Action}}, PaymentID, _PaymentSession, St,
     #{timestamp := OccurredAt} = Opts,
     #{
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     };
 handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, Opts) ->
@@ -618,7 +633,7 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
         ?processed() ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => Action,
+                action => action_to_prg(Action),
                 state => St
             };
         ?captured() ->
@@ -631,7 +646,7 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
                 end,
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt) ++ MaybePaid,
-                action => Action,
+                action => action_to_prg(Action),
                 state => St
             };
         ?refunded() ->
@@ -647,13 +662,13 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
         ?failed(_) ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => set_invoice_timer(Action, St),
+                action => set_invoice_timer(action_to_prg(Action), St),
                 state => St
             };
         ?cancelled() ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => set_invoice_timer(Action, St),
+                action => set_invoice_timer(action_to_prg(Action), St),
                 state => St
             }
     end.
@@ -671,32 +686,34 @@ wrap_payment_impact(PaymentID, {Response, {Changes, Action}}, St, OccurredAt) ->
     #{
         response => Response,
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => Action,
+        action => action_to_prg(Action),
         state => St
     }.
 
-handle_result(#{} = Result) ->
-    St = validate_changes(Result),
-    _ = log_changes(maps:get(changes, Result, []), St),
-    MachineResult = handle_result_changes(Result, handle_result_action(Result, #{})),
-    case maps:get(response, Result, undefined) of
-        undefined ->
-            MachineResult;
-        ok ->
-            {ok, MachineResult};
-        Response ->
-            {{ok, Response}, MachineResult}
-    end.
+-spec to_prg_result(map()) -> prg_result().
+to_prg_result(Result) ->
+    _ = validate_changes(Result),
+    to_prg_result_(Result).
 
-handle_result_changes(#{changes := Changes = [_ | _]}, Acc) ->
-    Acc#{events => [marshal_event_payload(Changes)]};
-handle_result_changes(#{}, Acc) ->
-    Acc.
+to_prg_result_(#{changes := Changes = [_ | _]} = Result) ->
+    genlib_map:compact(#{
+        events => [Changes],
+        action => maps:get(action, Result, undefined),
+        auxst => maps:get(auxst, Result, #{})
+    });
+to_prg_result_(#{action := Action} = Result) ->
+    genlib_map:compact(#{
+        action => Action,
+        auxst => maps:get(auxst, Result, #{})
+    });
+to_prg_result_(#{}) ->
+    #{auxst => #{}}.
 
-handle_result_action(#{action := Action}, Acc) ->
-    Acc#{action => Action};
-handle_result_action(#{}, Acc) ->
-    Acc.
+-spec call_response(ok | term()) -> prg_machine:response().
+call_response(ok) ->
+    ok;
+call_response(Response) ->
+    {ok, Response}.
 
 validate_changes(#{validate := false, changes := Changes = [_ | _], state := St}) ->
     collapse_changes(Changes, St, #{});
@@ -845,11 +862,27 @@ repair_scenario(Scenario, #st{activity = {payment, PaymentID}} = St) ->
 
 %%
 
--spec collapse_history([hg_machine:event()]) -> st().
+-spec collapse_st(machine()) -> st().
+collapse_st(#{history := History}) ->
+    lists:foldl(
+        fun({ID, Dt, Changes}, St0) ->
+            St1 = apply_event(Changes, St0, event_timestamp_to_binary(Dt)),
+            St1#st{latest_event_id = ID}
+        end,
+        #st{},
+        History
+    ).
+
+event_timestamp_to_binary(Bin) when is_binary(Bin) ->
+    Bin;
+event_timestamp_to_binary(Dt) ->
+    hg_datetime:format_dt(Dt).
+
+-spec collapse_history([prg_machine:event()]) -> st().
 collapse_history(History) ->
     lists:foldl(
         fun({ID, Dt, Changes}, St0) ->
-            St1 = collapse_changes(Changes, St0, #{timestamp => Dt}),
+            St1 = collapse_changes(Changes, St0, #{timestamp => event_timestamp_to_binary(Dt)}),
             St1#st{latest_event_id = ID}
         end,
         #st{},
@@ -988,11 +1021,98 @@ get_message(invoice_created) ->
 get_message(invoice_status_changed) ->
     "Invoice status is changed".
 
-%% Marshalling
+%% prg_machine codec
 
--spec marshal_event_payload([invoice_change()]) -> hg_machine:event_payload().
-marshal_event_payload(Changes) when is_list(Changes) ->
-    wrap_event_payload({invoice_changes, Changes}).
+-spec apply_event([invoice_change()], st() | undefined) -> st().
+apply_event(Changes, St) ->
+    apply_event(Changes, St, undefined).
+
+-spec apply_event([invoice_change()], st() | undefined, event_timestamp() | undefined) -> st().
+apply_event(Changes, St0, Dt) ->
+    St = case St0 of undefined -> #st{}; _ -> St0 end,
+    Opts =
+        case Dt of
+            undefined -> #{};
+            Bin when is_binary(Bin) -> #{timestamp => Bin};
+            CalDt -> #{timestamp => hg_datetime:format_dt(CalDt)}
+        end,
+    collapse_changes(Changes, St, Opts).
+
+-spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Changes) when is_list(Changes) ->
+    #{data := Data} = wrap_event_payload({invoice_changes, Changes}),
+    Msgp = mg_msgpack_marshalling:marshal(Data),
+    {?EVENT_FORMAT_VERSION, msgpack_payload_to_binary(Msgp)}.
+
+-spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
+unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
+    decode_event_body(Payload);
+unmarshal_event_body(Format, _Payload) ->
+    erlang:error({unknown_event_format, Format}).
+
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    msgpack_payload_to_binary(mg_msgpack_marshalling:marshal(AuxSt)).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(<<>>) ->
+    #{};
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    try
+        mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))
+    catch
+        _:_ ->
+            binary_to_term(Payload, [safe])
+    end.
+
+msgpack_payload_to_binary(Msgp) ->
+    term_to_binary(Msgp).
+
+decode_event_body(Payload) ->
+    case try_unmarshal_msgpack_payload(Payload) of
+        {ok, Data} ->
+            changes_from_msgpack_data(Data);
+        {error, _} ->
+            unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Payload}})
+    end.
+
+try_unmarshal_msgpack_payload(Payload) ->
+    try
+        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))}
+    catch
+        _:_ ->
+            {error, invalid_msgpack_payload}
+    end.
+
+changes_from_msgpack_data({bin, Bin}) when is_binary(Bin) ->
+    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Bin}});
+changes_from_msgpack_data(Data) ->
+    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => Data}).
+
+-type event_timestamp() :: calendar:datetime().
+
+-spec action_to_prg(prg_machine_action:t() | undefined) -> action().
+action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
+    Action0 = prg_machine_action:new(),
+    Action1 =
+        case Timer of
+            undefined ->
+                Action0;
+            {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
+                prg_machine_action:set_timer(T, Action0);
+            {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
+                prg_machine_action:unset_timer(Action0)
+        end,
+    case Remove of
+        undefined ->
+            Action1;
+        #mg_stateproc_RemoveAction{} ->
+            prg_machine_action:mark_removal(Action1)
+    end;
+action_to_prg(Action) ->
+    Action.
+
+%% Marshalling
 
 -spec marshal_invoice(invoice()) -> binary().
 marshal_invoice(Invoice) ->
@@ -1001,15 +1121,22 @@ marshal_invoice(Invoice) ->
 
 %% Unmarshalling
 
--spec unmarshal_history([hg_machine:event()]) -> [hg_machine:event([invoice_change()])].
+-type legacy_event_payload() :: #{
+    format_version := pos_integer(),
+    data := {bin, binary()} | term()
+}.
+
+-spec unmarshal_history([prg_machine:event()]) -> [prg_machine:event([invoice_change()])].
 unmarshal_history(Events) ->
     [unmarshal_event(Event) || Event <- Events].
 
--spec unmarshal_event(hg_machine:event()) -> hg_machine:event([invoice_change()]).
+-spec unmarshal_event(prg_machine:event()) -> prg_machine:event([invoice_change()]).
+unmarshal_event({ID, Dt, Payload}) when is_list(Payload) ->
+    {ID, Dt, Payload};
 unmarshal_event({ID, Dt, Payload}) ->
     {ID, Dt, unmarshal_event_payload(Payload)}.
 
--spec unmarshal_event_payload(hg_machine:event_payload()) -> [invoice_change()].
+-spec unmarshal_event_payload(legacy_event_payload()) -> [invoice_change()].
 unmarshal_event_payload(#{format_version := 1, data := {bin, Changes}}) ->
     Type = {struct, union, {dmsl_payproc_thrift, 'EventPayload'}},
     {invoice_changes, Buf} = hg_proto_utils:deserialize(Type, Changes),

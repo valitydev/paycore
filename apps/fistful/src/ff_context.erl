@@ -61,7 +61,7 @@ load() ->
 
 -spec cleanup() -> ok.
 cleanup() ->
-    true = gproc:unreg(?REGISTRY_KEY),
+    _ = catch gproc:unreg(?REGISTRY_KEY),
     ok.
 
 -spec get_woody_context(context()) -> woody_context().

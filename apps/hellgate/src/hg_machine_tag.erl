@@ -7,9 +7,9 @@
 -export([create_binding/4]).
 
 -type tag() :: dmsl_base_thrift:'Tag'().
--type ns() :: hg_machine:ns().
+-type ns() :: hg_stateproc_types:ns().
 -type entity_id() :: dmsl_base_thrift:'ID'().
--type machine_id() :: hg_machine:id().
+-type machine_id() :: hg_stateproc_types:id().
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id(), machine_id()} | {error, notfound}.
 get_binding(NS, Tag) ->

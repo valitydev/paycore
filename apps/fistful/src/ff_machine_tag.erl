@@ -6,7 +6,7 @@
 -export([create_binding/3]).
 
 -type tag() :: binary().
--type ns() :: machinery:namespace().
+-type ns() :: prg_machine:namespace().
 -type entity_id() :: binary().
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id()} | {error, not_found}.

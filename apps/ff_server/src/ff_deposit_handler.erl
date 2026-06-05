@@ -1,3 +1,7 @@
+%%%
+%%% Deposit woody handler — ff_deposit_machine (prg_machine runtime).
+%%%
+
 -module(ff_deposit_handler).
 
 -behaviour(ff_woody_wrapper).

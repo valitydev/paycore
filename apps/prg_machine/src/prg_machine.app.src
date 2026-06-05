@@ -1,18 +1,17 @@
-{application, hg_progressor, [
-    {description, "An OTP library"},
+{application, prg_machine, [
+    {description, "Unified progressor machine runtime for HG and FF"},
     {vsn, "0.1.0"},
     {registered, []},
     {applications, [
         kernel,
         stdlib,
-        damsel,
-        progressor,
-        prg_machine,
-        hg_proto
+        genlib,
+        woody,
+        scoper,
+        progressor
     ]},
     {env, []},
     {modules, []},
-
     {licenses, ["Apache-2.0"]},
     {links, []}
 ]}.

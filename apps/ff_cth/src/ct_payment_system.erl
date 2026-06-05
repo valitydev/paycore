@@ -206,10 +206,18 @@ services(Options) ->
     },
     maps:get(services, Options, Default).
 
+postgres_host() ->
+    case inet:gethostbyname("db") of
+        {ok, _} ->
+            "db";
+        {error, _} ->
+            "127.0.0.1"
+    end.
+
 epg_databases() ->
     #{
         default_db => #{
-            host => "db",
+            host => postgres_host(),
             port => 5432,
             database => "fistful",
             username => "fistful",
@@ -250,56 +258,76 @@ progressor_namespaces() ->
     #{
         'ff/source_v1' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/source_v1',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_source_machine, party_client => #{}}},
-                    schema => ff_source_machinery_schema
+                    ns => 'ff/source_v1',
+                    env_enter => fun(WoodyCtx) ->
+                        ok = ff_context:save(ff_context:create(#{
+                            woody_context => WoodyCtx,
+                            party_client => party_client:create_client()
+                        }))
+                    end,
+                    env_leave => fun() -> ff_context:cleanup() end
                 }
             }
         },
         'ff/destination_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/destination_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_destination_machine, party_client => #{}}},
-                    schema => ff_destination_machinery_schema
+                    ns => 'ff/destination_v2',
+                    env_enter => fun(WoodyCtx) ->
+                        ok = ff_context:save(ff_context:create(#{
+                            woody_context => WoodyCtx,
+                            party_client => party_client:create_client()
+                        }))
+                    end,
+                    env_leave => fun() -> ff_context:cleanup() end
                 }
             }
         },
         'ff/deposit_v1' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/deposit_v1',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_deposit_machine, party_client => #{}}},
-                    schema => ff_deposit_machinery_schema
+                    ns => 'ff/deposit_v1',
+                    env_enter => fun(WoodyCtx) ->
+                        ok = ff_context:save(ff_context:create(#{
+                            woody_context => WoodyCtx,
+                            party_client => party_client:create_client()
+                        }))
+                    end,
+                    env_leave => fun() -> ff_context:cleanup() end
                 }
             }
         },
         'ff/withdrawal_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/withdrawal_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_withdrawal_machine, party_client => #{}}},
-                    schema => ff_withdrawal_machinery_schema
+                    ns => 'ff/withdrawal_v2',
+                    env_enter => fun(WoodyCtx) ->
+                        ok = ff_context:save(ff_context:create(#{
+                            woody_context => WoodyCtx,
+                            party_client => party_client:create_client()
+                        }))
+                    end,
+                    env_leave => fun() -> ff_context:cleanup() end
                 }
             }
         },
         'ff/withdrawal/session_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/withdrawal/session_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_withdrawal_session_machine, party_client => #{}}},
-                    schema => ff_withdrawal_session_machinery_schema
+                    ns => 'ff/withdrawal/session_v2',
+                    env_enter => fun(WoodyCtx) ->
+                        ok = ff_context:save(ff_context:create(#{
+                            woody_context => WoodyCtx,
+                            party_client => party_client:create_client()
+                        }))
+                    end,
+                    env_leave => fun() -> ff_context:cleanup() end
                 }
             }
         }

@@ -6,15 +6,9 @@
 %% automaton call wrapper
 -export([call_automaton/2]).
 
-%% processor call wrapper
--export([process/3]).
-
 %-ifdef(TEST).
 -export([cleanup/0]).
 %-endif.
-
--type encoded_args() :: binary().
--type encoded_ctx() :: binary().
 
 -define(EMPTY_CONTENT, #mg_stateproc_Content{data = {bin, <<>>}}).
 
@@ -111,94 +105,13 @@ call_automaton('Repair', {MachineDesc, Args}) ->
 cleanup() ->
     Namespaces = [
         invoice,
-        invoice_template,
-        customer,
-        recurrent_paytools
+        invoice_template
     ],
     lists:foreach(fun(NsID) -> prg_test_utils:cleanup(#{ns => NsID}) end, Namespaces).
 
 %-endif.
 
-%% Processor
-
--spec process({task_t(), encoded_args(), process()}, hg_woody_service_wrapper:handler_opts(), encoded_ctx()) ->
-    process_result().
-process({CallType, BinArgs, Process}, #{ns := NS} = Options, BinCtx) ->
-    {WoodyContext0, OtelCtx} = decode_rpc_context(BinCtx),
-    ok = woody_rpc_helper:attach_otel_context(OtelCtx),
-    #{last_event_id := LastEventID} = Process,
-    Machine = marshal(process, Process#{ns => NS}),
-    Func = marshal(function, CallType),
-    Args = marshal(args, {CallType, BinArgs, Machine}),
-    WoodyContext = hg_woody_service_wrapper:ensure_woody_deadline_set(WoodyContext0, Options),
-    ok = hg_context:save(hg_woody_service_wrapper:create_context(WoodyContext, Options)),
-    try
-        handle_result(hg_machine:handle_function(Func, {Args}, Options), LastEventID)
-    after
-        hg_context:cleanup()
-    end.
-
 %% Internal functions
-
-decode_rpc_context(<<>>) ->
-    woody_rpc_helper:decode_rpc_context(#{});
-decode_rpc_context(BinCtx) ->
-    woody_rpc_helper:decode_rpc_context(marshal(term, BinCtx)).
-
-handle_result(
-    #mg_stateproc_SignalResult{
-        change = #'mg_stateproc_MachineStateChange'{
-            aux_state = AuxState,
-            events = Events
-        },
-        action = Action
-    },
-    LastEventID
-) ->
-    {ok,
-        genlib_map:compact(#{
-            events => unmarshal(events, {Events, LastEventID}),
-            aux_state => maybe_unmarshal(term, AuxState),
-            action => maybe_unmarshal(action, Action)
-        })};
-handle_result(
-    #mg_stateproc_CallResult{
-        response = Response,
-        change = #'mg_stateproc_MachineStateChange'{
-            aux_state = AuxState,
-            events = Events
-        },
-        action = Action
-    },
-    LastEventID
-) ->
-    {ok,
-        genlib_map:compact(#{
-            response => Response,
-            events => unmarshal(events, {Events, LastEventID}),
-            aux_state => maybe_unmarshal(term, AuxState),
-            action => maybe_unmarshal(action, Action)
-        })};
-handle_result(
-    #mg_stateproc_RepairResult{
-        response = Response,
-        change = #'mg_stateproc_MachineStateChange'{
-            aux_state = AuxState,
-            events = Events
-        },
-        action = Action
-    },
-    LastEventID
-) ->
-    {ok,
-        genlib_map:compact(#{
-            response => Response,
-            events => unmarshal(events, {Events, LastEventID}),
-            aux_state => maybe_unmarshal(term, AuxState),
-            action => maybe_unmarshal(action, Action)
-        })};
-handle_result(_Unexpected, _LastEventID) ->
-    {error, <<"unexpected result">>}.
 
 -spec handle_exception(_) -> no_return().
 handle_exception({exception, Class, Reason}) ->
@@ -275,97 +188,15 @@ marshal(status, {<<"error">>, Detail}) ->
 marshal(timestamp, Timestamp) ->
     unicode:characters_to_binary(calendar:system_time_to_rfc3339(Timestamp, [{offset, "Z"}, {unit, microsecond}]));
 marshal(term, Term) ->
-    binary_to_term(Term);
-marshal(function, init) ->
-    'ProcessSignal';
-marshal(function, call) ->
-    'ProcessCall';
-marshal(function, repair) ->
-    'ProcessRepair';
-marshal(function, timeout) ->
-    'ProcessSignal';
-marshal(args, {init, BinArgs, Machine}) ->
-    #mg_stateproc_SignalArgs{
-        signal = {init, #mg_stateproc_InitSignal{arg = maybe_marshal(term, BinArgs)}},
-        machine = Machine
-    };
-marshal(args, {call, BinArgs, Machine}) ->
-    #mg_stateproc_CallArgs{
-        arg = maybe_marshal(term, BinArgs),
-        machine = Machine
-    };
-marshal(args, {repair, BinArgs, Machine}) ->
-    #mg_stateproc_RepairArgs{
-        arg = maybe_marshal(term, BinArgs),
-        machine = Machine
-    };
-marshal(args, {timeout, _BinArgs, Machine}) ->
-    #mg_stateproc_SignalArgs{
-        signal = {timeout, #mg_stateproc_TimeoutSignal{}},
-        machine = Machine
-    }.
+    binary_to_term(Term).
 
 maybe_unmarshal(_, undefined) ->
     undefined;
 maybe_unmarshal(Type, Value) ->
     unmarshal(Type, Value).
 
-unmarshal(events, {undefined, _ID}) ->
-    [];
-unmarshal(events, {[], _}) ->
-    [];
-unmarshal(events, {Events, LastEventID}) ->
-    Ts = erlang:system_time(microsecond),
-    lists:foldl(
-        fun(#mg_stateproc_Content{format_version = Ver, data = Payload}, Acc) ->
-            PrevID =
-                case Acc of
-                    [] -> LastEventID;
-                    [#{event_id := ID} | _] -> ID
-                end,
-            [
-                genlib_map:compact(#{
-                    event_id => PrevID + 1,
-                    timestamp => Ts,
-                    metadata => #{<<"format_version">> => Ver},
-                    payload => unmarshal(term, Payload)
-                })
-                | Acc
-            ]
-        end,
-        [],
-        Events
-    );
-unmarshal(action, #mg_stateproc_ComplexAction{
-    timer = {set_timer, #mg_stateproc_SetTimerAction{timer = Timer}},
-    remove = RemoveAction
-}) when Timer =/= undefined ->
-    genlib_map:compact(#{
-        set_timer => unmarshal(timer, Timer),
-        remove => maybe_unmarshal(remove_action, RemoveAction)
-    });
-unmarshal(action, #mg_stateproc_ComplexAction{
-    timer = {set_timer, #mg_stateproc_SetTimerAction{timeout = Timeout}},
-    remove = RemoveAction
-}) when Timeout =/= undefined ->
-    genlib_map:compact(#{
-        set_timer => erlang:system_time(microsecond) + (Timeout * 1000000),
-        remove => maybe_unmarshal(remove_action, RemoveAction)
-    });
-unmarshal(action, #mg_stateproc_ComplexAction{timer = {unset_timer, #'mg_stateproc_UnsetTimerAction'{}}}) ->
-    unset_timer;
-unmarshal(action, #mg_stateproc_ComplexAction{remove = #mg_stateproc_RemoveAction{}}) ->
-    #{remove => true};
-unmarshal(action, #mg_stateproc_ComplexAction{remove = undefined}) ->
-    undefined;
-unmarshal(timer, {deadline, DateTimeRFC3339}) ->
-    calendar:rfc3339_to_system_time(unicode:characters_to_list(DateTimeRFC3339), [{unit, microsecond}]);
-unmarshal(timer, {timeout, Timeout}) ->
-    erlang:system_time(microsecond) + (Timeout * 1000000);
 unmarshal(term, Term) ->
     erlang:term_to_binary(Term);
-unmarshal(remove_action, #mg_stateproc_RemoveAction{}) ->
-    true;
 unmarshal(history_range, undefined) ->
     #{};
 unmarshal(history_range, #mg_stateproc_HistoryRange{'after' = Offset, limit = Limit, direction = Direction}) ->

@@ -41,7 +41,7 @@ check_for_action(
     fail_pre_processing,
     {fail_pre_processing, #payproc_InvoiceRepairFailPreProcessing{failure = Failure}}
 ) ->
-    {result, {done, {[?payment_status_changed(?failed({failure, Failure}))], hg_machine_action:instant()}}};
+    {result, {done, {[?payment_status_changed(?failed({failure, Failure}))], prg_machine_action:instant()}}};
 check_for_action(skip_inspector, {skip_inspector, #payproc_InvoiceRepairSkipInspector{risk_score = RiskScore}}) ->
     {result, RiskScore};
 check_for_action(repair_session, {fail_session, #payproc_InvoiceRepairFailSession{failure = Failure, trx = Trx}}) ->

@@ -7,7 +7,7 @@
 -spec call_automaton(woody:func(), woody:args()) -> term().
 call_automaton('Start' = Func, {NS, ID, _} = Args) ->
     MachineDesc = prepare_descriptor(NS, ID),
-    case hg_machine:call_automaton('GetMachine', {MachineDesc}, machinegun) of
+    case call_machinegun('GetMachine', {MachineDesc}) of
         {ok, Machine} ->
             ok = migrate(unmarshal(machine, Machine), unmarshal(descriptor, MachineDesc)),
             {error, exists};
@@ -26,7 +26,7 @@ call_automaton(Func, Args) ->
 %% Internal functions
 
 maybe_migrate_machine(MachineDesc) ->
-    case hg_machine:call_automaton('GetMachine', {MachineDesc}, machinegun) of
+    case call_machinegun('GetMachine', {MachineDesc}) of
         {error, notfound} = Error ->
             Error;
         {ok, Machine} ->
@@ -134,6 +134,20 @@ extract_descriptor({MachineDescriptor}) ->
     MachineDescriptor;
 extract_descriptor({MachineDescriptor, _}) ->
     MachineDescriptor.
+
+call_machinegun(Function, Args) ->
+    case hg_woody_wrapper:call(automaton, Function, Args) of
+        {ok, _} = Result ->
+            Result;
+        {exception, #mg_stateproc_MachineNotFound{}} ->
+            {error, notfound};
+        {exception, #mg_stateproc_MachineFailed{}} ->
+            {error, failed};
+        {exception, #mg_stateproc_MachineAlreadyWorking{}} ->
+            {error, working};
+        {exception, #mg_stateproc_RepairFailed{reason = Reason}} ->
+            {error, {repair, {failed, Reason}}}
+    end.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

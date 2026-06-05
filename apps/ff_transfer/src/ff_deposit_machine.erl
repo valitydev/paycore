@@ -1,17 +1,21 @@
 %%%
-%%% Deposit machine
+%%% Deposit machine — thin prg_machine client
 %%%
 
 -module(ff_deposit_machine).
 
--behaviour(machinery).
-
 %% API
 
--type id() :: machinery:id().
+-type id() :: prg_machine:id().
 -type change() :: ff_deposit:event().
--type event() :: {integer(), ff_machine:timestamped_event(change())}.
--type st() :: ff_machine:st(deposit()).
+-type timestamp() :: prg_machine:timestamp().
+-type timestamped_event(T) :: {ev, timestamp(), T}.
+-type event() :: {integer(), timestamped_event(change())}.
+-type st() :: #{
+    model := deposit(),
+    ctx := ctx(),
+    times => {timestamp() | undefined, timestamp() | undefined}
+}.
 -type deposit() :: ff_deposit:deposit_state().
 -type external_id() :: id().
 -type event_range() :: {After :: non_neg_integer() | undefined, Limit :: non_neg_integer() | undefined}.
@@ -26,6 +30,12 @@
 
 -type unknown_deposit_error() ::
     {unknown_deposit, id()}.
+
+-type action() ::
+    continue
+    | sleep
+    | {setup_timer, prg_machine_action:timer()}
+    | undefined.
 
 -export_type([id/0]).
 -export_type([st/0]).
@@ -50,14 +60,7 @@
 
 -export([deposit/1]).
 -export([ctx/1]).
-
-%% Machinery
-
--export([init/4]).
--export([process_timeout/3]).
--export([process_repair/4]).
--export([process_call/4]).
--export([process_notification/4]).
+-export([map_action/1]).
 
 %% Pipeline
 
@@ -78,7 +81,7 @@ create(Params, Ctx) ->
     do(fun() ->
         #{id := ID} = Params,
         Events = unwrap(ff_deposit:create(Params)),
-        unwrap(machinery:start(?NS, ID, {Events, Ctx}, backend()))
+        unwrap(prg_machine:start(?NS, ID, {Events, Ctx}))
     end).
 
 -spec get(id()) ->
@@ -91,9 +94,9 @@ get(ID) ->
     {ok, st()}
     | {error, unknown_deposit_error()}.
 get(ID, {After, Limit}) ->
-    case ff_machine:get(ff_deposit, ?NS, ID, {After, Limit, forward}) of
-        {ok, _Machine} = Result ->
-            Result;
+    case prg_machine:get(?NS, ID, {After, Limit, forward}) of
+        {ok, Machine} ->
+            {ok, machine_to_st(Machine)};
         {error, notfound} ->
             {error, {unknown_deposit, ID}}
     end.
@@ -102,9 +105,9 @@ get(ID, {After, Limit}) ->
     {ok, [event()]}
     | {error, unknown_deposit_error()}.
 events(ID, {After, Limit}) ->
-    case ff_machine:history(ff_deposit, ?NS, ID, {After, Limit, forward}) of
+    case prg_machine:get_history(?NS, ID, After, Limit, forward) of
         {ok, History} ->
-            {ok, [{EventID, TsEv} || {EventID, _, TsEv} <- History]};
+            {ok, history_to_events(History)};
         {error, notfound} ->
             {error, {unknown_deposit, ID}}
     end.
@@ -112,64 +115,73 @@ events(ID, {After, Limit}) ->
 -spec repair(id(), ff_repair:scenario()) ->
     {ok, repair_response()} | {error, notfound | working | {failed, repair_error()}}.
 repair(ID, Scenario) ->
-    machinery:repair(?NS, ID, Scenario, backend()).
+    case prg_machine:repair(?NS, ID, Scenario) of
+        {ok, Response} ->
+            {ok, Response};
+        {error, notfound} ->
+            {error, notfound};
+        {error, working} ->
+            {error, working};
+        {error, failed} ->
+            {error, {failed, {invalid_result, unexpected_failure}}};
+        {error, {repair, {failed, _Reason}}} = Error ->
+            Error
+    end.
 
 %% Accessors
 
 -spec deposit(st()) -> deposit().
-deposit(St) ->
-    ff_machine:model(St).
+deposit(#{model := Model}) ->
+    Model.
 
 -spec ctx(st()) -> ctx().
-ctx(St) ->
-    ff_machine:ctx(St).
-
-%% Machinery
-
--type machine() :: ff_machine:machine(event()).
--type result() :: ff_machine:result(event()).
--type handler_opts() :: machinery:handler_opts(_).
--type handler_args() :: machinery:handler_args(_).
-
--spec init({[event()], ctx()}, machine(), handler_args(), handler_opts()) -> result().
-init({Events, Ctx}, #{}, _, _Opts) ->
-    #{
-        events => ff_machine:emit_events(Events),
-        action => continue,
-        aux_state => #{ctx => Ctx}
-    }.
-
--spec process_timeout(machine(), handler_args(), handler_opts()) -> result().
-process_timeout(Machine, _, _Opts) ->
-    St = ff_machine:collapse(ff_deposit, Machine),
-    Deposit = deposit(St),
-    process_result(ff_deposit:process_transfer(Deposit)).
-
--spec process_call(_CallArgs, machine(), handler_args(), handler_opts()) -> no_return().
-process_call(CallArgs, _Machine, _, _Opts) ->
-    erlang:error({unexpected_call, CallArgs}).
-
--spec process_repair(ff_repair:scenario(), machine(), handler_args(), handler_opts()) ->
-    {ok, {repair_response(), result()}} | {error, repair_error()}.
-process_repair(Scenario, Machine, _Args, _Opts) ->
-    ff_repair:apply_scenario(ff_deposit, Machine, Scenario).
-
--spec process_notification(_, machine(), handler_args(), handler_opts()) -> result() | no_return().
-process_notification(_Args, _Machine, _HandlerArgs, _Opts) ->
-    #{}.
+ctx(#{ctx := Ctx}) ->
+    Ctx.
 
 %% Internals
 
-backend() ->
-    fistful:backend(?NS).
+-compile({nowarn_unused_function, [map_action/1]}).
 
-process_result({Action, Events}) ->
-    genlib_map:compact(#{
-        events => set_events(Events),
-        action => Action
-    }).
+-spec machine_to_st(prg_machine:machine()) -> st().
+machine_to_st(#{history := History, aux_state := AuxState} = Machine) ->
+    Model = prg_machine:collapse(ff_deposit, Machine),
+    Ctx = maps:get(ctx, AuxState, #{}),
+    #{
+        model => Model,
+        ctx => Ctx,
+        times => history_times(History)
+    }.
 
-set_events([]) ->
+-spec history_to_events(prg_machine:history()) -> [event()].
+history_to_events(History) ->
+    [{EventID, {ev, codec_timestamp(Timestamp), Body}} || {EventID, Timestamp, Body} <- History].
+
+-spec history_times(prg_machine:history()) -> {prg_machine:timestamp() | undefined, prg_machine:timestamp() | undefined}.
+history_times([]) ->
+    {undefined, undefined};
+history_times(History) ->
+    lists:foldl(
+        fun({_EventID, Timestamp, _Body}, {Created, _Updated}) ->
+            case Created of
+                undefined -> {Timestamp, Timestamp};
+                _ -> {Created, Timestamp}
+            end
+        end,
+        {undefined, undefined},
+        History
+    ).
+
+-spec map_action(action()) -> prg_machine_action:t() | undefined.
+map_action(undefined) ->
     undefined;
-set_events(Events) ->
-    ff_machine:emit_events(Events).
+map_action(continue) ->
+    prg_machine_action:instant();
+map_action(sleep) ->
+    prg_machine_action:instant();
+map_action({setup_timer, Timer}) ->
+    prg_machine_action:set_timer(Timer).
+
+codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
+    {DateTime, USec} = Timestamp;
+codec_timestamp(DateTime) ->
+    {DateTime, 0}.

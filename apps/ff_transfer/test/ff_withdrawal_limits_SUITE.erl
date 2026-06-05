@@ -546,8 +546,8 @@ await_provider_retry(FirstAmount, SecondAmount, TotalAmount, C) ->
     ok = ff_ct_machine:set_hook(
         timeout,
         fun
-            (Machine, ff_withdrawal_machine, _Args) ->
-                Withdrawal = ff_machine:model(ff_machine:collapse(ff_withdrawal, Machine)),
+            (Machine, ff_withdrawal, _Args) ->
+                Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
                 case {ff_withdrawal:id(Withdrawal), ff_withdrawal:activity(Withdrawal)} of
                     {WithdrawalID1, Activity} ->
                         ff_ct_barrier:enter(Barrier, _Timeout = 10000);

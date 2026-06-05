@@ -216,7 +216,7 @@ create_failed_session(PartyID, DestinationID, _C) ->
     ok = ff_withdrawal_session_machine:create(ID, TransferData, SessionParams),
     ID.
 
--spec get_session_status(machinery:id()) -> ff_withdrawal_session:status().
+-spec get_session_status(prg_machine:id()) -> ff_withdrawal_session:status().
 get_session_status(ID) ->
     {ok, SessionMachine} = ff_withdrawal_session_machine:get(ID),
     Session = ff_withdrawal_session_machine:session(SessionMachine),

@@ -45,7 +45,11 @@ get_service(party_config) ->
 get_service(customer_management) ->
     {dmsl_customer_thrift, 'CustomerManagement'};
 get_service(bank_card_storage) ->
-    {dmsl_customer_thrift, 'BankCardStorage'}.
+    {dmsl_customer_thrift, 'BankCardStorage'};
+get_service(invoice_trace) ->
+    {dmsl_progressor_trace_thrift, 'InvoiceTrace'};
+get_service(invoice_template_trace) ->
+    {dmsl_progressor_trace_thrift, 'InvoiceTemplateTrace'}.
 
 -spec get_service_spec(Name :: atom()) -> service_spec().
 get_service_spec(Name) ->
@@ -59,4 +63,8 @@ get_service_spec(invoice_templating = Name, #{}) ->
 get_service_spec(processor = Name, #{namespace := Ns}) when is_binary(Ns) ->
     {?VERSION_PREFIX ++ "/stateproc/" ++ binary_to_list(Ns), get_service(Name)};
 get_service_spec(proxy_host_provider = Name, #{}) ->
-    {?VERSION_PREFIX ++ "/proxyhost/provider", get_service(Name)}.
+    {?VERSION_PREFIX ++ "/proxyhost/provider", get_service(Name)};
+get_service_spec(invoice_trace = Name, #{}) ->
+    {?VERSION_PREFIX ++ "/trace/invoice", get_service(Name)};
+get_service_spec(invoice_template_trace = Name, #{}) ->
+    {?VERSION_PREFIX ++ "/trace/invoice_template", get_service(Name)}.

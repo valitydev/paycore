@@ -4,7 +4,12 @@
 
 -module(ff_deposit).
 
+-behaviour(prg_machine).
+
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+
+-define(NS, 'ff/deposit_v1').
+-define(EVENT_FORMAT_VERSION, 1).
 
 -type id() :: binary().
 -type description() :: binary().
@@ -118,6 +123,18 @@
 
 -export([apply_event/2]).
 
+%% prg_machine
+
+-export([namespace/0]).
+-export([init/2]).
+-export([process_signal/2]).
+-export([process_call/2]).
+-export([process_repair/2]).
+-export([marshal_event_body/1]).
+-export([unmarshal_event_body/2]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
+
 %% Pipeline
 
 -import(ff_pipeline, [do/1, unwrap/1, unwrap/2]).
@@ -134,7 +151,10 @@
 -type is_negative() :: boolean().
 -type cash() :: ff_cash:cash().
 -type cash_range() :: ff_range:range(cash()).
--type action() :: machinery:action() | undefined.
+-type action() :: prg_machine_action:t() | undefined.
+-type ctx() :: ff_entity_context:context().
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type currency_id() :: ff_currency:id().
 -type external_id() :: id().
@@ -299,6 +319,61 @@ is_finished(#{status := {failed, _}}) ->
     true;
 is_finished(#{status := pending}) ->
     false.
+
+%% prg_machine
+
+-spec namespace() -> prg_machine:namespace().
+namespace() ->
+    ?NS.
+
+-spec init({[event()], ctx()}, machine()) -> prg_result().
+init({Events, Ctx}, _Machine) ->
+    #{
+        events => Events,
+        action => prg_machine_action:instant(),
+        auxst => #{ctx => Ctx}
+    }.
+
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
+process_signal(timeout, Machine) ->
+    Deposit = prg_machine:collapse(?MODULE, Machine),
+    process_transfer_result(process_transfer(Deposit), Machine);
+process_signal({repair, _Args}, _Machine) ->
+    erlang:error({unexpected_signal, repair}).
+
+-spec process_call(term(), machine()) -> no_return().
+process_call(CallArgs, _Machine) ->
+    erlang:error({unexpected_call, CallArgs}).
+
+-spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
+process_repair(Scenario, Machine) ->
+    case ff_repair:apply_scenario(?MODULE, to_repair_machine(Machine), Scenario) of
+        {ok, {_Response, Result}} ->
+            from_repair_result(Result, Machine);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+-spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Body) ->
+    Timestamped = {ev, {prg_machine:timestamp(), 0}, Body},
+    Encoded = ff_machine_codec:marshal_event(deposit, ?EVENT_FORMAT_VERSION, Timestamped),
+    {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
+
+-spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
+unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
+    Timestamped = ff_machine_codec:unmarshal_event(deposit, ?EVENT_FORMAT_VERSION, Payload),
+    event_body_from_timestamped(Timestamped);
+unmarshal_event_body(Format, _Payload) ->
+    erlang:error({unknown_event_format, Format}).
+
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    ff_machine_codec:marshal_aux_state(AuxSt).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    ff_machine_codec:unmarshal_aux_state(Payload).
 
 %% Events utils
 
@@ -581,4 +656,62 @@ build_failure(limit_check, Deposit) ->
         sub => #{
             code => <<"amount">>
         }
+    }.
+
+%% prg_machine helpers
+
+-spec process_transfer_result(process_result(), machine()) -> prg_result().
+process_transfer_result({Action, Events}, Machine) ->
+    #{
+        events => Events,
+        action => map_action(Action),
+        auxst => maps:get(aux_state, Machine, #{})
+    }.
+
+-type repair_result() :: #{
+    events := [term()],
+    action => continue | undefined,
+    aux_state => term()
+}.
+
+-spec from_repair_result(repair_result(), machine()) -> prg_result().
+from_repair_result(#{events := Events} = Result, Machine) ->
+    #{
+        events => repair_events_to_domain(Events),
+        action => map_action(maps:get(action, Result, undefined)),
+        auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
+    }.
+
+-spec map_action(action()) -> prg_machine_action:t() | undefined.
+map_action(undefined) ->
+    undefined;
+map_action(continue) ->
+    prg_machine_action:instant();
+map_action(sleep) ->
+    prg_machine_action:instant();
+map_action({setup_timer, Timer}) ->
+    prg_machine_action:set_timer(Timer).
+
+-spec repair_events_to_domain([term()]) -> [event()].
+repair_events_to_domain(undefined) ->
+    [];
+repair_events_to_domain(Events) ->
+    [event_body_from_timestamped(E) || E <- Events].
+
+-spec event_body_from_timestamped(term()) -> event().
+event_body_from_timestamped({ev, _Timestamp, Change}) ->
+    Change;
+event_body_from_timestamped(Change) ->
+    Change.
+
+-type repair_machine() :: #{
+    history := [{pos_integer(), {ev, non_neg_integer(), event()}}],
+    aux_state := term()
+}.
+
+-spec to_repair_machine(machine()) -> repair_machine().
+to_repair_machine(#{history := History, aux_state := AuxState}) ->
+    #{
+        history => [{EventID, {ev, Timestamp, Body}} || {EventID, Timestamp, Body} <- History],
+        aux_state => AuxState
     }.

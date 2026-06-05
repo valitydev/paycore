@@ -1,21 +1,27 @@
 %%%
-%%% Source machine
+%%% Source machine — thin prg_machine client
 %%%
 
 -module(ff_source_machine).
 
 %% API
 
--type id() :: machinery:id().
+-type id() :: prg_machine:id().
 -type ctx() :: ff_entity_context:context().
 -type source() :: ff_source:source_state().
 -type change() :: ff_source:event().
--type event() :: {integer(), ff_machine:timestamped_event(change())}.
+-type timestamp() :: prg_machine:timestamp().
+-type timestamped_event(T) :: {ev, timestamp(), T}.
+-type event() :: {integer(), timestamped_event(change())}.
 -type events() :: [event()].
 -type event_range() :: {After :: non_neg_integer() | undefined, Limit :: non_neg_integer() | undefined}.
 
 -type params() :: ff_source:params().
--type st() :: ff_machine:st(source()).
+-type st() :: #{
+    model := source(),
+    ctx := ctx(),
+    times => {timestamp() | undefined, timestamp() | undefined}
+}.
 
 -type repair_error() :: ff_repair:repair_error().
 -type repair_response() :: ff_repair:repair_response().
@@ -40,100 +46,94 @@
 -export([source/1]).
 -export([ctx/1]).
 
-%% Machinery
-
--behaviour(machinery).
-
--export([init/4]).
--export([process_timeout/3]).
--export([process_repair/4]).
--export([process_call/4]).
--export([process_notification/4]).
-
 %% Pipeline
 
 -import(ff_pipeline, [do/1, unwrap/1]).
 
-%%
 -define(NS, 'ff/source_v1').
+
+%% API
 
 -spec create(params(), ctx()) ->
     ok
     | {error, ff_source:create_error() | exists}.
-create(#{id := ID} = Params, Ctx) ->
+create(Params, Ctx) ->
     do(fun() ->
+        #{id := ID} = Params,
         Events = unwrap(ff_source:create(Params)),
-        unwrap(machinery:start(?NS, ID, {Events, Ctx}, backend()))
+        unwrap(prg_machine:start(?NS, ID, {Events, Ctx}))
     end).
 
 -spec get(id()) ->
     {ok, st()}
     | {error, notfound}.
 get(ID) ->
-    ff_machine:get(ff_source, ?NS, ID).
+    get(ID, {undefined, undefined}).
 
 -spec get(id(), event_range()) ->
     {ok, st()}
     | {error, notfound}.
 get(ID, {After, Limit}) ->
-    ff_machine:get(ff_source, ?NS, ID, {After, Limit, forward}).
+    case prg_machine:get(?NS, ID, {After, Limit, forward}) of
+        {ok, Machine} ->
+            {ok, machine_to_st(Machine)};
+        {error, notfound} ->
+            {error, notfound}
+    end.
 
 -spec events(id(), event_range()) ->
     {ok, events()}
     | {error, notfound}.
 events(ID, {After, Limit}) ->
-    do(fun() ->
-        History = unwrap(ff_machine:history(ff_source, ?NS, ID, {After, Limit, forward})),
-        [{EventID, TsEv} || {EventID, _, TsEv} <- History]
-    end).
+    case prg_machine:get_history(?NS, ID, After, Limit, forward) of
+        {ok, History} ->
+            {ok, history_to_events(History)};
+        {error, notfound} ->
+            {error, notfound}
+    end.
 
 %% Accessors
 
 -spec source(st()) -> source().
-source(St) ->
-    ff_machine:model(St).
+source(#{model := Model}) ->
+    Model.
 
 -spec ctx(st()) -> ctx().
-ctx(St) ->
-    ff_machine:ctx(St).
-
-%% Machinery
-
--type machine() :: ff_machine:machine(change()).
--type result() :: ff_machine:result(change()).
--type handler_opts() :: machinery:handler_opts(_).
--type handler_args() :: machinery:handler_args(_).
-
--spec init({[change()], ctx()}, machine(), _, handler_opts()) -> result().
-init({Events, Ctx}, #{}, _, _Opts) ->
-    #{
-        events => ff_machine:emit_events(Events),
-        action => continue,
-        aux_state => #{ctx => Ctx}
-    }.
-
-%%
-
--spec process_timeout(machine(), handler_args(), handler_opts()) -> result().
-process_timeout(_Machine, _, _Opts) ->
-    #{}.
-
-%%
-
--spec process_call(_CallArgs, machine(), handler_args(), handler_opts()) -> {ok, result()}.
-process_call(_CallArgs, #{}, _, _Opts) ->
-    {ok, #{}}.
-
--spec process_repair(ff_repair:scenario(), machine(), handler_args(), handler_opts()) ->
-    {ok, {repair_response(), result()}} | {error, repair_error()}.
-process_repair(Scenario, Machine, _Args, _Opts) ->
-    ff_repair:apply_scenario(ff_source, Machine, Scenario).
-
--spec process_notification(_, machine(), handler_args(), handler_opts()) -> result() | no_return().
-process_notification(_Args, _Machine, _HandlerArgs, _Opts) ->
-    #{}.
+ctx(#{ctx := Ctx}) ->
+    Ctx.
 
 %% Internals
 
-backend() ->
-    fistful:backend(?NS).
+-spec machine_to_st(prg_machine:machine()) -> st().
+machine_to_st(#{history := History, aux_state := AuxState} = Machine) ->
+    Model = prg_machine:collapse(ff_source, Machine),
+    Ctx = maps:get(ctx, AuxState, #{}),
+    #{
+        model => Model,
+        ctx => Ctx,
+        times => history_times(History)
+    }.
+
+-spec history_to_events(prg_machine:history()) -> [event()].
+history_to_events(History) ->
+    [{EventID, {ev, codec_timestamp(Timestamp), Body}} || {EventID, Timestamp, Body} <- History].
+
+-spec history_times(prg_machine:history()) -> {prg_machine:timestamp() | undefined, prg_machine:timestamp() | undefined}.
+history_times([]) ->
+    {undefined, undefined};
+history_times(History) ->
+    lists:foldl(
+        fun({_EventID, Timestamp, _Body}, {Created, _Updated}) ->
+            case Created of
+                undefined -> {Timestamp, Timestamp};
+                _ -> {Created, Timestamp}
+            end
+        end,
+        {undefined, undefined},
+        History
+    ).
+
+codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
+    {DateTime, USec} = Timestamp;
+codec_timestamp(DateTime) ->
+    {DateTime, 0}.
