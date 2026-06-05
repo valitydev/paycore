@@ -44,7 +44,6 @@
 -export([marshal_invoice/1]).
 -export([unmarshal_invoice/1]).
 -export([unmarshal_history/1]).
--export([collapse_history/1]).
 
 %% Machine callbacks
 
@@ -60,7 +59,7 @@
 -export([unmarshal_event_body/2]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
--export([apply_event/2]).
+-export([apply_event/4]).
 
 %% Internal
 
@@ -103,9 +102,9 @@
 
 -spec get(prg_machine:id()) -> {ok, st()} | {error, notfound}.
 get(ID) ->
-    case prg_machine:get_history(?NS, ID) of
-        {ok, History} ->
-            {ok, collapse_history(History)};
+    case prg_machine:get(?NS, ID) of
+        {ok, Machine} ->
+            {ok, prg_machine:collapse(?MODULE, Machine)};
         Error ->
             Error
     end.
@@ -307,7 +306,7 @@ init(Invoice, _Machine) ->
 
 -spec process_repair(prg_machine:args(), machine()) -> prg_result() | no_return().
 process_repair(Args, Machine) ->
-    St = collapse_st(Machine),
+    St = prg_machine:collapse(?MODULE, Machine),
     to_prg_result(handle_repair(Args, St)).
 
 handle_repair({changes, Changes, RepairAction, Params}, St) ->
@@ -339,7 +338,7 @@ handle_repair({scenario, Scenario}, #st{activity = {payment, PaymentID}} = St) -
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(Signal, Machine) ->
-    St = collapse_st(Machine),
+    St = prg_machine:collapse(?MODULE, Machine),
     to_prg_result(handle_signal(Signal, St)).
 
 handle_signal(timeout, #st{activity = {payment, PaymentID}} = St) ->
@@ -394,7 +393,7 @@ handle_expiration(St) ->
 
 -spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
 process_call(Call, Machine) ->
-    St = collapse_st(Machine),
+    St = prg_machine:collapse(?MODULE, Machine),
     try
         CallResult = handle_call(Call, St),
         _ = log_changes(maps:get(changes, CallResult, []), validate_changes(CallResult)),
@@ -862,33 +861,6 @@ repair_scenario(Scenario, #st{activity = {payment, PaymentID}} = St) ->
 
 %%
 
--spec collapse_st(machine()) -> st().
-collapse_st(#{history := History}) ->
-    lists:foldl(
-        fun({ID, Dt, Changes}, St0) ->
-            St1 = apply_event(Changes, St0, event_timestamp_to_binary(Dt)),
-            St1#st{latest_event_id = ID}
-        end,
-        #st{},
-        History
-    ).
-
-event_timestamp_to_binary(Bin) when is_binary(Bin) ->
-    Bin;
-event_timestamp_to_binary(Dt) ->
-    hg_datetime:format_dt(Dt).
-
--spec collapse_history([prg_machine:event()]) -> st().
-collapse_history(History) ->
-    lists:foldl(
-        fun({ID, Dt, Changes}, St0) ->
-            St1 = collapse_changes(Changes, St0, #{timestamp => event_timestamp_to_binary(Dt)}),
-            St1#st{latest_event_id = ID}
-        end,
-        #st{},
-        History
-    ).
-
 collapse_changes(Changes, St0, Opts) ->
     lists:foldl(fun(C, St) -> merge_change(C, St, Opts) end, St0, Changes).
 
@@ -1023,12 +995,23 @@ get_message(invoice_status_changed) ->
 
 %% prg_machine codec
 
--spec apply_event([invoice_change()], st() | undefined) -> st().
-apply_event(Changes, St) ->
-    apply_event(Changes, St, undefined).
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    [invoice_change()],
+    st() | undefined
+) -> st().
+apply_event(EventID, Ts, Changes, St0) ->
+    St1 = apply_event_changes(Changes, St0, event_timestamp_to_binary(Ts)),
+    St1#st{latest_event_id = EventID}.
 
--spec apply_event([invoice_change()], st() | undefined, event_timestamp() | undefined) -> st().
-apply_event(Changes, St0, Dt) ->
+event_timestamp_to_binary(Bin) when is_binary(Bin) ->
+    Bin;
+event_timestamp_to_binary(Dt) ->
+    hg_datetime:format_dt(Dt).
+
+-spec apply_event_changes([invoice_change()], st() | undefined, event_timestamp() | binary() | undefined) -> st().
+apply_event_changes(Changes, St0, Dt) ->
     St = case St0 of undefined -> #st{}; _ -> St0 end,
     Opts =
         case Dt of

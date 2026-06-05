@@ -221,14 +221,16 @@ set_invoicing_meta(InvoiceID, PaymentID) ->
 %%
 
 get_state(ID) ->
-    hg_invoice:collapse_history(get_history(ID)).
+    case hg_invoice:get(ID) of
+        {ok, St} ->
+            St;
+        {error, notfound} ->
+            throw({exception, #payproc_InvoiceNotFound{}})
+    end.
 
 get_state(ID, AfterID, Limit) ->
-    hg_invoice:collapse_history(get_history(ID, AfterID, Limit)).
-
-get_history(ID) ->
-    History = prg_machine:get_history(hg_invoice:namespace(), ID),
-    hg_invoice:unmarshal_history(map_history_error(History)).
+    History = get_history(ID, AfterID, Limit),
+    prg_machine:collapse(hg_invoice, #{history => History, aux_state => #{}}).
 
 get_history(ID, AfterID, Limit) ->
     History = prg_machine:get_history(hg_invoice:namespace(), ID, AfterID, Limit),

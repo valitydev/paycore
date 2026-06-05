@@ -27,6 +27,7 @@
 -export([unmarshal_event_body/2]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 %% API
 
@@ -49,9 +50,15 @@ get(TplID) ->
     get_invoice_template(TplID).
 
 get_invoice_template(ID) ->
-    History = get_history(ID),
-    _ = assert_invoice_template_not_deleted(lists:last(History)),
-    collapse_history(History).
+    case prg_machine:get(?NS, ID) of
+        {ok, Machine = #{history := History}} ->
+            _ = assert_invoice_template_not_deleted(lists:last(History)),
+            prg_machine:collapse(?MODULE, Machine);
+        {error, notfound} ->
+            throw(#payproc_InvoiceTemplateNotFound{});
+        {error, Reason} ->
+            error(Reason)
+    end.
 
 %% Woody handler
 
@@ -190,9 +197,6 @@ call(ID, Function, Args) ->
             map_error(Error)
     end.
 
-get_history(TplID) ->
-    map_history_error(prg_machine:get_history(?NS, TplID)).
-
 -spec map_error(notfound | any()) -> no_return().
 map_error(notfound) ->
     throw(#payproc_InvoiceTemplateNotFound{});
@@ -202,13 +206,6 @@ map_error(Reason) ->
 map_start_error({ok, _}) ->
     ok;
 map_start_error({error, Reason}) ->
-    error(Reason).
-
-map_history_error({ok, Result}) ->
-    Result;
-map_history_error({error, notfound}) ->
-    throw(#payproc_InvoiceTemplateNotFound{});
-map_history_error({error, Reason}) ->
     error(Reason).
 
 %% Machine
@@ -269,8 +266,8 @@ process_signal({repair, _}, _Machine) ->
     #{}.
 
 -spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
-process_call(Call, #{history := History}) ->
-    St = collapse_history(History),
+process_call(Call, Machine) ->
+    St = prg_machine:collapse(?MODULE, Machine),
     try handle_call(Call, St) of
         {ok, Changes} ->
             {ok, #{events => [Changes]}};
@@ -287,12 +284,14 @@ handle_call({{'InvoiceTemplating', 'Update'}, {_TplID, Params}}, Tpl) ->
 handle_call({{'InvoiceTemplating', 'Delete'}, {_TplID}}, _Tpl) ->
     {ok, [?tpl_deleted()]}.
 
-collapse_history(History) ->
-    lists:foldl(
-        fun({_ID, _, Ev}, Tpl) -> merge_changes(Ev, Tpl) end,
-        undefined,
-        History
-    ).
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    invoice_template_change(),
+    tpl() | undefined
+) -> tpl().
+apply_event(_EventID, _Ts, Changes, Tpl) ->
+    merge_changes(Changes, Tpl).
 
 merge_changes([?tpl_created(Tpl)], _) ->
     Tpl;
