@@ -11,7 +11,7 @@
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id()} | {error, not_found}.
 get_binding(NS, Tag) ->
-    WoodyContext = ff_context:get_woody_context(ff_context:load()),
+    WoodyContext = operation_context:get_woody_context(operation_context:load_fistful()),
     case bender_client:get_internal_id(tag_to_external_id(NS, Tag), WoodyContext) of
         {ok, EntityID} ->
             {ok, EntityID};
@@ -26,7 +26,7 @@ create_binding(NS, Tag, EntityID) ->
 %%
 
 create_binding_(NS, Tag, EntityID, Context) ->
-    WoodyContext = ff_context:get_woody_context(ff_context:load()),
+    WoodyContext = operation_context:get_woody_context(operation_context:load_fistful()),
     {ok, EntityID} = bender_client:gen_constant(tag_to_external_id(NS, Tag), EntityID, WoodyContext, Context),
     ok.
 

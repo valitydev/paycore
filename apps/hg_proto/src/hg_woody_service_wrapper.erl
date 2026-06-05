@@ -32,7 +32,7 @@
     {ok, term()} | no_return().
 handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
     WoodyContext = ensure_woody_deadline_set(WoodyContext0, Opts),
-    ok = hg_context:save(create_context(WoodyContext, Opts)),
+    ok = operation_context:save_hellgate(create_context(WoodyContext, Opts)),
     try
         Result = Handler:handle_function(
             Func,
@@ -44,23 +44,23 @@ handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
         throw:Reason ->
             raise(Reason)
     after
-        hg_context:cleanup()
+        operation_context:cleanup_hellgate()
     end.
 
 -spec raise(term()) -> no_return().
 raise(Exception) ->
     woody_error:raise(business, Exception).
 
--spec create_context(woody_context:ctx(), handler_opts()) -> hg_context:context().
+-spec create_context(woody_context:ctx(), handler_opts()) -> operation_context:context().
 create_context(WoodyContext, Opts) ->
     ContextOptions = #{
         woody_context => WoodyContext
     },
-    Context = hg_context:create(ContextOptions),
+    Context = operation_context:create(ContextOptions),
     configure_party_client(Context, Opts).
 
 configure_party_client(Context0, #{party_client := PartyClient}) ->
-    hg_context:set_party_client(PartyClient, Context0);
+    operation_context:set_party_client(PartyClient, Context0);
 configure_party_client(Context, _Opts) ->
     Context.
 

@@ -58,7 +58,7 @@ new(Url) when is_binary(Url); is_list(Url) ->
     {ok, woody:result()}
     | {exception, woody_error:business_error()}.
 call(ServiceIdOrClient, Request) ->
-    call(ServiceIdOrClient, Request, ff_context:get_woody_context(ff_context:load())).
+    call(ServiceIdOrClient, Request, operation_context:get_woody_context(operation_context:load_fistful())).
 
 -spec call(service_id() | client(), request(), woody_context:ctx()) ->
     {ok, woody:result()}

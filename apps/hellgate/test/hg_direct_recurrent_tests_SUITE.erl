@@ -135,7 +135,7 @@ init_per_suite(C) ->
     PartyClient = {party_client:create_client(), party_client:create_context()},
     _ = hg_ct_helper:create_party(PartyConfigRef, PartyClient),
     _ = hg_ct_helper:create_party(AnotherPartyConfigRef, PartyClient),
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     Shop1ConfigRef = hg_ct_helper:create_shop(
         PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), undefined, PartyClient
     ),
@@ -145,7 +145,7 @@ init_per_suite(C) ->
     AnotherPartyShopConfigRef = hg_ct_helper:create_shop(
         AnotherPartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), undefined, PartyClient
     ),
-    ok = hg_context:cleanup(),
+    ok = operation_context:cleanup_hellgate(),
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
     C1 = [
@@ -164,9 +164,9 @@ init_per_suite(C) ->
 
 -spec end_per_suite(config()) -> config().
 end_per_suite(C) ->
-    _ = hg_domain:cleanup(),
+    _ = hg_domain:cleanup_hellgate(),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_progressor:cleanup_hellgate(),
     [application:stop(App) || App <- cfg(apps, C)].
 
 -spec init_per_group(group_name(), config()) -> config().

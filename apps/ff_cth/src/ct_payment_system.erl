@@ -261,13 +261,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/source_v1',
-                    env_enter => fun(WoodyCtx) ->
-                        ok = ff_context:save(ff_context:create(#{
-                            woody_context => WoodyCtx,
-                            party_client => party_client:create_client()
-                        }))
-                    end,
-                    env_leave => fun() -> ff_context:cleanup() end
+                    context_binding => operation_context:fistful_binding()
                 }
             }
         },
@@ -276,13 +270,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/destination_v2',
-                    env_enter => fun(WoodyCtx) ->
-                        ok = ff_context:save(ff_context:create(#{
-                            woody_context => WoodyCtx,
-                            party_client => party_client:create_client()
-                        }))
-                    end,
-                    env_leave => fun() -> ff_context:cleanup() end
+                    context_binding => operation_context:fistful_binding()
                 }
             }
         },
@@ -291,13 +279,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/deposit_v1',
-                    env_enter => fun(WoodyCtx) ->
-                        ok = ff_context:save(ff_context:create(#{
-                            woody_context => WoodyCtx,
-                            party_client => party_client:create_client()
-                        }))
-                    end,
-                    env_leave => fun() -> ff_context:cleanup() end
+                    context_binding => operation_context:fistful_binding()
                 }
             }
         },
@@ -306,13 +288,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/withdrawal_v2',
-                    env_enter => fun(WoodyCtx) ->
-                        ok = ff_context:save(ff_context:create(#{
-                            woody_context => WoodyCtx,
-                            party_client => party_client:create_client()
-                        }))
-                    end,
-                    env_leave => fun() -> ff_context:cleanup() end
+                    context_binding => operation_context:fistful_binding()
                 }
             }
         },
@@ -321,13 +297,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/withdrawal/session_v2',
-                    env_enter => fun(WoodyCtx) ->
-                        ok = ff_context:save(ff_context:create(#{
-                            woody_context => WoodyCtx,
-                            party_client => party_client:create_client()
-                        }))
-                    end,
-                    env_leave => fun() -> ff_context:cleanup() end
+                    context_binding => operation_context:fistful_binding()
                 }
             }
         }

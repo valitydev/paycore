@@ -149,7 +149,7 @@ call(ServiceName, Function, Args) ->
     Opts = hg_woody_wrapper:get_service_options(ServiceName),
     WoodyContext =
         try
-            hg_context:get_woody_context(hg_context:load())
+            operation_context:get_woody_context(operation_context:load_hellgate())
         catch
             error:badarg -> woody_context:new()
         end,

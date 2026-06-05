@@ -33,7 +33,7 @@ woody handler (hg_*_handler, ff_*_handler)
 - Trace API на Thrift (`docs/trace-api-thrift.md`)
 - Hybrid MG↔progressor (`hg_hybrid`, machinegun)
 - Полное удаление зависимости `machinery` из `rebar.config`
-- Дедупликация HG/FF утилит (`payproc_common`, `ff_core`) — другой Ralph goal
+- Дедупликация HG/FF утилит (`operation_context`, `ff_core`) — другой Ralph goal
 
 **Принципы:**
 
@@ -58,7 +58,7 @@ woody handler (hg_*_handler, ff_*_handler)
 
 **`process/3`** — callback progressor:
 
-1. `env_enter(WoodyCtx)` — поднять `hg_context` / `ff_context`
+1. `env_enter(WoodyCtx)` — поднять `operation_context` (HG или FF binding)
 2. `unmarshal_machine` — history + aux_state из storage
 3. `dispatch` → `Handler:init | process_call | process_signal | process_repair | process_notification`
 4. `marshal_process_result` — events, action, aux_state обратно в progressor
@@ -101,18 +101,31 @@ woody handler (hg_*_handler, ff_*_handler)
 
 ### 2.4. Конфиг progressor (`config/sys.config`)
 
-Единый шаблон для каждого NS:
+Единый шаблон для каждого NS (prod — 7 namespace: 2× HG + 5× FF):
 
 ```erlang
 processor => #{
     client => prg_machine,
     options => #{
         ns => <namespace_atom>,
-        env_enter => fun(WoodyCtx) -> ... context:save(...) end,
-        env_leave => fun() -> ... context:cleanup() end
+        %% HG (strict) / FF (lenient) — см. operation_context:hellgate_binding/0, fistful_binding/0
+        context_binding => #{
+            registry_key => {p, l, stored_hg_context},
+            cleanup_mode => strict
+        }
     }
 }
 ```
+
+`prg_machine:process/3` поднимает RPC-контекст через `operation_context:env_enter/2` и снимает через `operation_context:env_leave/1` по `context_binding`, если в `options` не заданы явные хуки `env_enter` / `env_leave`.
+
+**Приоритет резолва** (`resolve_env_enter/1`, `resolve_env_leave/1` в `prg_machine.erl`):
+
+1. Явный fun в `env_enter` / `env_leave` — перекрывает всё (CT с кастомным `party_client` и т.п.)
+2. `context_binding => Binding` — `operation_context:env_enter(WoodyCtx, Binding)` / `env_leave(Binding)`
+3. noop — `fun(_) -> ok end` / `fun() -> ok end`, если ни fun, ни binding не заданы
+
+Стандартный enter: `woody_context` + `party_client:create_client()` в gproc по `registry_key` из binding.
 
 Без `handler`, `schema`, `machinery_prg_backend`.
 

@@ -119,9 +119,9 @@ handle_exception({exception, Class, Reason}) ->
 
 get_context() ->
     WoodyContext =
-        try hg_context:load() of
+        try operation_context:load_hellgate() of
             Ctx ->
-                hg_context:get_woody_context(Ctx)
+                operation_context:get_woody_context(Ctx)
         catch
             Class:Reason ->
                 _ = logger:warning("Failed to load context with error class '~s' and reason: ~p", [Class, Reason]),

@@ -39,10 +39,13 @@
 
 -type env_enter_fun() :: fun(() -> ok) | fun((woody_context:ctx()) -> ok).
 
+-type context_binding() :: operation_context:binding().
+
 -type processor_opts() :: #{
     ns := namespace(),
     env_enter => env_enter_fun(),
-    env_leave => fun(() -> ok)
+    env_leave => fun(() -> ok),
+    context_binding => context_binding()
 }.
 
 -export_type([
@@ -256,8 +259,8 @@ trace(NS, ID) ->
 -spec process({init | call | repair | notify | timeout, binary(), map()}, processor_opts(), binary()) ->
     {ok, map()} | {error, term()}.
 process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
-    Enter = maps:get(env_enter, Opts, fun(_) -> ok end),
-    Leave = maps:get(env_leave, Opts, fun() -> ok end),
+    Enter = resolve_env_enter(Opts),
+    Leave = resolve_env_leave(Opts),
     try
         {WoodyCtx, OtelCtx} = decode_rpc_context(BinCtx),
         ok = woody_rpc_helper:attach_otel_context(OtelCtx),
@@ -509,6 +512,32 @@ decode_rpc_context(<<>>) ->
     woody_rpc_helper:decode_rpc_context(#{});
 decode_rpc_context(Bin) ->
     woody_rpc_helper:decode_rpc_context(decode_term(Bin)).
+
+resolve_env_enter(Opts) ->
+    case maps:is_key(env_enter, Opts) of
+        true ->
+            maps:get(env_enter, Opts);
+        false ->
+            case maps:get(context_binding, Opts, undefined) of
+                Binding when is_map(Binding) ->
+                    fun(WoodyCtx) -> operation_context:env_enter(WoodyCtx, Binding) end;
+                _ ->
+                    fun(_) -> ok end
+            end
+    end.
+
+resolve_env_leave(Opts) ->
+    case maps:is_key(env_leave, Opts) of
+        true ->
+            maps:get(env_leave, Opts);
+        false ->
+            case maps:get(context_binding, Opts, undefined) of
+                Binding when is_map(Binding) ->
+                    fun() -> operation_context:env_leave(Binding) end;
+                _ ->
+                    fun() -> ok end
+            end
+    end.
 
 run_env_enter(Enter, WoodyCtx) when is_function(Enter, 1) ->
     Enter(WoodyCtx);

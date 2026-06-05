@@ -370,9 +370,9 @@ get_withdrawal_cash_flow_plan(Terms) ->
 %% Party management client
 
 get_party_client() ->
-    Context = ff_context:load(),
-    Client = ff_context:get_party_client(Context),
-    ClientContext = ff_context:get_party_client_context(Context),
+    Context = operation_context:load_fistful(),
+    Client = operation_context:get_party_client(Context),
+    ClientContext = operation_context:get_party_client_context(Context),
     {Client, ClientContext}.
 
 %% Terms stuff

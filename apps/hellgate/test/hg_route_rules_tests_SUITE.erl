@@ -119,7 +119,7 @@ init_per_suite(C) ->
 end_per_suite(C) ->
     SupPid = cfg(suite_test_sup, C),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_progressor:cleanup_hellgate(),
     hg_mock_helper:stop_sup(SupPid).
 
 -spec init_per_group(group_name(), config()) -> config().
@@ -132,13 +132,13 @@ end_per_group(_GroupName, _C) ->
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
 init_per_testcase(_, C) ->
-    Ctx = hg_context:set_party_client(cfg(party_client, C), hg_context:create()),
-    ok = hg_context:save(Ctx),
+    Ctx = operation_context:set_party_client(cfg(party_client, C), operation_context:create()),
+    ok = operation_context:save_hellgate(Ctx),
     C.
 
 -spec end_per_testcase(test_case_name(), config()) -> ok.
 end_per_testcase(_Name, _C) ->
-    ok = hg_context:cleanup(),
+    ok = operation_context:cleanup_hellgate(),
     ok.
 
 cfg(Key, C) ->

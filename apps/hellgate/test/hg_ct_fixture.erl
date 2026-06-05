@@ -159,7 +159,7 @@ construct_inspector(Ref, Name, ProxyRef, Additional, FallBackScore) ->
 
 -spec construct_provider_account_set([currency()]) -> dmsl_domain_thrift:'ProviderAccountSet'().
 construct_provider_account_set(Currencies) ->
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     AccountSet = lists:foldl(
         fun(Cur = ?cur(Code), Acc) ->
             Acc#{Cur => ?prvacc(hg_accounting:create_account(Code))}
@@ -167,7 +167,7 @@ construct_provider_account_set(Currencies) ->
         #{},
         Currencies
     ),
-    _ = hg_context:cleanup(),
+    _ = operation_context:cleanup_hellgate(),
     AccountSet.
 
 -spec construct_system_account_set(system_account_set()) ->
@@ -178,10 +178,10 @@ construct_system_account_set(Ref) ->
 -spec construct_system_account_set(system_account_set(), name(), currency()) ->
     {system_account_set, dmsl_domain_thrift:'SystemAccountSetObject'()}.
 construct_system_account_set(Ref, Name, ?cur(CurrencyCode)) ->
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     SettlementAccountID = hg_accounting:create_account(CurrencyCode),
     SubagentAccountID = hg_accounting:create_account(CurrencyCode),
-    hg_context:cleanup(),
+    operation_context:cleanup_hellgate(),
     {system_account_set, #domain_SystemAccountSetObject{
         ref = Ref,
         data = #domain_SystemAccountSet{
@@ -204,10 +204,10 @@ construct_external_account_set(Ref) ->
 -spec construct_external_account_set(external_account_set(), name(), currency()) ->
     {external_account_set, dmsl_domain_thrift:'ExternalAccountSetObject'()}.
 construct_external_account_set(Ref, Name, ?cur(CurrencyCode)) ->
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     AccountID1 = hg_accounting:create_account(CurrencyCode),
     AccountID2 = hg_accounting:create_account(CurrencyCode),
-    hg_context:cleanup(),
+    operation_context:cleanup_hellgate(),
     {external_account_set, #domain_ExternalAccountSetObject{
         ref = Ref,
         data = #domain_ExternalAccountSet{

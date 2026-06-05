@@ -81,7 +81,7 @@ choose_external_account(Currency, VS, Revision) ->
     end.
 
 get_party_client() ->
-    HgContext = hg_context:load(),
-    Client = hg_context:get_party_client(HgContext),
-    Context = hg_context:get_party_client_context(HgContext),
+    HgContext = operation_context:load_hellgate(),
+    Client = operation_context:get_party_client(HgContext),
+    Context = operation_context:get_party_client_context(HgContext),
     {Client, Context}.

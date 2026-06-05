@@ -116,9 +116,9 @@ setup_metrics() ->
 
 -spec woody_rpc_context() -> woody_context:ctx().
 woody_rpc_context() ->
-    try hg_context:load() of
+    try operation_context:load_hellgate() of
         Ctx ->
-            hg_context:get_woody_context(Ctx)
+            operation_context:get_woody_context(Ctx)
     catch
         Class:Reason ->
             _ = logger:warning("Failed to load context with error class '~s' and reason: ~p", [Class, Reason]),

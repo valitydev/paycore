@@ -541,14 +541,14 @@ init_per_suite(C) ->
 
     _BaseRevision = hg_domain:upsert(construct_domain_fixture(BaseLimitsRevision)),
 
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),
     Shop2ConfigRef = hg_ct_helper:create_party_and_shop(
         Party2ConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient2
     ),
-    ok = hg_context:cleanup(),
+    ok = operation_context:cleanup_hellgate(),
 
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
@@ -573,9 +573,9 @@ init_per_suite(C) ->
 
 -spec end_per_suite(config()) -> _.
 end_per_suite(C) ->
-    _ = hg_domain:cleanup(),
+    _ = hg_domain:cleanup_hellgate(),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_progressor:cleanup_hellgate(),
     _ = [application:stop(App) || App <- cfg(apps, C)],
     _ = hg_invoice_helper:stop_kv_store(cfg(test_sup, C)),
     exit(cfg(test_sup, C), shutdown).
@@ -764,7 +764,7 @@ init_per_testcase_(Name, C) ->
     ApiClient = hg_ct_helper:create_client(cfg(root_url, C)),
     Client = hg_client_invoicing:start_link(ApiClient),
     ClientTpl = hg_client_invoice_templating:start_link(ApiClient),
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     [{client, Client}, {client_tpl, ClientTpl} | trace_testcase(Name, C)].
 
 trace_testcase(Name, C) ->
@@ -783,7 +783,7 @@ end_per_testcase(repair_fail_cash_flow_building_succeeded, C) ->
     end_per_testcase(default, C);
 end_per_testcase(_Name, C) ->
     ok = maybe_end_trace(C),
-    ok = hg_context:cleanup(),
+    ok = operation_context:cleanup_hellgate(),
     _ =
         case cfg(original_domain_revision, C) of
             Revision when is_integer(Revision) ->
@@ -6161,7 +6161,7 @@ init_route_cascading_group(C1) ->
     PartyConfigRef = cfg(party_config_ref, C1),
     PartyClient = cfg(party_client, C1),
     Revision = hg_domain:head(),
-    ok = hg_context:save(hg_context:create()),
+    ok = operation_context:save_hellgate(operation_context:create()),
     _ = hg_domain:upsert(cascade_fixture_pre_shop_create(Revision, C1)),
     C2 = [
         {
@@ -6256,7 +6256,7 @@ init_route_cascading_group(C1) ->
         }
         | C1
     ],
-    ok = hg_context:cleanup(),
+    ok = operation_context:cleanup_hellgate(),
     _ = hg_domain:upsert(cascade_fixture(Revision, C2)),
     [{base_limits_domain_revision, Revision} | C2].
 

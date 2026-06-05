@@ -322,13 +322,7 @@ start_app(progressor = AppName) ->
                         client => prg_machine,
                         options => #{
                             ns => invoice,
-                            env_enter => fun(WoodyCtx) ->
-                                ok = hg_context:save(hg_context:create(#{
-                                    woody_context => WoodyCtx,
-                                    party_client => party_client:create_client()
-                                }))
-                            end,
-                            env_leave => fun() -> hg_context:cleanup() end
+                            context_binding => operation_context:hellgate_binding()
                         }
                     },
                     worker_pool_size => 150
@@ -338,13 +332,7 @@ start_app(progressor = AppName) ->
                         client => prg_machine,
                         options => #{
                             ns => invoice_template,
-                            env_enter => fun(WoodyCtx) ->
-                                ok = hg_context:save(hg_context:create(#{
-                                    woody_context => WoodyCtx,
-                                    party_client => party_client:create_client()
-                                }))
-                            end,
-                            env_leave => fun() -> hg_context:cleanup() end
+                            context_binding => operation_context:hellgate_binding()
                         }
                     }
                 }
