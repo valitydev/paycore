@@ -13,8 +13,6 @@
         progressor,
         operation_context,
         prg_machine,
-        machinery,
-        machinery_extra,
         woody,
         uuid,
         damsel,

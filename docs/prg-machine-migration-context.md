@@ -247,10 +247,9 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 
 | Модуль / config | Проблема |
 |-----------------|----------|
-| `apps/fistful/src/ff_limit.erl` | `-behaviour(machinery)`, вызовы `machinery:get/call/start` |
 | `test/bender/sys.config`, `test/party-management/sys.config` | `client => machinery_prg_backend` |
 | `apps/ff_cth/src/ct_payment_system.erl` | мёртвый `{machinery_backend, progressor}` |
-| `apps/machinery_extra/` | остаётся для `ff_limit` и тестов |
+| `apps/machinery_extra/` | остаётся для `machinery_msgpack` в FF transfer и тестах |
 
 ### 5.3. Trace API
 
@@ -272,7 +271,7 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 
 ```bash
 rg 'hg_machine:' apps/hellgate --glob '*.erl'                             # 0 prod
-rg 'machinery_prg_backend|ff_machine:' apps/fistful apps/ff_transfer apps/ff_server --glob '*.erl'  # 0 кроме ff_limit
+rg 'machinery_prg_backend|ff_machine:' apps/fistful apps/ff_transfer apps/ff_server --glob '*.erl'  # 0
 rg "client => machinery_prg_backend" config/sys.config                     # 0
 ```
 
