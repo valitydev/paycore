@@ -185,3 +185,55 @@ ensure_party_context_exists(#{party_client_context := _PartyContext} = Options) 
     Options;
 ensure_party_context_exists(#{woody_context := WoodyContext} = Options) ->
     set_party_client_context(party_client:create_context(#{woody_context => WoodyContext}), Options).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-define(HG_TEST_KEY, {p, l, stored_hg_context}).
+-define(FF_TEST_KEY, {p, l, {ff_context, stored_context}}).
+
+-spec test() -> _.
+
+-spec colocated_keys_isolated_test() -> _.
+colocated_keys_isolated_test() ->
+    {ok, _} = application:ensure_all_started(gproc),
+    {ok, _} = application:ensure_all_started(woody),
+    WoodyHg = woody_context:add_meta(woody_context:new(), #{<<"app">> => <<"hg">>}),
+    WoodyFf = woody_context:add_meta(woody_context:new(), #{<<"app">> => <<"ff">>}),
+    try
+        CtxHg = create(#{woody_context => WoodyHg}),
+        CtxFf = create(#{woody_context => WoodyFf}),
+        ok = save(?HG_TEST_KEY, CtxHg),
+        ok = save(?FF_TEST_KEY, CtxFf),
+        CtxHgLoaded = load(?HG_TEST_KEY),
+        CtxFfLoaded = load(?FF_TEST_KEY),
+        ?assertEqual(WoodyHg, get_woody_context(CtxHgLoaded)),
+        ?assertEqual(WoodyFf, get_woody_context(CtxFfLoaded)),
+        ?assertNotEqual(
+            get_party_client_context(CtxHgLoaded),
+            get_party_client_context(CtxFfLoaded)
+        ),
+        ok = cleanup(?HG_TEST_KEY, strict),
+        CtxFfAfterHgCleanup = load(?FF_TEST_KEY),
+        ?assertEqual(WoodyFf, get_woody_context(CtxFfAfterHgCleanup)),
+        ok = cleanup(?FF_TEST_KEY, lenient)
+    after
+        _ = catch cleanup(?HG_TEST_KEY, lenient),
+        _ = catch cleanup(?FF_TEST_KEY, lenient)
+    end.
+
+-spec scoped_helpers_test() -> _.
+scoped_helpers_test() ->
+    {ok, _} = application:ensure_all_started(gproc),
+    {ok, _} = application:ensure_all_started(woody),
+    WoodyCtx = woody_context:new(),
+    try
+        ok = save_fistful(create(#{woody_context => WoodyCtx})),
+        ?assertEqual(WoodyCtx, get_woody_context(load_fistful())),
+        ok = cleanup_fistful(),
+        ok = cleanup_fistful()
+    after
+        _ = catch cleanup_fistful()
+    end.
+
+-endif.

@@ -31,12 +31,6 @@
 -type unknown_deposit_error() ::
     {unknown_deposit, id()}.
 
--type action() ::
-    continue
-    | sleep
-    | {setup_timer, progressor_action:timer()}
-    | undefined.
-
 -export_type([id/0]).
 -export_type([st/0]).
 -export_type([change/0]).
@@ -60,7 +54,6 @@
 
 -export([deposit/1]).
 -export([ctx/1]).
--export([map_action/1]).
 
 %% Pipeline
 
@@ -140,8 +133,6 @@ ctx(#{ctx := Ctx}) ->
 
 %% Internals
 
--compile({nowarn_unused_function, [map_action/1]}).
-
 -spec machine_to_st(prg_machine:machine()) -> st().
 machine_to_st(#{history := History, aux_state := AuxState} = Machine) ->
     Model = prg_machine:collapse(ff_deposit, Machine),
@@ -170,16 +161,6 @@ history_times(History) ->
         {undefined, undefined},
         History
     ).
-
--spec map_action(action()) -> progressor_action:t() | undefined.
-map_action(undefined) ->
-    undefined;
-map_action(continue) ->
-    progressor_action:instant();
-map_action(sleep) ->
-    progressor_action:instant();
-map_action({setup_timer, Timer}) ->
-    progressor_action:set_timer(Timer).
 
 codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
     {DateTime, USec} = Timestamp;

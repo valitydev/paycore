@@ -274,8 +274,9 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
         Result = dispatch(Handler, CallType, BinArgs, Machine),
         marshal_process_result(Handler, LastEventID, Result)
     catch
-        Class:Reason:_Stacktrace ->
-            {error, ?PROCESSOR_EXCEPTION(Class, Reason, _Stacktrace)}
+        Class:Reason:Stacktrace ->
+            logger:error("prg_machine process failed: ~p:~p~n~p", [Class, Reason, Stacktrace]),
+            {error, ?PROCESSOR_EXCEPTION(Class, Reason, Stacktrace)}
     after
         Leave()
     end.
@@ -401,9 +402,8 @@ unmarshal_event(Handler, #{
     Format = maps:get(<<"format">>, Meta, maps:get(format, Meta, undefined)),
     Body = unmarshal_event_body(Handler, Format, Payload),
     {EventID, event_timestamp_to_datetime(TsSec), Body};
-unmarshal_event(Handler, #{event_id := _EventID} = Ev) ->
-    Meta = maps:get(metadata, Ev, #{}),
-    unmarshal_event(Handler, Ev#{metadata => Meta, timestamp => maps:get(timestamp, Ev, 0)}).
+unmarshal_event(_Handler, #{event_id := EventID} = Ev) ->
+    erlang:error({missing_event_payload, EventID, maps:keys(Ev)}).
 
 marshal_new_events(Handler, LastEventID, Bodies) ->
     Ts = erlang:system_time(microsecond),
@@ -434,7 +434,7 @@ unmarshal_event_body(Handler, Format, Payload) ->
         true ->
             Handler:unmarshal_event_body(Format, Payload);
         false ->
-            binary_to_term(Payload)
+            binary_to_term(Payload, [safe])
     end.
 
 marshal_aux_state(Handler, AuxSt) ->
@@ -452,7 +452,7 @@ unmarshal_aux_state(Handler, Bin) when is_binary(Bin) ->
         true ->
             Handler:unmarshal_aux_state(Bin);
         false ->
-            binary_to_term(Bin)
+            binary_to_term(Bin, [safe])
     end.
 
 event_metadata(undefined) ->
@@ -551,7 +551,7 @@ encode_term(Term) ->
     term_to_binary(Term).
 
 decode_term(Term) when is_binary(Term) ->
-    binary_to_term(Term);
+    binary_to_term(Term, [safe]);
 decode_term(Term) ->
     Term.
 
@@ -570,3 +570,108 @@ range_from_process(_) ->
 -spec raise_exception({exception, atom(), term()}) -> no_return().
 raise_exception({exception, Class, Reason}) ->
     erlang:raise(Class, Reason, []).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-define(TEST_NS, env_test_ns).
+-define(TEST_REGISTRY_KEY, {p, l, prg_machine_env_test_context}).
+-define(TEST_BINDING, #{
+    registry_key => ?TEST_REGISTRY_KEY,
+    cleanup_mode => lenient
+}).
+
+-spec test() -> _.
+
+-spec noop_when_hooks_absent_test_() -> _.
+noop_when_hooks_absent_test_() ->
+    {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
+        ?_test(noop_when_hooks_absent())
+    ]}.
+
+-spec explicit_fun_overrides_context_binding_test_() -> _.
+explicit_fun_overrides_context_binding_test_() ->
+    {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
+        ?_test(explicit_fun_overrides_context_binding())
+    ]}.
+
+-spec noop_when_hooks_absent() -> _.
+noop_when_hooks_absent() ->
+    ok = ensure_woody_available(),
+    ok = prg_machine_env_mock_context:reset(),
+    _ = run_env_hook_process(#{ns => ?TEST_NS}),
+    ?assertEqual([], prg_machine_env_mock_context:events()).
+
+-spec explicit_fun_overrides_context_binding() -> _.
+explicit_fun_overrides_context_binding() ->
+    ok = ensure_woody_available(),
+    ok = prg_machine_env_mock_context:reset(),
+    Enter = fun(_) ->
+        prg_machine_env_mock_context:record(explicit_enter),
+        ok
+    end,
+    Leave = fun() ->
+        prg_machine_env_mock_context:record(explicit_leave),
+        ok
+    end,
+    Opts = #{
+        ns => ?TEST_NS,
+        env_enter => Enter,
+        env_leave => Leave,
+        context_binding => ?TEST_BINDING
+    },
+    _ = run_env_hook_process(Opts),
+    ?assertEqual([explicit_enter, explicit_leave], prg_machine_env_mock_context:events()).
+
+-spec setup_env_hook_test() -> ok.
+setup_env_hook_test() ->
+    _ = application:load(prg_machine),
+    {ok, _} = application:ensure_all_started(gproc),
+    {ok, _} = application:ensure_all_started(snowflake),
+    {ok, _} = application:ensure_all_started(woody),
+    {ok, _} = application:ensure_all_started(scoper),
+    {ok, _} = application:ensure_all_started(party_client),
+    {ok, _} = application:ensure_all_started(opentelemetry_api),
+    {ok, _} = application:ensure_all_started(opentelemetry),
+    {ok, _} = application:ensure_all_started(operation_context),
+    _ = ensure_env_hook_dispatch_table(),
+    true = ets:insert(?TABLE, {?TEST_NS, prg_machine_env_mock_handler}),
+    ok = prg_machine_env_mock_context:reset(),
+    ok.
+
+-spec cleanup_env_hook_test(_) -> ok.
+cleanup_env_hook_test(_) ->
+    _ = ets:delete(?TABLE, ?TEST_NS),
+    _ = catch operation_context:cleanup(?TEST_REGISTRY_KEY, lenient),
+    ok.
+
+-spec ensure_woody_available() -> ok.
+ensure_woody_available() ->
+    {ok, _} = application:ensure_all_started(snowflake),
+    _ = woody_context:new(),
+    ok.
+
+-spec ensure_env_hook_dispatch_table() -> atom().
+ensure_env_hook_dispatch_table() ->
+    case ets:info(?TABLE) of
+        undefined ->
+            ets:new(?TABLE, [named_table, {read_concurrency, true}]);
+        _ ->
+            ?TABLE
+    end.
+
+-spec run_env_hook_process(process_options()) -> _.
+run_env_hook_process(Opts) ->
+    run_env_hook_process(Opts, <<>>).
+
+-spec run_env_hook_process(process_options(), binary()) -> _.
+run_env_hook_process(Opts, BinCtx) ->
+    Process = #{
+        process_id => <<"env-hook-test">>,
+        last_event_id => 0,
+        history => [],
+        aux_state => undefined
+    },
+    process({init, term_to_binary(#{}), Process}, Opts, BinCtx).
+
+-endif.

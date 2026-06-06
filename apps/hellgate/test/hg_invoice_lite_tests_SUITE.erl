@@ -16,6 +16,7 @@
 -export([payment_ok_test/1]).
 -export([payment_start_idempotency/1]).
 -export([payment_success/1]).
+-export([payment_success_trace/1]).
 -export([payment_w_first_blacklisted_success/1]).
 -export([payment_w_all_blacklisted/1]).
 -export([register_payment_success/1]).
@@ -63,6 +64,7 @@ groups() ->
         {payments, [parallel], [
             payment_start_idempotency,
             payment_success,
+            payment_success_trace,
             payment_w_first_blacklisted_success,
             payment_w_all_blacklisted,
             register_payment_success,
@@ -250,6 +252,22 @@ payment_success(C) ->
         },
         Trx
     ).
+
+-spec payment_success_trace(config()) -> test_return().
+payment_success_trace(C) ->
+    Client = cfg(client, C),
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    PaymentID = process_payment(InvoiceID, PaymentParams, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+    {ok, Trace} = progressor:trace(#{ns => invoice, id => InvoiceID}),
+    TaskTypes = [maps:get(task_type, Unit) || Unit <- Trace],
+    ?assert(lists:member(<<"init">>, TaskTypes)),
+    ?assert(lists:member(<<"call">>, TaskTypes)),
+    ?assert(lists:member(<<"timeout">>, TaskTypes)),
+    [#{task_type := <<"init">>, task_status := <<"finished">>, events := [_ | _]} | _] =
+        [Unit || Unit <- Trace, maps:get(task_type, Unit) =:= <<"init">>],
+    ok.
 
 -spec payment_w_first_blacklisted_success(config()) -> test_return().
 payment_w_first_blacklisted_success(C) ->

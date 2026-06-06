@@ -1,7 +1,7 @@
 -module(hg_invoicing_machine_client).
 
 %%% Thrift RPC to invoicing machines via progressor.
-%%% Encode/decode with hg_proto_utils; transport via prg_machine:call/6.
+%%% Call args are Erlang thrift terms; prg_machine encodes them with term_to_binary.
 %%% hg_proto stays in apps/hellgate (not in prg_machine).
 
 -export([thrift_call/5]).
@@ -30,12 +30,10 @@ thrift_call(NS, ID, Service, FunRef, Args) ->
     non_neg_integer() | undefined,
     forward | backward
 ) -> response() | {error, notfound | failed}.
-thrift_call(NS, ID, ServiceName, FunRef, Args, After, Limit, Direction) ->
-    EncodedArgs = marshal_thrift_args(ServiceName, FunRef, Args),
-    MachineCall = {FunRef, unmarshal_thrift_args(ServiceName, FunRef, EncodedArgs)},
-    case prg_machine:call(NS, ID, MachineCall, After, Limit, Direction) of
+thrift_call(NS, ID, _ServiceName, FunRef, Args, After, Limit, Direction) ->
+    case prg_machine:call(NS, ID, {FunRef, Args}, After, Limit, Direction) of
         {ok, Response} ->
-            unmarshal_thrift_response(ServiceName, FunRef, Response);
+            normalize_response(Response);
         {error, notfound} ->
             {error, notfound};
         {error, failed} ->
@@ -44,33 +42,10 @@ thrift_call(NS, ID, ServiceName, FunRef, Args, After, Limit, Direction) ->
             Error
     end.
 
-marshal_thrift_args(ServiceName, FunctionRef, Args) ->
-    {Service, _Function} = FunctionRef,
-    {Module, Service} = hg_proto:get_service(ServiceName),
-    FullFunctionRef = {Module, FunctionRef},
-    hg_proto_utils:serialize_function_args(FullFunctionRef, Args).
-
-unmarshal_thrift_args(ServiceName, FunctionRef, EncodedArgs) ->
-    {Service, _Function} = FunctionRef,
-    {Module, Service} = hg_proto:get_service(ServiceName),
-    FullFunctionRef = {Module, FunctionRef},
-    hg_proto_utils:deserialize_function_args(FullFunctionRef, EncodedArgs).
-
-unmarshal_thrift_response(ServiceName, FunctionRef, Response) ->
-    {Service, _Function} = FunctionRef,
-    {Module, Service} = hg_proto:get_service(ServiceName),
-    FullFunctionRef = {Module, FunctionRef},
-    case Response of
-        ok ->
-            ok;
-        {ok, EncodedReply} when is_binary(EncodedReply) ->
-            Reply = hg_proto_utils:deserialize_function_reply(FullFunctionRef, EncodedReply),
-            {ok, Reply};
-        {ok, Reply} ->
-            {ok, Reply};
-        {exception, EncodedException} when is_binary(EncodedException) ->
-            Exception = hg_proto_utils:deserialize_function_exception(FullFunctionRef, EncodedException),
-            {exception, Exception};
-        {exception, Exception} ->
-            {exception, Exception}
-    end.
+-spec normalize_response(prg_machine:response()) -> response().
+normalize_response(ok) ->
+    ok;
+normalize_response({ok, Reply}) ->
+    {ok, Reply};
+normalize_response({exception, Exception}) ->
+    {exception, Exception}.
