@@ -3,31 +3,30 @@
 %%% Unified runtime: HTTP/woody handlers -> domain (-behaviour(prg_machine)) -> progressor.
 %%% Replaces hg_machine, ff_machine, machinery client/backend stack for progressor.
 
+-include_lib("progressor/include/progressor.hrl").
+
 -define(TABLE, prg_machine_dispatch).
 -define(PROCESSOR_EXCEPTION(Class, Reason, _Stacktrace), {exception, Class, Reason}).
 
 %% Types
 
--type namespace() :: atom().
--type id() :: binary().
+-type namespace() :: namespace_id().
 -type args() :: term().
 -type call() :: term().
 -type response() :: ok | {ok, term()} | {exception, term()}.
 
--type event_id() :: pos_integer().
 -type timestamp() :: calendar:datetime().
 -type event_body() :: term().
--type event() :: {event_id(), timestamp(), event_body()}.
--type history() :: [event()].
-
--type range() :: {undefined | event_id(), undefined | non_neg_integer(), forward | backward}.
+%% Domain history tuple (not progressor storage event() map).
+-type machine_event() :: {event_id(), timestamp(), event_body()}.
+-type history() :: [machine_event()].
 
 -type machine() :: #{
     namespace := namespace(),
     id := id(),
     history := history(),
     aux_state := term(),
-    range => range()
+    range => history_range()
 }.
 
 -type signal() :: timeout | {repair, args()}.
@@ -41,7 +40,7 @@
 
 -type context_binding() :: operation_context:binding().
 
--type processor_opts() :: #{
+-type process_options() :: #{
     ns := namespace(),
     env_enter => env_enter_fun(),
     env_leave => fun(() -> ok),
@@ -51,16 +50,17 @@
 -export_type([
     namespace/0,
     id/0,
+    event_id/0,
+    history_range/0,
     args/0,
     call/0,
     response/0,
-    event/0,
+    machine_event/0,
     history/0,
     machine/0,
     signal/0,
     result/0,
-    range/0,
-    processor_opts/0
+    process_options/0
 ]).
 
 %% Domain behaviour
@@ -110,7 +110,7 @@
 -export([get_history/5]).
 -export([notify/3]).
 -export([remove/2]).
--export([trace/2]).
+-export([history_range/3]).
 
 %% Progressor processor
 
@@ -197,9 +197,9 @@ repair(NS, ID, Args) ->
             {error, {repair, {failed, Reason}}}
     end.
 
--spec get(namespace(), id(), range()) -> {ok, machine()} | {error, notfound}.
+-spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, notfound}.
 get(NS, ID, Range) ->
-    Req = request(NS, ID, undefined, range_map(Range)),
+    Req = request(NS, ID, undefined, Range),
     case progressor:get(Req) of
         {ok, Process} ->
             Handler = get_handler_module(NS),
@@ -212,7 +212,7 @@ get(NS, ID, Range) ->
 
 -spec get(namespace(), id()) -> {ok, machine()} | {error, notfound}.
 get(NS, ID) ->
-    get(NS, ID, {undefined, undefined, forward}).
+    get(NS, ID, #{direction => forward}).
 
 -spec get_history(namespace(), id()) -> {ok, history()} | {error, notfound}.
 get_history(NS, ID) ->
@@ -226,7 +226,7 @@ get_history(NS, ID, After, Limit) ->
 -spec get_history(namespace(), id(), event_id() | undefined, non_neg_integer() | undefined, forward | backward) ->
     {ok, history()} | {error, notfound}.
 get_history(NS, ID, After, Limit, Direction) ->
-    case get(NS, ID, {After, Limit, Direction}) of
+    case get(NS, ID, history_range(After, Limit, Direction)) of
         {ok, #{history := History}} ->
             {ok, History};
         Error ->
@@ -249,14 +249,15 @@ remove(NS, ID) ->
             Error
     end.
 
--spec trace(namespace(), id()) -> {ok, [map()]} | {error, term()}.
-trace(NS, ID) ->
-    progressor:trace(#{ns => NS, id => ID}).
+-spec history_range(undefined | event_id(), undefined | non_neg_integer(), forward | backward) ->
+    history_range().
+history_range(Offset, Limit, Direction) ->
+    encode_range(Offset, Limit, Direction).
 
 %% Progressor processor callback.
 %% progressor config: #{client => prg_machine, options => #{ns => invoice, ...}}
 
--spec process({init | call | repair | notify | timeout, binary(), map()}, processor_opts(), binary()) ->
+-spec process({init | call | repair | notify | timeout, binary(), map()}, process_options(), binary()) ->
     {ok, map()} | {error, term()}.
 process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
     Enter = resolve_env_enter(Opts),
@@ -337,7 +338,7 @@ dispatch(Handler, call, BinArgs, Machine) ->
         {notify, Args} ->
             dispatch_notification(Handler, Args, Machine);
         remove ->
-            #{events => [], action => remove, auxst => maps:get(aux_state, Machine)};
+            #{events => [], action => progressor_action:remove(), auxst => maps:get(aux_state, Machine)};
         Call ->
             Handler:process_call(Call, Machine)
     end;
@@ -559,15 +560,10 @@ encode_range(After, Limit, Direction) ->
         direction => Direction
     }).
 
-range_map({After, Limit, Direction}) ->
-    encode_range(After, Limit, Direction);
-range_map(#{offset := _} = Range) ->
-    Range.
-
-range_from_process(#{range := #{offset := Offset, limit := Limit, direction := Direction}}) ->
-    {Offset, Limit, Direction};
+range_from_process(#{range := Range = #{}}) ->
+    Range;
 range_from_process(_) ->
-    {undefined, undefined, forward}.
+    #{direction => forward}.
 
 raise_exception({exception, Class, Reason}) ->
     erlang:raise(Class, Reason, []).

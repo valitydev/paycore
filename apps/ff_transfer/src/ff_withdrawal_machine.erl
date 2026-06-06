@@ -108,7 +108,7 @@ get(ID) ->
     {ok, st()}
     | {error, unknown_withdrawal_error()}.
 get(ID, {After, Limit}) ->
-    case prg_machine:get(?NS, ID, {After, Limit, forward}) of
+    case prg_machine:get(?NS, ID, prg_machine:history_range(After, Limit, forward)) of
         {ok, Machine} ->
             {ok, machine_to_st(Machine)};
         {error, notfound} ->

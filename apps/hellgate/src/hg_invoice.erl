@@ -1109,11 +1109,13 @@ marshal_invoice(Invoice) ->
     data := {bin, binary()} | term()
 }.
 
--spec unmarshal_history([prg_machine:event()]) -> [prg_machine:event([invoice_change()])].
+-spec unmarshal_history([prg_machine:machine_event()]) ->
+    [{prg_machine:event_id(), event_timestamp(), [invoice_change()]}].
 unmarshal_history(Events) ->
     [unmarshal_event(Event) || Event <- Events].
 
--spec unmarshal_event(prg_machine:event()) -> prg_machine:event([invoice_change()]).
+-spec unmarshal_event(prg_machine:machine_event()) ->
+    {prg_machine:event_id(), event_timestamp(), [invoice_change()]}.
 unmarshal_event({ID, Dt, Payload}) when is_list(Payload) ->
     {ID, Dt, Payload};
 unmarshal_event({ID, Dt, Payload}) ->
