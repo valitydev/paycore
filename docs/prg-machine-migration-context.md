@@ -31,7 +31,7 @@ woody handler (hg_*_handler, ff_*_handler)
 **Не в scope этой миграции (отдельные goals):**
 
 - Trace API на Thrift (`docs/trace-api-thrift.md`)
-- Hybrid MG↔progressor (`hg_hybrid`, machinegun)
+- ~~Hybrid MG↔progressor (`hg_hybrid`, machinegun)~~ — **удалено**
 - Полное удаление зависимости `machinery` из `rebar.config`
 - Дедупликация HG/FF утилит (`operation_context`, `ff_core`) — другой Ralph goal
 
@@ -169,7 +169,7 @@ processor => #{
 
 - `apps/hellgate/src/hg_machine.erl`, `hg_machine_action.erl`
 - `apps/fistful/src/ff_machine.erl`, `fistful.erl`
-- `apps/hg_progressor/src/hg_progressor_handler.erl`
+- `apps/hg_progressor/` (`hg_progressor_handler`, `hg_hybrid`, `call_automaton` glue)
 - `apps/ff_server/src/ff_*_machinery_schema.erl` (×5)
 
 **Добавлено:**
@@ -252,35 +252,26 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 | `apps/ff_cth/src/ct_payment_system.erl` | мёртвый `{machinery_backend, progressor}` |
 | `apps/machinery_extra/` | остаётся для `ff_limit` и тестов |
 
-### 5.3. HG hybrid / progressor glue
-
-| Модуль | Роль |
-|--------|------|
-| `hg_progressor.erl` | **остался** — `call_automaton/2` для machinegun thrift (hybrid, CT cleanup) |
-| `hg_hybrid.erl` | маршрутизация MG vs progressor |
-
-Это **не** prod path для invoice NS, но нужно понимать при удалении `hg_progressor` app целиком.
-
-### 5.4. Trace API
+### 5.3. Trace API
 
 - Сейчас: FF internal HTTP JSON (`ff_machine_handler` → `prg_machine:trace/2`)
 - Цель (отдельно): Thrift по `progressor_trace.thrift`, см. `docs/trace-api-thrift.md`
-- В git status были черновики `hg_progressor_trace*` — **не** в финальном дереве `apps/hg_progressor`
+- В git status были черновики `hg_progressor_trace*` — **не** в финальном дереве (app `hg_progressor` удалён)
 
-### 5.5. P2b — orphan NS
+### 5.4. P2b — orphan NS
 
 `ff/identity`, `ff/wallet_v2`, HG `customer`, `recurrent_paytools` — убраны из `sys.config`. Если понадобятся в проде — отдельный PR с доменными модулями + `prg_machine`.
 
-### 5.6. Технический долг в runtime
+### 5.5. Технический долг в runtime
 
 - `initial_model/2` — `_Handler` не используется; `model` в aux на практике не пишется
 - `binary_to_term` в decode без `[safe]` в fallback path `prg_machine` — стоит проверить
 - `hg_invoice` vs FF: унификация через `apply_event/4` в runtime (вариант C); HG migration — goal `goal-hg-collapse.md`
 
-### 5.7. Grep-инварианты (целевые после полного P5)
+### 5.6. Grep-инварианты (целевые после полного P5)
 
 ```bash
-rg 'hg_machine:' apps/hellgate apps/hg_progressor --glob '*.erl'          # 0 prod
+rg 'hg_machine:' apps/hellgate --glob '*.erl'                             # 0 prod
 rg 'machinery_prg_backend|ff_machine:' apps/fistful apps/ff_transfer apps/ff_server --glob '*.erl'  # 0 кроме ff_limit
 rg "client => machinery_prg_backend" config/sys.config                     # 0
 ```

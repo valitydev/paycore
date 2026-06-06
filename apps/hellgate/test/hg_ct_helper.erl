@@ -58,6 +58,8 @@
 
 -export([make_trace_id/1]).
 
+-export([cleanup_progressor_namespaces/0]).
+
 -include("hg_ct_domain.hrl").
 -include("hg_ct_json.hrl").
 
@@ -1027,3 +1029,10 @@ make_due_date(LifetimeSeconds) ->
 make_trace_id(Prefix) ->
     B = genlib:to_binary(Prefix),
     iolist_to_binary([binary:part(B, 0, min(byte_size(B), 20)), $., hg_utils:unique_id()]).
+
+-spec cleanup_progressor_namespaces() -> ok.
+cleanup_progressor_namespaces() ->
+    lists:foreach(
+        fun(Ns) -> prg_test_utils:cleanup(#{ns => Ns}) end,
+        [invoice, invoice_template]
+    ).

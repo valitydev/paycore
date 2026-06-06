@@ -119,7 +119,7 @@ init_per_suite(C) ->
 end_per_suite(C) ->
     SupPid = cfg(suite_test_sup, C),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup_hellgate(),
+    _ = hg_ct_helper:cleanup_progressor_namespaces(),
     hg_mock_helper:stop_sup(SupPid).
 
 -spec init_per_group(group_name(), config()) -> config().
