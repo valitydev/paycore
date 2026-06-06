@@ -154,9 +154,11 @@ ensure_started(ID, TemplateID, Params, Allocation, Mutations, DomainRevision) ->
     end.
 
 call(ID, Function, Args) ->
-    case hg_invoicing_machine_client:thrift_call(
-        hg_invoice:namespace(), ID, invoicing, {'Invoicing', Function}, Args
-    ) of
+    case
+        hg_invoicing_machine_client:thrift_call(
+            hg_invoice:namespace(), ID, invoicing, {'Invoicing', Function}, Args
+        )
+    of
         ok -> ok;
         {ok, Reply} -> Reply;
         {exception, Exception} -> erlang:throw(Exception);

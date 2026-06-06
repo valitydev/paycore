@@ -12,7 +12,9 @@
 
 -spec marshal_event(domain(), format_version(), timestamped_event()) -> machinery_msgpack:t().
 marshal_event(deposit, 1, Timestamped) ->
-    marshal_thrift_event(Timestamped, ff_deposit_codec, timestamped_change, fistful_deposit_thrift, 'TimestampedChange');
+    marshal_thrift_event(
+        Timestamped, ff_deposit_codec, timestamped_change, fistful_deposit_thrift, 'TimestampedChange'
+    );
 marshal_event(source, 1, Timestamped) ->
     marshal_thrift_event(Timestamped, ff_source_codec, timestamped_change, fistful_source_thrift, 'TimestampedChange');
 marshal_event(destination, 1, Timestamped) ->
@@ -20,7 +22,9 @@ marshal_event(destination, 1, Timestamped) ->
         Timestamped, ff_destination_codec, timestamped_change, fistful_destination_thrift, 'TimestampedChange'
     );
 marshal_event(withdrawal, 1, Timestamped) ->
-    marshal_thrift_event(Timestamped, ff_withdrawal_codec, timestamped_change, fistful_wthd_thrift, 'TimestampedChange');
+    marshal_thrift_event(
+        Timestamped, ff_withdrawal_codec, timestamped_change, fistful_wthd_thrift, 'TimestampedChange'
+    );
 marshal_event(withdrawal_session, 1, Timestamped) ->
     marshal_thrift_event(
         Timestamped, ff_withdrawal_session_codec, timestamped_change, fistful_wthd_session_thrift, 'TimestampedChange'

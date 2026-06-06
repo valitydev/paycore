@@ -182,9 +182,11 @@ start(ID, Params) ->
     map_start_error(prg_machine:start(?NS, ID, EncodedParams)).
 
 call(ID, Function, Args) ->
-    case hg_invoicing_machine_client:thrift_call(
-        ?NS, ID, invoice_templating, {'InvoiceTemplating', Function}, Args
-    ) of
+    case
+        hg_invoicing_machine_client:thrift_call(
+            ?NS, ID, invoice_templating, {'InvoiceTemplating', Function}, Args
+        )
+    of
         ok ->
             ok;
         {ok, Reply} ->

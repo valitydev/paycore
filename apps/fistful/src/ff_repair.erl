@@ -146,7 +146,7 @@ validate_result(Mod, RepairMachine, #{events := NewEvents}) ->
     IDs = lists:seq(HistoryLen + 1, HistoryLen + NewEventsLen),
     PrgNewHistory = [
         {EventID, Ts, Body}
-        || {EventID, {ev, Ts, Body}} <- lists:zip(IDs, NewEvents)
+     || {EventID, {ev, Ts, Body}} <- lists:zip(IDs, NewEvents)
     ],
     Machine = (to_prg_machine(RepairMachine))#{
         history => PrgHistory0 ++ PrgNewHistory,

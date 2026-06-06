@@ -1020,7 +1020,11 @@ event_timestamp_to_binary(Dt) ->
 
 -spec apply_event_changes([invoice_change()], st() | undefined, hg_datetime:timestamp()) -> st().
 apply_event_changes(Changes, St0, Dt) ->
-    St = case St0 of undefined -> #st{}; _ -> St0 end,
+    St =
+        case St0 of
+            undefined -> #st{};
+            _ -> St0
+        end,
     collapse_changes(Changes, St, #{timestamp => Dt}).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.

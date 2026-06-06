@@ -10,7 +10,7 @@ namespace() ->
 
 -spec init(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
 init(_Args, _Machine) ->
-  #{events => [], action => progressor_action:new(), auxst => undefined}.
+    #{events => [], action => progressor_action:new(), auxst => undefined}.
 
 -spec process_signal(prg_machine:signal(), prg_machine:machine()) -> prg_machine:result().
 process_signal(_Signal, _Machine) ->

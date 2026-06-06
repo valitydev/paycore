@@ -239,16 +239,14 @@ get_history(NS, ID, After, Limit, Direction) ->
 notify(NS, ID, Args) ->
     case call(NS, ID, {notify, Args}) of
         {ok, _} -> ok;
-        {error, notfound} = Error ->
-            Error
+        {error, notfound} = Error -> Error
     end.
 
 -spec remove(namespace(), id()) -> ok | {error, notfound}.
 remove(NS, ID) ->
     case call(NS, ID, remove) of
         {ok, _} -> ok;
-        {error, notfound} = Error ->
-            Error
+        {error, notfound} = Error -> Error
     end.
 
 -spec history_range(undefined | event_id(), undefined | non_neg_integer(), forward | backward) ->

@@ -179,7 +179,8 @@ machine_to_st(#{history := History, aux_state := AuxState} = Machine) ->
 history_to_events(History) ->
     [{EventID, {ev, codec_timestamp(Timestamp), Body}} || {EventID, Timestamp, Body} <- History].
 
--spec history_times(prg_machine:history()) -> {prg_machine:timestamp() | undefined, prg_machine:timestamp() | undefined}.
+-spec history_times(prg_machine:history()) ->
+    {prg_machine:timestamp() | undefined, prg_machine:timestamp() | undefined}.
 history_times([]) ->
     {undefined, undefined};
 history_times(History) ->

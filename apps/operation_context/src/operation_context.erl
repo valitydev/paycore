@@ -137,10 +137,13 @@ fistful_binding() ->
 
 -spec env_enter(woody_context(), binding()) -> ok.
 env_enter(WoodyCtx, #{registry_key := RegistryKey}) ->
-    ok = save(RegistryKey, create(#{
-        woody_context => WoodyCtx,
-        party_client => party_client:create_client()
-    })).
+    ok = save(
+        RegistryKey,
+        create(#{
+            woody_context => WoodyCtx,
+            party_client => party_client:create_client()
+        })
+    ).
 
 -spec env_leave(binding()) -> ok.
 env_leave(#{registry_key := RegistryKey, cleanup_mode := CleanupMode}) ->
