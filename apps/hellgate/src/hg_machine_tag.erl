@@ -7,9 +7,9 @@
 -export([create_binding/4]).
 
 -type tag() :: dmsl_base_thrift:'Tag'().
--type ns() :: hg_stateproc_types:ns().
+-type ns() :: prg_machine:namespace().
 -type entity_id() :: dmsl_base_thrift:'ID'().
--type machine_id() :: hg_stateproc_types:id().
+-type machine_id() :: prg_machine:id().
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id(), machine_id()} | {error, notfound}.
 get_binding(NS, Tag) ->
@@ -43,4 +43,5 @@ create_binding_(NS, Tag, EntityID, Context) ->
     end.
 
 tag_to_external_id(NS, Tag) ->
-    <<?BENDER_NS/binary, "-", NS/binary, "-", Tag/binary>>.
+    BinNS = atom_to_binary(NS, utf8),
+    <<?BENDER_NS/binary, "-", BinNS/binary, "-", Tag/binary>>.

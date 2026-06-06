@@ -239,9 +239,13 @@ get_payment_state(PaymentSession) ->
 process_callback(Tag, Callback) ->
     process_with_tag(Tag, fun(MachineID) ->
         case prg_machine:call(?NS, MachineID, {callback, Tag, Callback}) of
-            {ok, _} = Ok ->
+            {ok, {ok, _} = Ok} ->
                 Ok;
-            {exception, invalid_callback} ->
+            {ok, ok} ->
+                ok;
+            {ok, {exception, invalid_callback}} ->
+                {error, invalid_callback};
+            {ok, {error, invalid_callback}} ->
                 {error, invalid_callback};
             {error, _} = Error ->
                 Error
@@ -253,10 +257,14 @@ process_callback(Tag, Callback) ->
 process_session_change_by_tag(Tag, SessionChange) ->
     process_with_tag(Tag, fun(MachineID) ->
         case prg_machine:call(?NS, MachineID, {session_change, Tag, SessionChange}) of
-            ok ->
+            {ok, ok} ->
                 ok;
-            {exception, invalid_callback} ->
+            {ok, {ok, _}} ->
+                ok;
+            {ok, {exception, invalid_callback}} ->
                 {error, notfound};
+            {ok, {error, _}} ->
+                {error, failed};
             {error, _} = Error ->
                 Error
         end
@@ -1010,16 +1018,10 @@ event_timestamp_to_binary(Bin) when is_binary(Bin) ->
 event_timestamp_to_binary(Dt) ->
     hg_datetime:format_dt(Dt).
 
--spec apply_event_changes([invoice_change()], st() | undefined, event_timestamp() | binary() | undefined) -> st().
+-spec apply_event_changes([invoice_change()], st() | undefined, hg_datetime:timestamp()) -> st().
 apply_event_changes(Changes, St0, Dt) ->
     St = case St0 of undefined -> #st{}; _ -> St0 end,
-    Opts =
-        case Dt of
-            undefined -> #{};
-            Bin when is_binary(Bin) -> #{timestamp => Bin};
-            CalDt -> #{timestamp => hg_datetime:format_dt(CalDt)}
-        end,
-    collapse_changes(Changes, St, Opts).
+    collapse_changes(Changes, St, #{timestamp => Dt}).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Changes) when is_list(Changes) ->
@@ -1069,10 +1071,10 @@ try_unmarshal_msgpack_payload(Payload) ->
 
 changes_from_msgpack_data({bin, Bin}) when is_binary(Bin) ->
     unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Bin}});
-changes_from_msgpack_data(Data) ->
-    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => Data}).
-
--type event_timestamp() :: calendar:datetime().
+changes_from_msgpack_data(#{format_version := V, data := Data}) ->
+    unmarshal_event_payload(#{format_version => V, data => Data});
+changes_from_msgpack_data(Changes) when is_list(Changes) ->
+    Changes.
 
 -spec action_to_prg(progressor_action:t() | undefined) -> action().
 action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
@@ -1110,16 +1112,16 @@ marshal_invoice(Invoice) ->
 }.
 
 -spec unmarshal_history([prg_machine:machine_event()]) ->
-    [{prg_machine:event_id(), event_timestamp(), [invoice_change()]}].
+    [{prg_machine:event_id(), hg_datetime:timestamp(), [invoice_change()]}].
 unmarshal_history(Events) ->
     [unmarshal_event(Event) || Event <- Events].
 
 -spec unmarshal_event(prg_machine:machine_event()) ->
-    {prg_machine:event_id(), event_timestamp(), [invoice_change()]}.
+    {prg_machine:event_id(), hg_datetime:timestamp(), [invoice_change()]}.
 unmarshal_event({ID, Dt, Payload}) when is_list(Payload) ->
-    {ID, Dt, Payload};
+    {ID, event_timestamp_to_binary(Dt), Payload};
 unmarshal_event({ID, Dt, Payload}) ->
-    {ID, Dt, unmarshal_event_payload(Payload)}.
+    {ID, event_timestamp_to_binary(Dt), unmarshal_event_payload(Payload)}.
 
 -spec unmarshal_event_payload(legacy_event_payload()) -> [invoice_change()].
 unmarshal_event_payload(#{format_version := 1, data := {bin, Changes}}) ->

@@ -48,17 +48,11 @@ unmarshal_event(Domain, Format, _Payload) ->
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->
-    {Encoded, _} = machinery_mg_schema_generic:marshal({aux_state, undefined}, AuxSt, #{}),
-    payload_to_binary(Encoded).
+    payload_to_binary(machinery_mg_schema_generic:marshal(AuxSt)).
 
 -spec unmarshal_aux_state(binary()) -> term().
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    {AuxSt, _} = machinery_mg_schema_generic:unmarshal(
-        {aux_state, undefined},
-        {bin, Payload},
-        #{}
-    ),
-    AuxSt.
+    machinery_mg_schema_generic:unmarshal({bin, Payload}).
 
 -spec payload_to_binary(machinery_msgpack:t()) -> binary().
 payload_to_binary({bin, Bin}) when is_binary(Bin) ->

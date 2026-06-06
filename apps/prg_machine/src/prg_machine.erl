@@ -13,7 +13,7 @@
 -type namespace() :: namespace_id().
 -type args() :: term().
 -type call() :: term().
--type response() :: ok | {ok, term()} | {exception, term()}.
+-type response() :: ok | {ok, term()} | {error, term()} | {exception, term()}.
 
 -type timestamp() :: calendar:datetime().
 -type event_body() :: term().
@@ -55,6 +55,8 @@
     args/0,
     call/0,
     response/0,
+    timestamp/0,
+    event_body/0,
     machine_event/0,
     history/0,
     machine/0,
@@ -565,5 +567,6 @@ range_from_process(#{range := Range = #{}}) ->
 range_from_process(_) ->
     #{direction => forward}.
 
+-spec raise_exception({exception, atom(), term()}) -> no_return().
 raise_exception({exception, Class, Reason}) ->
     erlang:raise(Class, Reason, []).

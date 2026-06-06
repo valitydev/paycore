@@ -55,9 +55,7 @@ get_invoice_template(ID) ->
             _ = assert_invoice_template_not_deleted(lists:last(History)),
             prg_machine:collapse(?MODULE, Machine);
         {error, notfound} ->
-            throw(#payproc_InvoiceTemplateNotFound{});
-        {error, Reason} ->
-            error(Reason)
+            throw(#payproc_InvoiceTemplateNotFound{})
     end.
 
 %% Woody handler
@@ -287,7 +285,7 @@ handle_call({{'InvoiceTemplating', 'Delete'}, {_TplID}}, _Tpl) ->
 -spec apply_event(
     prg_machine:event_id(),
     prg_machine:timestamp(),
-    invoice_template_change(),
+    [invoice_template_change()],
     tpl() | undefined
 ) -> tpl().
 apply_event(_EventID, _Ts, Changes, Tpl) ->
@@ -392,8 +390,10 @@ try_unmarshal_msgpack_payload(Payload) ->
 
 changes_from_msgpack_data({bin, Bin}) when is_binary(Bin) ->
     unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => {bin, Bin}});
-changes_from_msgpack_data(Data) ->
-    unmarshal_event_payload(#{format_version => ?EVENT_FORMAT_VERSION, data => Data}).
+changes_from_msgpack_data(#{format_version := V, data := Data}) ->
+    unmarshal_event_payload(#{format_version => V, data => Data});
+changes_from_msgpack_data(Changes) when is_list(Changes) ->
+    Changes.
 
 wrap_event_payload(Payload) ->
     Type = {struct, union, {dmsl_payproc_thrift, 'EventPayload'}},

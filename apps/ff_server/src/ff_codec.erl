@@ -23,12 +23,15 @@
 -type decoded_value() :: decoded_value(any()).
 -type decoded_value(T) :: T.
 
+-type timestamp() :: {calendar:datetime(), non_neg_integer()}.
+
 -export_type([codec/0]).
 -export_type([type_name/0]).
 -export_type([encoded_value/0]).
 -export_type([encoded_value/1]).
 -export_type([decoded_value/0]).
 -export_type([decoded_value/1]).
+-export_type([timestamp/0]).
 
 %% Callbacks
 
@@ -586,7 +589,7 @@ maybe_marshal(_Type, undefined) ->
 maybe_marshal(Type, Value) ->
     marshal(Type, Value).
 
--spec parse_timestamp(binary()) -> prg_machine:timestamp().
+-spec parse_timestamp(binary()) -> timestamp().
 parse_timestamp(Bin) ->
     try
         MicroSeconds = genlib_rfc3339:parse(Bin, microsecond),

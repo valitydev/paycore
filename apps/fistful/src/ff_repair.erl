@@ -2,6 +2,7 @@
 
 -export([apply_scenario/3]).
 -export([apply_scenario/4]).
+-export([to_prg_machine/1]).
 
 %% Types
 
@@ -59,6 +60,7 @@
 -export_type([repair_error/0]).
 -export_type([repair_response/0]).
 -export_type([invalid_result_error/0]).
+-export_type([machine/0]).
 
 %% Internal types
 
@@ -66,6 +68,8 @@
 -type model_aux_state() :: any().
 -type result() :: repair_result().
 -type machine() :: #{
+    namespace := prg_machine:namespace(),
+    id := prg_machine:id(),
     history := [{pos_integer(), timestamped_event(model_event())}],
     aux_state := model_aux_state()
 }.
@@ -124,18 +128,32 @@ apply_processor(Processor, Args, Machine) ->
         {Response, Result#{events => prg_machine:emit_events(Events)}}
     end).
 
+-spec to_prg_machine(machine()) -> prg_machine:machine().
+to_prg_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxSt}) ->
+    #{
+        namespace => NS,
+        id => ID,
+        history => repair_history_to_prg(History),
+        aux_state => AuxSt
+    }.
+
 -spec validate_result(module(), machine(), result()) -> {ok, valid} | {error, invalid_result_error()}.
-validate_result(Mod, #{history := RepairHistory, aux_state := AuxSt}, #{events := NewEvents}) ->
+validate_result(Mod, RepairMachine, #{events := NewEvents}) ->
+    #{history := RepairHistory, aux_state := AuxSt} = RepairMachine,
     PrgHistory0 = repair_history_to_prg(RepairHistory),
     HistoryLen = length(PrgHistory0),
     NewEventsLen = length(NewEvents),
     IDs = lists:seq(HistoryLen + 1, HistoryLen + NewEventsLen),
     PrgNewHistory = [
-        {ID, Ts, Body}
-        || {ID, {ev, Ts, Body}} <- lists:zip(IDs, NewEvents)
+        {EventID, Ts, Body}
+        || {EventID, {ev, Ts, Body}} <- lists:zip(IDs, NewEvents)
     ],
+    Machine = (to_prg_machine(RepairMachine))#{
+        history => PrgHistory0 ++ PrgNewHistory,
+        aux_state => AuxSt
+    },
     try
-        _ = prg_machine:collapse(Mod, #{history => PrgHistory0 ++ PrgNewHistory, aux_state => AuxSt}),
+        _ = prg_machine:collapse(Mod, Machine),
         {ok, valid}
     catch
         error:Error:Stack ->

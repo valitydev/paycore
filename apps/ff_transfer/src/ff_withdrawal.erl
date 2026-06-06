@@ -1020,9 +1020,7 @@ handle_child_result({undefined, Events} = Result, Withdrawal) ->
             {ok, Wallet} = fetch_wallet(wallet_id(Withdrawal), party_id(Withdrawal), DomainRevision),
             ok = ff_party:wallet_log_balance(wallet_id(Withdrawal), Wallet),
             Result
-    end;
-handle_child_result({_OtherAction, _Events} = Result, _Withdrawal) ->
-    Result.
+    end.
 
 -spec is_childs_active(withdrawal_state()) -> boolean().
 is_childs_active(Withdrawal) ->
@@ -1942,8 +1940,6 @@ map_action({setup_timer, Timer}) ->
     progressor_action:set_timer(Timer).
 
 -spec repair_events_to_domain([term()]) -> [event()].
-repair_events_to_domain(undefined) ->
-    [];
 repair_events_to_domain(Events) ->
     [event_body_from_timestamped(E) || E <- Events].
 
@@ -1953,14 +1949,11 @@ event_body_from_timestamped({ev, _Timestamp, Change}) ->
 event_body_from_timestamped(Change) ->
     Change.
 
--type repair_machine() :: #{
-    history := [{pos_integer(), {ev, non_neg_integer(), event()}}],
-    aux_state := term()
-}.
-
--spec to_repair_machine(machine()) -> repair_machine().
-to_repair_machine(#{history := History, aux_state := AuxState}) ->
+-spec to_repair_machine(machine()) -> ff_repair:machine().
+to_repair_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxState}) ->
     #{
+        namespace => NS,
+        id => ID,
         history => [{EventID, {ev, Timestamp, Body}} || {EventID, Timestamp, Body} <- History],
         aux_state => AuxState
     }.

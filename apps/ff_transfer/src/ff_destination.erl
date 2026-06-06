@@ -312,8 +312,6 @@ from_repair_result(#{events := Events} = Result, Machine) ->
     }.
 
 -spec repair_events_to_domain([term()]) -> [event()].
-repair_events_to_domain(undefined) ->
-    [];
 repair_events_to_domain(Events) ->
     [event_body_from_timestamped(E) || E <- Events].
 
@@ -323,14 +321,11 @@ event_body_from_timestamped({ev, _Timestamp, Change}) ->
 event_body_from_timestamped(Change) ->
     Change.
 
--type repair_machine() :: #{
-    history := [{pos_integer(), {ev, non_neg_integer(), event()}}],
-    aux_state := term()
-}.
-
--spec to_repair_machine(machine()) -> repair_machine().
-to_repair_machine(#{history := History, aux_state := AuxState}) ->
+-spec to_repair_machine(machine()) -> ff_repair:machine().
+to_repair_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxState}) ->
     #{
+        namespace => NS,
+        id => ID,
         history => [{EventID, {ev, Timestamp, Body}} || {EventID, Timestamp, Body} <- History],
         aux_state => AuxState
     }.

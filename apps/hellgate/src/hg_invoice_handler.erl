@@ -150,8 +150,7 @@ ensure_started(ID, TemplateID, Params, Allocation, Mutations, DomainRevision) ->
     Invoice = hg_invoice:create(ID, TemplateID, Params, Allocation, Mutations, DomainRevision),
     case prg_machine:start(hg_invoice:namespace(), ID, hg_invoice:marshal_invoice(Invoice)) of
         {ok, _} -> ok;
-        {error, exists} -> ok;
-        {error, Reason} -> erlang:error(Reason)
+        {error, exists} -> ok
     end.
 
 call(ID, Function, Args) ->
@@ -230,7 +229,13 @@ get_state(ID) ->
 
 get_state(ID, AfterID, Limit) ->
     History = get_history(ID, AfterID, Limit),
-    prg_machine:collapse(hg_invoice, #{history => History, aux_state => #{}}).
+    Machine = #{
+        namespace => hg_invoice:namespace(),
+        id => ID,
+        history => History,
+        aux_state => #{}
+    },
+    prg_machine:collapse(hg_invoice, Machine).
 
 get_history(ID, AfterID, Limit) ->
     History = prg_machine:get_history(hg_invoice:namespace(), ID, AfterID, Limit),
@@ -247,10 +252,8 @@ publish_invoice_event(InvoiceID, {ID, Dt, Event}) ->
         payload = ?invoice_ev(Event)
     }.
 
-format_event_timestamp(Dt) when is_binary(Dt) ->
-    Dt;
 format_event_timestamp(Dt) ->
-    hg_datetime:format_dt(Dt).
+    Dt.
 
 map_history_error({ok, Result}) ->
     Result;

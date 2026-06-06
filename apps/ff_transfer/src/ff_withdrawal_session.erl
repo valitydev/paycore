@@ -428,7 +428,7 @@ process_call(CallArgs, _Machine) ->
 process_repair(Scenario, Machine) ->
     ScenarioProcessors = #{
         set_session_result => fun(Args, RMachine) ->
-            Session = prg_machine:collapse(?MODULE, RMachine),
+            Session = prg_machine:collapse(?MODULE, ff_repair:to_prg_machine(RMachine)),
             {Action, Events} = set_session_result(Args, Session),
             {ok, {ok, #{action => Action, events => Events}}}
         end
@@ -505,8 +505,6 @@ map_action(retry, _Session) ->
     progressor_action:instant().
 
 -spec repair_events_to_domain([term()]) -> [event()].
-repair_events_to_domain(undefined) ->
-    [];
 repair_events_to_domain(Events) ->
     [event_body_from_timestamped(E) || E <- Events].
 
@@ -516,14 +514,11 @@ event_body_from_timestamped({ev, _Timestamp, Change}) ->
 event_body_from_timestamped(Change) ->
     Change.
 
--type repair_machine() :: #{
-    history := [{pos_integer(), {ev, non_neg_integer(), event()}}],
-    aux_state := term()
-}.
-
--spec to_repair_machine(machine()) -> repair_machine().
-to_repair_machine(#{history := History, aux_state := AuxState}) ->
+-spec to_repair_machine(machine()) -> ff_repair:machine().
+to_repair_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxState}) ->
     #{
+        namespace => NS,
+        id => ID,
         history => [{EventID, {ev, Timestamp, Body}} || {EventID, Timestamp, Body} <- History],
         aux_state => AuxState
     }.
