@@ -94,7 +94,11 @@ cleanup(RegistryKey, strict) ->
     true = gproc:unreg(RegistryKey),
     ok;
 cleanup(RegistryKey, lenient) ->
-    _ = catch gproc:unreg(RegistryKey),
+    try
+        true = gproc:unreg(RegistryKey)
+    catch
+        _:_ -> ok
+    end,
     ok.
 
 -spec save_hellgate(context()) -> ok.
@@ -221,8 +225,8 @@ colocated_keys_isolated_test() ->
         ?assertEqual(WoodyFf, get_woody_context(CtxFfAfterHgCleanup)),
         ok = cleanup(?FF_TEST_KEY, lenient)
     after
-        _ = catch cleanup(?HG_TEST_KEY, lenient),
-        _ = catch cleanup(?FF_TEST_KEY, lenient)
+        cleanup(?HG_TEST_KEY, lenient),
+        cleanup(?FF_TEST_KEY, lenient)
     end.
 
 -spec scoped_helpers_test() -> _.
@@ -236,7 +240,7 @@ scoped_helpers_test() ->
         ok = cleanup_fistful(),
         ok = cleanup_fistful()
     after
-        _ = catch cleanup_fistful()
+        cleanup_fistful()
     end.
 
 -endif.

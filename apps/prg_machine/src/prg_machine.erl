@@ -640,7 +640,7 @@ setup_env_hook_test() ->
 -spec cleanup_env_hook_test(_) -> ok.
 cleanup_env_hook_test(_) ->
     _ = ets:delete(?TABLE, ?TEST_NS),
-    _ = catch operation_context:cleanup(?TEST_REGISTRY_KEY, lenient),
+    operation_context:cleanup(?TEST_REGISTRY_KEY, lenient),
     ok.
 
 -spec ensure_woody_available() -> ok.

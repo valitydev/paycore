@@ -13,39 +13,77 @@
 -spec marshal_event(domain(), format_version(), timestamped_event()) -> machinery_msgpack:t().
 marshal_event(deposit, 1, Timestamped) ->
     marshal_thrift_event(
-        Timestamped, ff_deposit_codec, timestamped_change, fistful_deposit_thrift, 'TimestampedChange'
+        Timestamped,
+        fun(T) -> ff_deposit_codec:marshal(timestamped_change, T) end,
+        fistful_deposit_thrift,
+        'TimestampedChange'
     );
 marshal_event(source, 1, Timestamped) ->
-    marshal_thrift_event(Timestamped, ff_source_codec, timestamped_change, fistful_source_thrift, 'TimestampedChange');
+    marshal_thrift_event(
+        Timestamped,
+        fun(T) -> ff_source_codec:marshal(timestamped_change, T) end,
+        fistful_source_thrift,
+        'TimestampedChange'
+    );
 marshal_event(destination, 1, Timestamped) ->
     marshal_thrift_event(
-        Timestamped, ff_destination_codec, timestamped_change, fistful_destination_thrift, 'TimestampedChange'
+        Timestamped,
+        fun(T) -> ff_destination_codec:marshal(timestamped_change, T) end,
+        fistful_destination_thrift,
+        'TimestampedChange'
     );
 marshal_event(withdrawal, 1, Timestamped) ->
     marshal_thrift_event(
-        Timestamped, ff_withdrawal_codec, timestamped_change, fistful_wthd_thrift, 'TimestampedChange'
+        Timestamped,
+        fun(T) -> ff_withdrawal_codec:marshal(timestamped_change, T) end,
+        fistful_wthd_thrift,
+        'TimestampedChange'
     );
 marshal_event(withdrawal_session, 1, Timestamped) ->
     marshal_thrift_event(
-        Timestamped, ff_withdrawal_session_codec, timestamped_change, fistful_wthd_session_thrift, 'TimestampedChange'
+        Timestamped,
+        fun(T) -> ff_withdrawal_session_codec:marshal(timestamped_change, T) end,
+        fistful_wthd_session_thrift,
+        'TimestampedChange'
     );
 marshal_event(Domain, Format, _Timestamped) ->
     erlang:error({unknown_event_format, Domain, Format}).
 
 -spec unmarshal_event(domain(), format_version(), binary()) -> timestamped_event().
 unmarshal_event(deposit, 1, Payload) ->
-    unmarshal_thrift_event(Payload, ff_deposit_codec, timestamped_change, fistful_deposit_thrift, 'TimestampedChange');
+    unmarshal_thrift_event(
+        Payload,
+        fun(T) -> ff_deposit_codec:unmarshal(timestamped_change, T) end,
+        fistful_deposit_thrift,
+        'TimestampedChange'
+    );
 unmarshal_event(source, 1, Payload) ->
-    unmarshal_thrift_event(Payload, ff_source_codec, timestamped_change, fistful_source_thrift, 'TimestampedChange');
+    unmarshal_thrift_event(
+        Payload,
+        fun(T) -> ff_source_codec:unmarshal(timestamped_change, T) end,
+        fistful_source_thrift,
+        'TimestampedChange'
+    );
 unmarshal_event(destination, 1, Payload) ->
     unmarshal_thrift_event(
-        Payload, ff_destination_codec, timestamped_change, fistful_destination_thrift, 'TimestampedChange'
+        Payload,
+        fun(T) -> ff_destination_codec:unmarshal(timestamped_change, T) end,
+        fistful_destination_thrift,
+        'TimestampedChange'
     );
 unmarshal_event(withdrawal, 1, Payload) ->
-    unmarshal_thrift_event(Payload, ff_withdrawal_codec, timestamped_change, fistful_wthd_thrift, 'TimestampedChange');
+    unmarshal_thrift_event(
+        Payload,
+        fun(T) -> ff_withdrawal_codec:unmarshal(timestamped_change, T) end,
+        fistful_wthd_thrift,
+        'TimestampedChange'
+    );
 unmarshal_event(withdrawal_session, 1, Payload) ->
     unmarshal_thrift_event(
-        Payload, ff_withdrawal_session_codec, timestamped_change, fistful_wthd_session_thrift, 'TimestampedChange'
+        Payload,
+        fun(T) -> ff_withdrawal_session_codec:unmarshal(timestamped_change, T) end,
+        fistful_wthd_session_thrift,
+        'TimestampedChange'
     );
 unmarshal_event(Domain, Format, _Payload) ->
     erlang:error({unknown_event_format, Domain, Format}).
@@ -67,24 +105,22 @@ payload_to_binary(Payload) ->
 
 -spec marshal_thrift_event(
     timestamped_event(),
-    module(),
-    atom(),
+    fun((timestamped_event()) -> term()),
     atom(),
     atom()
 ) -> machinery_msgpack:t().
-marshal_thrift_event(Timestamped, Codec, Tag, ThriftModule, ThriftStruct) ->
-    ThriftChange = Codec:marshal(Tag, Timestamped),
+marshal_thrift_event(Timestamped, MarshalFun, ThriftModule, ThriftStruct) ->
+    ThriftChange = MarshalFun(Timestamped),
     Type = {struct, struct, {ThriftModule, ThriftStruct}},
     {bin, ff_proto_utils:serialize(Type, ThriftChange)}.
 
 -spec unmarshal_thrift_event(
     binary(),
-    module(),
-    atom(),
+    fun((term()) -> timestamped_event()),
     atom(),
     atom()
 ) -> timestamped_event().
-unmarshal_thrift_event(Payload, Codec, Tag, ThriftModule, ThriftStruct) ->
+unmarshal_thrift_event(Payload, UnmarshalFun, ThriftModule, ThriftStruct) ->
     Type = {struct, struct, {ThriftModule, ThriftStruct}},
     ThriftChange = ff_proto_utils:deserialize(Type, Payload),
-    Codec:unmarshal(Tag, ThriftChange).
+    UnmarshalFun(ThriftChange).
