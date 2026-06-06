@@ -231,7 +231,7 @@ namespace() ->
 init({Events, Ctx}, _Machine) ->
     #{
         events => Events,
-        action => prg_machine_action:instant(),
+        action => progressor_action:instant(),
         auxst => #{ctx => Ctx}
     }.
 

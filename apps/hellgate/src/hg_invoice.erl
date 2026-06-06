@@ -96,7 +96,7 @@
 
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
--type action() :: prg_machine_action:t().
+-type action() :: progressor_action:t().
 
 %% API
 
@@ -298,7 +298,7 @@ init(Invoice, _Machine) ->
     Changes = [?invoice_created(UnmarshalledInvoice)],
     #{
         events => [Changes],
-        action => set_invoice_timer(prg_machine_action:new(), #st{invoice = UnmarshalledInvoice}),
+        action => set_invoice_timer(progressor_action:new(), #st{invoice = UnmarshalledInvoice}),
         auxst => #{}
     }.
 
@@ -352,18 +352,18 @@ handle_signal(timeout, #st{activity = invoice} = St) ->
 construct_repair_action(CA) when CA /= undefined ->
     lists:foldl(
         fun merge_repair_action/2,
-        prg_machine_action:new(),
+        progressor_action:new(),
         [{timer, CA#repair_ComplexAction.timer}, {remove, CA#repair_ComplexAction.remove}]
     );
 construct_repair_action(undefined) ->
-    prg_machine_action:new().
+    progressor_action:new().
 
 merge_repair_action({timer, {set_timer, #repair_SetTimerAction{timer = Timer}}}, Action) ->
-    prg_machine_action:set_timer(Timer, Action);
+    progressor_action:set_timer(Timer, Action);
 merge_repair_action({timer, {unset_timer, #repair_UnsetTimerAction{}}}, Action) ->
-    prg_machine_action:unset_timer(Action);
+    progressor_action:unset_timer(Action);
 merge_repair_action({remove, #repair_RemoveAction{}}, Action) ->
-    prg_machine_action:mark_removal(Action);
+    progressor_action:mark_removal(Action);
 merge_repair_action({_, undefined}, Action) ->
     Action.
 
@@ -456,7 +456,7 @@ handle_call({{'Invoicing', 'Rescind'}, {_InvoiceID, Reason}}, St0) ->
     #{
         response => ok,
         changes => [?invoice_status_changed(?invoice_cancelled(hg_utils:format_reason(Reason)))],
-        action => prg_machine_action:unset_timer(),
+        action => progressor_action:unset_timer(),
         state => St
     };
 handle_call({{'Invoicing', 'RefundPayment'}, {_InvoiceID, PaymentID, Params}}, St0) ->
@@ -526,7 +526,7 @@ set_invoice_timer(Action, #st{invoice = Invoice} = St) ->
     set_invoice_timer(Invoice#domain_Invoice.status, Action, St).
 
 set_invoice_timer(?invoice_unpaid(), Action, #st{invoice = #domain_Invoice{due = Due}}) ->
-    prg_machine_action:set_deadline(Due, Action);
+    progressor_action:set_deadline(Due, Action);
 set_invoice_timer(_Status, Action, _St) ->
     Action.
 
@@ -1074,23 +1074,23 @@ changes_from_msgpack_data(Data) ->
 
 -type event_timestamp() :: calendar:datetime().
 
--spec action_to_prg(prg_machine_action:t() | undefined) -> action().
+-spec action_to_prg(progressor_action:t() | undefined) -> action().
 action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
-    Action0 = prg_machine_action:new(),
+    Action0 = progressor_action:new(),
     Action1 =
         case Timer of
             undefined ->
                 Action0;
             {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
-                prg_machine_action:set_timer(T, Action0);
+                progressor_action:set_timer(T, Action0);
             {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
-                prg_machine_action:unset_timer(Action0)
+                progressor_action:unset_timer(Action0)
         end,
     case Remove of
         undefined ->
             Action1;
         #mg_stateproc_RemoveAction{} ->
-            prg_machine_action:mark_removal(Action1)
+            progressor_action:mark_removal(Action1)
     end;
 action_to_prg(Action) ->
     Action.

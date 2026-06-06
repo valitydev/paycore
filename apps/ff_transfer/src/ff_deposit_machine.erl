@@ -34,7 +34,7 @@
 -type action() ::
     continue
     | sleep
-    | {setup_timer, prg_machine_action:timer()}
+    | {setup_timer, progressor_action:timer()}
     | undefined.
 
 -export_type([id/0]).
@@ -171,15 +171,15 @@ history_times(History) ->
         History
     ).
 
--spec map_action(action()) -> prg_machine_action:t() | undefined.
+-spec map_action(action()) -> progressor_action:t() | undefined.
 map_action(undefined) ->
     undefined;
 map_action(continue) ->
-    prg_machine_action:instant();
+    progressor_action:instant();
 map_action(sleep) ->
-    prg_machine_action:instant();
+    progressor_action:instant();
 map_action({setup_timer, Timer}) ->
-    prg_machine_action:set_timer(Timer).
+    progressor_action:set_timer(Timer).
 
 codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
     {DateTime, USec} = Timestamp;

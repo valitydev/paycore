@@ -33,7 +33,7 @@
 -type signal() :: timeout | {repair, args()}.
 -type result() :: #{
     events => [event_body()],
-    action => prg_machine_action:t(),
+    action => progressor_action:t(),
     auxst => term()
 }.
 
@@ -369,7 +369,7 @@ marshal_process_result(_Handler, _LastEventID, {error, Reason}) ->
 marshal_intent(Handler, LastEventID, #{events := Events, action := Action, auxst := AuxSt}) ->
     genlib_map:compact(#{
         events => marshal_new_events(Handler, LastEventID, Events),
-        action => prg_machine_action:to_progressor(Action),
+        action => Action,
         aux_state => marshal_aux_state(Handler, AuxSt)
     });
 marshal_intent(Handler, LastEventID, Result) ->

@@ -151,7 +151,7 @@
 -type is_negative() :: boolean().
 -type cash() :: ff_cash:cash().
 -type cash_range() :: ff_range:range(cash()).
--type action() :: prg_machine_action:t() | undefined.
+-type action() :: progressor_action:t() | undefined.
 -type ctx() :: ff_entity_context:context().
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
@@ -330,7 +330,7 @@ namespace() ->
 init({Events, Ctx}, _Machine) ->
     #{
         events => Events,
-        action => prg_machine_action:instant(),
+        action => progressor_action:instant(),
         auxst => #{ctx => Ctx}
     }.
 
@@ -682,15 +682,15 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action()) -> prg_machine_action:t() | undefined.
+-spec map_action(action()) -> progressor_action:t() | undefined.
 map_action(undefined) ->
     undefined;
 map_action(continue) ->
-    prg_machine_action:instant();
+    progressor_action:instant();
 map_action(sleep) ->
-    prg_machine_action:instant();
+    progressor_action:instant();
 map_action({setup_timer, Timer}) ->
-    prg_machine_action:set_timer(Timer).
+    progressor_action:set_timer(Timer).
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(undefined) ->

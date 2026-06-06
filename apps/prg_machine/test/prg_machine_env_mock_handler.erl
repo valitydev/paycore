@@ -10,16 +10,16 @@ namespace() ->
 
 -spec init(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
 init(_Args, _Machine) ->
-  #{events => [], action => prg_machine_action:new(), auxst => undefined}.
+  #{events => [], action => progressor_action:new(), auxst => undefined}.
 
 -spec process_signal(prg_machine:signal(), prg_machine:machine()) -> prg_machine:result().
 process_signal(_Signal, _Machine) ->
-    #{events => [], action => prg_machine_action:new(), auxst => undefined}.
+    #{events => [], action => progressor_action:new(), auxst => undefined}.
 
 -spec process_call(prg_machine:call(), prg_machine:machine()) -> {prg_machine:response(), prg_machine:result()}.
 process_call(_Call, _Machine) ->
-    {ok, #{events => [], action => prg_machine_action:new(), auxst => undefined}}.
+    {ok, #{events => [], action => progressor_action:new(), auxst => undefined}}.
 
 -spec process_repair(prg_machine:args(), prg_machine:machine()) -> prg_machine:result() | {error, term()}.
 process_repair(_Args, _Machine) ->
-    #{events => [], action => prg_machine_action:new(), auxst => undefined}.
+    #{events => [], action => progressor_action:new(), auxst => undefined}.

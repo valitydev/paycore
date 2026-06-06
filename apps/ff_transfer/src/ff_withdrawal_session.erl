@@ -121,8 +121,8 @@
 -type action() ::
     undefined
     | continue
-    | {setup_callback, ff_withdrawal_callback:tag(), prg_machine_action:timer()}
-    | {setup_timer, prg_machine_action:timer()}
+    | {setup_callback, ff_withdrawal_callback:tag(), progressor_action:timer()}
+    | {setup_timer, progressor_action:timer()}
     | retry
     | finish.
 
@@ -400,7 +400,7 @@ namespace() ->
 init(Events, _Machine) ->
     #{
         events => Events,
-        action => prg_machine_action:instant(),
+        action => progressor_action:instant(),
         auxst => #{ctx => ff_entity_context:new()}
     }.
 
@@ -489,20 +489,20 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action(), session_state()) -> prg_machine_action:t() | undefined.
+-spec map_action(action(), session_state()) -> progressor_action:t() | undefined.
 map_action(undefined, _Session) ->
     undefined;
 map_action(continue, _Session) ->
-    prg_machine_action:instant();
+    progressor_action:instant();
 map_action({setup_callback, Tag, Timer}, Session) ->
     ok = ff_machine_tag:create_binding(?NS, Tag, id(Session)),
-    prg_machine_action:set_timer(Timer);
+    progressor_action:set_timer(Timer);
 map_action({setup_timer, Timer}, _Session) ->
-    prg_machine_action:set_timer(Timer);
+    progressor_action:set_timer(Timer);
 map_action(finish, _Session) ->
-    prg_machine_action:unset_timer();
+    progressor_action:unset_timer();
 map_action(retry, _Session) ->
-    prg_machine_action:instant().
+    progressor_action:instant().
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(undefined) ->

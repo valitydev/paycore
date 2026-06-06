@@ -91,7 +91,7 @@
 -type target_status() :: term().
 -type final_cash_flow() :: ff_cash_flow:final_cash_flow().
 -type p_transfer() :: ff_postings_transfer:transfer().
--type action() :: prg_machine_action:t() | undefined.
+-type action() :: progressor_action:t() | undefined.
 -type process_result() :: {action(), [event()]}.
 -type legacy_event() :: any().
 -type external_id() :: id().
