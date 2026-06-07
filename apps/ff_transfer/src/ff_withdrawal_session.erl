@@ -442,11 +442,11 @@ process_repair(Scenario, Machine) ->
 
 -spec process_notification(term(), machine()) -> prg_result().
 process_notification(_Args, _Machine) ->
-    #{}.
+    #{events => [], action => progressor_action:instant()}.
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->
-    Timestamped = {ev, ff_time:now(), Body},
+    Timestamped = {ev, {prg_machine:timestamp(), 0}, Body},
     Encoded = ff_machine_codec:marshal_event(withdrawal_session, ?EVENT_FORMAT_VERSION, Timestamped),
     {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
 

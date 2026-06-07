@@ -9,8 +9,6 @@
         ff_core,
         progressor,
         prg_machine,
-        machinery,
-        machinery_extra,
         damsel,
         fistful,
         limiter_proto

@@ -1,12 +1,9 @@
 %%%
-%%% Msgpack manipulation employed by machinegun interfaces.
-%%% Extended in hellgate with pack/1 for thrift Value wire encoding.
+%%% Msgpack wire encoding for machine aux-state and legacy machinegun payloads.
 
--module(machinery_msgpack).
+-module(ff_msgpack).
 
 -include_lib("mg_proto/include/mg_proto_msgpack_thrift.hrl").
-
-%% API
 
 -export([wrap/1]).
 -export([unwrap/1]).
@@ -17,16 +14,12 @@
 
 -export_type([t/0]).
 
-%%
-
 -spec wrap
     (nil) -> t();
     (boolean()) -> t();
     (integer()) -> t();
     (float()) -> t();
-    %% string
     (binary()) -> t();
-    %% binary
     ({binary, binary()}) -> t();
     ([t()]) -> t();
     (#{t() => t()}) -> t().
@@ -39,7 +32,6 @@ wrap(V) when is_integer(V) ->
 wrap(V) when is_float(V) ->
     V;
 wrap(V) when is_binary(V) ->
-    % Assuming well-formed UTF-8 bytestring.
     {str, V};
 wrap({binary, V}) when is_binary(V) ->
     {bin, V};
@@ -53,9 +45,7 @@ wrap(V) when is_map(V) ->
     | boolean()
     | integer()
     | float()
-    %% string
     | binary()
-    %% binary
     | {binary, binary()}
     | [t()]
     | #{t() => t()}.
@@ -68,7 +58,6 @@ unwrap({i, V}) when is_integer(V) ->
 unwrap({flt, V}) when is_float(V) ->
     V;
 unwrap({str, V}) when is_binary(V) ->
-    % Assuming well-formed UTF-8 bytestring.
     V;
 unwrap({bin, V}) when is_binary(V) ->
     {binary, V};

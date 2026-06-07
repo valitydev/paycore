@@ -253,7 +253,7 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 |-----------------|--------|
 | `test/bender/sys.config`, `test/party-management/sys.config` | **намеренно** `machinery_prg_backend` — docker-sidecar сервисы bender / party-management (вне scope HG/FF) |
 | `apps/ff_cth/src/ct_payment_system.erl` | **очищено** — убран мёртвый `{machinery_backend, progressor}` |
-| `apps/machinery_extra/` | остаётся для `machinery_msgpack` в FF transfer и тестах |
+| `apps/machinery_extra/` | **удалён** — codec-слой в `ff_core` (`ff_msgpack`, `ff_machine_schema`) |
 | `rebar.config` damsel pin | ждёт `progressor_trace.thrift` в damsel — см. `docs/trace-api-thrift.md` |
 
 ### 5.3. Trace API
@@ -272,9 +272,9 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 - ~~`initial_model/2` badmap на не-map aux_state~~ — **исправлено** (этап 1)
 - ~~registry на пустом supervisor, `ets:lookup_element` badarg~~ — **исправлено** (`prg_machine_registry`, этап 3)
 - ~~stacktrace теряется в `process/3`~~ — **исправлено** (4-tuple + log metadata, этап 3)
-- `binary_to_term` в decode без `[safe]` в fallback path `prg_machine` — стоит проверить
-- `hg_invoice` vs FF: унификация через `apply_event/4` в runtime (вариант C); HG migration — goal `goal-hg-collapse.md`
-- L1: FF `marshal_event_body` оборачивает тело в фиктивный `{ev, {ts,0}, Body}` — косметика, не блокер
+- ~~`binary_to_term` без `[safe]`~~ — **закрыто**
+- `hg_invoice` двойной collapse — отложено (см. `prg-machine-remaining-debt.md` §5)
+- ~~L1: разные timestamp в `marshal_event_body`~~ — **закрыто** (единый `{prg_machine:timestamp(), 0}`)
 
 ### 5.6. Grep-инварианты (целевые после полного P5)
 

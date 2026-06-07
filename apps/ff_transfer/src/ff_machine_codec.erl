@@ -10,7 +10,7 @@
 -type format_version() :: pos_integer().
 -type timestamped_event() :: {ev, term(), term()}.
 
--spec marshal_event(domain(), format_version(), timestamped_event()) -> machinery_msgpack:t().
+-spec marshal_event(domain(), format_version(), timestamped_event()) -> ff_msgpack:t().
 marshal_event(deposit, 1, Timestamped) ->
     marshal_thrift_event(
         Timestamped,
@@ -90,17 +90,17 @@ unmarshal_event(Domain, Format, _Payload) ->
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->
-    payload_to_binary(machinery_mg_schema_generic:marshal(AuxSt)).
+    payload_to_binary(ff_machine_schema:marshal(AuxSt)).
 
 -spec unmarshal_aux_state(binary()) -> term().
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    machinery_mg_schema_generic:unmarshal({bin, Payload}).
+    ff_machine_schema:unmarshal({bin, Payload}).
 
--spec payload_to_binary(machinery_msgpack:t()) -> binary().
+-spec payload_to_binary(ff_msgpack:t()) -> binary().
 payload_to_binary({bin, Bin}) when is_binary(Bin) ->
     Bin;
 payload_to_binary(Payload) ->
-    {ok, Bin} = machinery_msgpack:pack(Payload),
+    {ok, Bin} = ff_msgpack:pack(Payload),
     Bin.
 
 -spec marshal_thrift_event(
@@ -108,7 +108,7 @@ payload_to_binary(Payload) ->
     fun((timestamped_event()) -> term()),
     atom(),
     atom()
-) -> machinery_msgpack:t().
+) -> ff_msgpack:t().
 marshal_thrift_event(Timestamped, MarshalFun, ThriftModule, ThriftStruct) ->
     ThriftChange = MarshalFun(Timestamped),
     Type = {struct, struct, {ThriftModule, ThriftStruct}},

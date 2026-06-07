@@ -5,7 +5,9 @@
     {applications, [
         kernel,
         stdlib,
-        genlib
+        genlib,
+        mg_proto,
+        thrift
     ]},
     {env, []},
     {modules, []},
