@@ -409,7 +409,7 @@ process_call(Call, Machine) ->
         {call_response(Response), to_prg_result(CallResult)}
     catch
         throw:Exception ->
-            {{exception, Exception}, #{}}
+            {{exception, Exception}, to_prg_result(#{})}
     end.
 
 -spec handle_call(call(), st()) -> call_result().

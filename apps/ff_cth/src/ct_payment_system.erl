@@ -83,7 +83,6 @@ start_processing_apps(Options) ->
         dmt_client,
         party_client,
         {fistful, [
-            {machinery_backend, progressor},
             {services, services(Options)}
         ]},
         ff_server,

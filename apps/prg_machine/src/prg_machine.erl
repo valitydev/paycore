@@ -6,7 +6,7 @@
 -include_lib("progressor/include/progressor.hrl").
 
 -define(TABLE, prg_machine_dispatch).
--define(PROCESSOR_EXCEPTION(Class, Reason, _Stacktrace), {exception, Class, Reason}).
+-define(PROCESSOR_EXCEPTION(Class, Reason, Stacktrace), {exception, Class, Reason, Stacktrace}).
 
 %% Types
 
@@ -121,8 +121,6 @@
 %% Registry (namespace -> handler module)
 
 -export([get_child_spec/1]).
--export([start_link/1]).
--export([init/1]).
 
 %% Event-sourcing helpers (replaces ff_machine)
 
@@ -147,6 +145,8 @@ start(NS, ID, Args) ->
         {error, <<"process already exists">>} ->
             {error, exists};
         {error, {exception, _, _} = Exception} ->
+            raise_exception(Exception);
+        {error, {exception, _, _, _} = Exception} ->
             raise_exception(Exception)
     end.
 
@@ -168,6 +168,8 @@ call(NS, ID, CallArgs, After, Limit, Direction) ->
         {error, <<"process is error">>} ->
             {error, failed};
         {error, {exception, _, _} = Exception} ->
+            raise_exception(Exception);
+        {error, {exception, _, _, _} = Exception} ->
             raise_exception(Exception);
         {error, _} = Error ->
             Error
@@ -195,20 +197,28 @@ repair(NS, ID, Args) ->
             {error, failed};
         {error, {exception, _, _} = Exception} ->
             raise_exception(Exception);
+        {error, {exception, _, _, _} = Exception} ->
+            raise_exception(Exception);
         {error, Reason} ->
             {error, {repair, {failed, Reason}}}
     end.
 
--spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, notfound}.
+-spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, notfound | {unknown_namespace, namespace()}}.
 get(NS, ID, Range) ->
     Req = request(NS, ID, undefined, Range),
     case progressor:get(Req) of
         {ok, Process} ->
-            Handler = get_handler_module(NS),
-            {ok, unmarshal_machine(Handler, NS, Process)};
+            case get_handler_module(NS) of
+                {ok, Handler} ->
+                    {ok, unmarshal_machine(Handler, NS, Process)};
+                {error, _} = Error ->
+                    Error
+            end;
         {error, <<"process not found">>} ->
             {error, notfound};
         {error, {exception, _, _} = Exception} ->
+            raise_exception(Exception);
+        {error, {exception, _, _, _} = Exception} ->
             raise_exception(Exception)
     end.
 
@@ -263,18 +273,27 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
     Enter = resolve_env_enter(Opts),
     Leave = resolve_env_leave(Opts),
     try
-        {WoodyCtx, OtelCtx} = decode_rpc_context(BinCtx),
-        ok = woody_rpc_helper:attach_otel_context(OtelCtx),
-        ok = run_env_enter(Enter, WoodyCtx),
-        Handler = get_handler_module(NS),
-        LastEventID = maps:get(last_event_id, Process),
-        Machine = unmarshal_machine(Handler, NS, Process),
-        Result = dispatch(Handler, CallType, BinArgs, Machine),
-        marshal_process_result(Handler, LastEventID, Result)
+        case get_handler_module(NS) of
+            {error, _} = Error ->
+                Error;
+            {ok, Handler} ->
+                {WoodyCtx, OtelCtx} = decode_rpc_context(BinCtx),
+                ok = woody_rpc_helper:attach_otel_context(OtelCtx),
+                ok = run_env_enter(Enter, WoodyCtx),
+                LastEventID = maps:get(last_event_id, Process),
+                Machine = unmarshal_machine(Handler, NS, Process),
+                Result = dispatch(Handler, CallType, BinArgs, Machine),
+                marshal_process_result(Handler, LastEventID, Result)
+        end
     catch
         Class:Reason:Stacktrace ->
-            logger:error("prg_machine process failed: ~p:~p~n~p", [Class, Reason, Stacktrace]),
-            {error, ?PROCESSOR_EXCEPTION(Class, Reason, Stacktrace)}
+            Exception = ?PROCESSOR_EXCEPTION(Class, Reason, Stacktrace),
+            logger:error(
+                "prg_machine process failed: ~p:~p",
+                [Class, Reason],
+                #{stacktrace => Stacktrace, exception => Exception}
+            ),
+            {error, Exception}
     after
         Leave()
     end.
@@ -283,21 +302,7 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
 
 -spec get_child_spec([module()]) -> supervisor:child_spec().
 get_child_spec(Handlers) ->
-    #{
-        id => prg_machine_dispatch,
-        start => {?MODULE, start_link, [Handlers]},
-        type => supervisor
-    }.
-
--spec start_link([module()]) -> {ok, pid()}.
-start_link(Handlers) ->
-    supervisor:start_link(?MODULE, Handlers).
-
--spec init([module()]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
-init(Handlers) ->
-    _ = ets:new(?TABLE, [named_table, {read_concurrency, true}]),
-    true = ets:insert_new(?TABLE, [{H:namespace(), H} || H <- Handlers]),
-    {ok, {#{}, []}}.
+    prg_machine_registry:get_child_spec(Handlers).
 
 %% Event-sourcing (replaces ff_machine collapse/emit)
 
@@ -368,14 +373,17 @@ marshal_process_result(Handler, LastEventID, Result) when is_map(Result) ->
 marshal_process_result(_Handler, _LastEventID, {error, Reason}) ->
     {error, encode_term(Reason)}.
 
-marshal_intent(Handler, LastEventID, #{events := Events, action := Action, auxst := AuxSt}) ->
-    genlib_map:compact(#{
-        events => marshal_new_events(Handler, LastEventID, Events),
-        action => Action,
-        aux_state => marshal_aux_state(Handler, AuxSt)
-    });
-marshal_intent(Handler, LastEventID, Result) ->
-    marshal_intent(Handler, LastEventID, maps:merge(#{events => [], auxst => undefined}, Result)).
+marshal_intent(Handler, LastEventID, Result) when is_map(Result) ->
+    Base = genlib_map:compact(#{
+        events => marshal_new_events(Handler, LastEventID, maps:get(events, Result, [])),
+        action => maps:get(action, Result, progressor_action:new())
+    }),
+    case maps:is_key(auxst, Result) of
+        true ->
+            Base#{aux_state => marshal_aux_state(Handler, maps:get(auxst, Result))};
+        false ->
+            Base
+    end.
 
 %% Internals — progressor <-> machine
 
@@ -477,11 +485,13 @@ dispatch_apply_event(Handler, EventID, Ts, Body, Model) ->
             end
     end.
 
-initial_model(_Handler, AuxState) ->
-    maps:get(model, AuxState, undefined).
+initial_model(_Handler, AuxState) when is_map(AuxState) ->
+    maps:get(model, AuxState, undefined);
+initial_model(_Handler, _AuxState) ->
+    undefined.
 
 get_handler_module(NS) ->
-    ets:lookup_element(?TABLE, NS, 2).
+    prg_machine_registry:lookup(NS).
 
 %% RPC / terms
 
@@ -565,7 +575,9 @@ range_from_process(#{range := Range = #{}}) ->
 range_from_process(_) ->
     #{direction => forward}.
 
--spec raise_exception({exception, atom(), term()}) -> no_return().
+-spec raise_exception({exception, atom(), term()} | {exception, atom(), term(), list()}) -> no_return().
+raise_exception({exception, Class, Reason, Stacktrace}) when is_list(Stacktrace) ->
+    erlang:raise(Class, Reason, Stacktrace);
 raise_exception({exception, Class, Reason}) ->
     erlang:raise(Class, Reason, []).
 
@@ -591,6 +603,28 @@ noop_when_hooks_absent_test_() ->
 explicit_fun_overrides_context_binding_test_() ->
     {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
         ?_test(explicit_fun_overrides_context_binding())
+    ]}.
+
+-spec aux_state_runtime_test_() -> _.
+aux_state_runtime_test_() ->
+    {setup, fun setup_aux_state_test/0, fun cleanup_aux_state_test/1, [
+        ?_test(marshal_intent_omits_aux_state_without_auxst()),
+        ?_test(collapse_survives_non_map_aux_state()),
+        ?_test(business_exception_then_signal_does_not_corrupt_aux_state()),
+        ?_test(notify_without_handler_omits_aux_state())
+    ]}.
+
+-spec registry_runtime_test_() -> _.
+registry_runtime_test_() ->
+    {setup, fun setup_registry_test/0, fun cleanup_registry_test/1, [
+        ?_test(lookup_unknown_namespace_returns_error()),
+        ?_test(process_unknown_namespace_returns_error())
+    ]}.
+
+-spec process_stacktrace_test_() -> _.
+process_stacktrace_test_() ->
+    {setup, fun setup_aux_state_test/0, fun cleanup_aux_state_test/1, [
+        ?_test(process_crash_includes_stacktrace())
     ]}.
 
 -spec noop_when_hooks_absent() -> _.
@@ -649,14 +683,9 @@ ensure_woody_available() ->
     _ = woody_context:new(),
     ok.
 
--spec ensure_env_hook_dispatch_table() -> atom().
+-spec ensure_env_hook_dispatch_table() -> ok.
 ensure_env_hook_dispatch_table() ->
-    case ets:info(?TABLE) of
-        undefined ->
-            ets:new(?TABLE, [named_table, {read_concurrency, true}]);
-        _ ->
-            ?TABLE
-    end.
+    prg_machine_registry:ensure_table().
 
 -spec run_env_hook_process(process_options()) -> _.
 run_env_hook_process(Opts) ->
@@ -671,5 +700,128 @@ run_env_hook_process(Opts, BinCtx) ->
         aux_state => undefined
     },
     process({init, term_to_binary(#{}), Process}, Opts, BinCtx).
+
+-define(AUX_STATE_TEST_NS, aux_state_test_ns).
+
+-spec setup_aux_state_test() -> ok.
+setup_aux_state_test() ->
+    _ = application:load(prg_machine),
+    {ok, _} = application:ensure_all_started(progressor),
+    _ = ensure_env_hook_dispatch_table(),
+    true = ets:insert(?TABLE, {?AUX_STATE_TEST_NS, prg_machine_aux_state_test_handler}),
+    ok.
+
+-spec cleanup_aux_state_test(_) -> ok.
+cleanup_aux_state_test(_) ->
+    _ = ets:delete(?TABLE, ?AUX_STATE_TEST_NS),
+    ok.
+
+-spec marshal_intent_omits_aux_state_without_auxst() -> _.
+marshal_intent_omits_aux_state_without_auxst() ->
+    Intent = marshal_intent(prg_machine_aux_state_test_handler, 0, #{}),
+    ?assertNot(maps:is_key(aux_state, Intent)),
+    ?assertEqual([], maps:get(events, Intent)).
+
+-spec collapse_survives_non_map_aux_state() -> _.
+collapse_survives_non_map_aux_state() ->
+    Machine = #{
+        namespace => ?AUX_STATE_TEST_NS,
+        id => <<"collapse-test">>,
+        history => [],
+        aux_state => {corrupt, undefined}
+    },
+    ?assertEqual(undefined, collapse(prg_machine_aux_state_test_handler, Machine)).
+
+-spec business_exception_then_signal_does_not_corrupt_aux_state() -> _.
+business_exception_then_signal_does_not_corrupt_aux_state() ->
+    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    Process0 = #{
+        process_id => <<"invoice-exception-test">>,
+        last_event_id => 0,
+        history => [],
+        aux_state => undefined
+    },
+    {ok, InitIntent} = process({init, term_to_binary(#{}), Process0}, Opts, <<>>),
+    ?assert(maps:is_key(aux_state, InitIntent)),
+    AuxAfterInit = maps:get(aux_state, InitIntent),
+    Process1 = Process0#{
+        aux_state => AuxAfterInit,
+        last_event_id => 0
+    },
+    {ok, ExceptionIntent} = process(
+        {call, term_to_binary(business_exception), Process1},
+        Opts,
+        <<>>
+    ),
+    ?assertNot(maps:is_key(aux_state, ExceptionIntent)),
+    Process2 = Process1#{aux_state => AuxAfterInit},
+    {ok, TimeoutIntent} = process({timeout, <<>>, Process2}, Opts, <<>>),
+    ?assertNot(maps:is_key(aux_state, TimeoutIntent)),
+    {ok, RecheckIntent} = process(
+        {call, term_to_binary(recheck), Process2},
+        Opts,
+        <<>>
+    ),
+    ?assert(maps:is_key(aux_state, RecheckIntent)),
+    Rechecked = binary_to_term(maps:get(aux_state, RecheckIntent), [safe]),
+    ?assertEqual(#{model => initialized}, Rechecked).
+
+-spec notify_without_handler_omits_aux_state() -> _.
+notify_without_handler_omits_aux_state() ->
+    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    AuxBin = prg_machine_aux_state_test_handler:marshal_aux_state(#{model => initialized}),
+    Process = #{
+        process_id => <<"notify-test">>,
+        last_event_id => 0,
+        history => [],
+        aux_state => AuxBin
+    },
+    {ok, NotifyIntent} = process({notify, term_to_binary(#{payload => test}), Process}, Opts, <<>>),
+    ?assertNot(maps:is_key(aux_state, NotifyIntent)).
+
+-spec setup_registry_test() -> ok.
+setup_registry_test() ->
+    ok = prg_machine_registry:ensure_table(),
+    ok.
+
+-spec cleanup_registry_test(_) -> ok.
+cleanup_registry_test(_) ->
+    ok.
+
+-spec lookup_unknown_namespace_returns_error() -> _.
+lookup_unknown_namespace_returns_error() ->
+    ?assertEqual(
+        {error, {unknown_namespace, unknown_ns}},
+        prg_machine_registry:lookup(unknown_ns)
+    ).
+
+-spec process_unknown_namespace_returns_error() -> _.
+process_unknown_namespace_returns_error() ->
+    Opts = #{ns => unknown_ns},
+    Process = #{
+        process_id => <<"unknown-ns-test">>,
+        last_event_id => 0,
+        history => [],
+        aux_state => undefined
+    },
+    ?assertEqual(
+        {error, {unknown_namespace, unknown_ns}},
+        process({init, term_to_binary(#{}), Process}, Opts, <<>>)
+    ).
+
+-spec process_crash_includes_stacktrace() -> _.
+process_crash_includes_stacktrace() ->
+    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    Process = #{
+        process_id => <<"crash-test">>,
+        last_event_id => 0,
+        history => [],
+        aux_state => undefined
+    },
+    {ok, _} = process({init, term_to_binary(#{}), Process}, Opts, <<>>),
+    {error, {exception, error, deliberate_crash, Stacktrace}} =
+        process({call, term_to_binary(crash), Process}, Opts, <<>>),
+    ?assert(is_list(Stacktrace)),
+    ?assert(lists:keymember(prg_machine_aux_state_test_handler, 1, Stacktrace)).
 
 -endif.

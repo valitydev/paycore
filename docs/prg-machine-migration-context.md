@@ -1,6 +1,6 @@
 # Миграция на `prg_machine`: контекст для следующих доработок
 
-Документ фиксирует **цель**, **целевую архитектуру**, **фактическое состояние** ветки `epic/monorepo` (hellgate, ~59 файлов, **не закоммичено** на момент написания) и **открытые хвосты**.
+Документ фиксирует **цель**, **целевую архитектуру**, **фактическое состояние** ветки `add_prg_layer` (hellgate) и **открытые хвосты**. Merge target: `epic/monorepo`.
 
 Оркестрация Ralph: `/Users/artemfedorenko/Documents/paymentsols/ralph-2` (goal в `.ralph/goal.md`, задачи 1–36 verified, **37 — CT — не завершена**).
 
@@ -49,10 +49,11 @@ woody handler (hg_*_handler, ff_*_handler)
 
 | Модуль | Роль |
 |--------|------|
-| `prg_machine` | behaviour, client API, `process/3`, registry (ETS), `collapse`/`emit_events` |
+| `prg_machine` | behaviour, client API, `process/3`, `collapse`/`emit_events` |
+| `prg_machine_registry` | gen_server — владелец ETS `prg_machine_dispatch`, `lookup/1` → `{unknown_namespace, NS}` |
 | `prg_machine_action` | таймеры / remove → формат progressor |
 
-**Registry:** при старте `prg_machine:get_child_spec([Module, …])` в ETS `prg_machine_dispatch` кладётся `{Namespace, HandlerModule}` по `Handler:namespace/0`. Паттерн перенесён из старого `hg_machine` (без woody MG routes).
+**Registry:** `prg_machine:get_child_spec([Module, …])` поднимает `prg_machine_registry`; при старте в ETS кладётся `{Namespace, HandlerModule}` по `Handler:namespace/0`. При рестарте реестра таблица пересоздаётся из того же списка handlers.
 
 **Client API** (`start`, `call`, `get`, `repair`, `notify`, `remove`, `trace`) — обёртки над `progressor:*` с encode/decode term и woody/otel context.
 
@@ -61,8 +62,10 @@ woody handler (hg_*_handler, ff_*_handler)
 1. `env_enter(WoodyCtx)` — поднять `operation_context` (HG или FF binding)
 2. `unmarshal_machine` — history + aux_state из storage
 3. `dispatch` → `Handler:init | process_call | process_signal | process_repair | process_notification`
-4. `marshal_process_result` — events, action, aux_state обратно в progressor
+4. `marshal_process_result` — events, action, aux_state (только при явном `auxst` от домена) обратно в progressor
 5. `env_leave()` в `after`
+
+При необработанном исключении в домене: `{error, {exception, Class, Reason, Stacktrace}}` + structured log (`stacktrace`, `exception` в metadata).
 
 **Контекст RPC:** `application:set_env(prg_machine, woody_context_loader, Loader)` в `hellgate:start/2` и `ff_server:start/2` (fun или `{M,F}`), fallback на `woody_context:new()`.
 
@@ -93,7 +96,7 @@ woody handler (hg_*_handler, ff_*_handler)
 |---------|------------|
 | `collapse/2` | fold по history: `apply_event/4` (EventID, Ts, Body, Model) если экспортирован, иначе `apply_event/2` (FF) |
 | `emit_event/1`, `emit_events/1` | обёртка с timestamp для новых событий |
-| `initial_model/2` | старт fold: `maps:get(model, AuxState, undefined)` — на практике почти всегда `undefined` |
+| `initial_model/2` | старт fold: `maps:get(model, AuxState, undefined)` при `is_map(AuxState)`, иначе `undefined` |
 
 **FF:** домены вызывают `prg_machine:collapse(Mod, Machine)` в `*_machine` и внутри домена.
 
@@ -183,7 +186,7 @@ processor => #{
 - FF домены: `-behaviour(prg_machine)` (`ff_deposit`, `ff_source`, `ff_destination`, `ff_withdrawal`, `ff_withdrawal_session`)
 - HG: `hg_invoice`, `hg_invoice_template` — behaviour + `prg_machine` client
 - `ff_repair` — на `prg_machine:collapse` / `emit_events`
-- `ff_machine_handler` — trace через `prg_machine:trace/2` (JSON HTTP)
+- `ff_machine_handler` — trace через `progressor:trace/1` (JSON HTTP; Thrift — отдельный goal, `docs/trace-api-thrift.md`)
 - CT helper: `hg_ct_helper.erl` — progressor processor `client => prg_machine`
 
 ### 3.3. Ralph verification
@@ -191,7 +194,8 @@ processor => #{
 - Задачи **1–34, 36** — verified
 - Задача **37** (полный CT) — **не завершена** (прерывание ~37 мин, resource_exhausted)
 - Integration gate: `rebar3 compile` OK, CT deferred
-- Ветка: `epic/monorepo`, diff **+1684 / −3224**, commit/PR нет
+- Ветка: `add_prg_layer` → merge в `epic/monorepo`; PR ещё не открыт
+- Runtime fixes (этапы 1, 3 review-plan): aux_state, registry, stacktrace — **в коде**
 
 ---
 
@@ -228,7 +232,7 @@ sequenceDiagram
 | # | Хвост | Действие |
 |---|-------|----------|
 | 1 | **CT не прогонялись** | Запустить suites вручную (docker: postgres, party, dmt) |
-| 2 | **Нет commit/PR** | Code review + коммит на `epic/monorepo` |
+| 2 | **Нет PR** | PR `add_prg_layer → epic/monorepo` после зелёного CT |
 
 **CT suites (минимум):**
 
@@ -245,15 +249,16 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 
 ### 5.2. Legacy machinery (вне prod NS, но в репо)
 
-| Модуль / config | Проблема |
-|-----------------|----------|
-| `test/bender/sys.config`, `test/party-management/sys.config` | `client => machinery_prg_backend` |
-| `apps/ff_cth/src/ct_payment_system.erl` | мёртвый `{machinery_backend, progressor}` |
+| Модуль / config | Статус |
+|-----------------|--------|
+| `test/bender/sys.config`, `test/party-management/sys.config` | **намеренно** `machinery_prg_backend` — docker-sidecar сервисы bender / party-management (вне scope HG/FF) |
+| `apps/ff_cth/src/ct_payment_system.erl` | **очищено** — убран мёртвый `{machinery_backend, progressor}` |
 | `apps/machinery_extra/` | остаётся для `machinery_msgpack` в FF transfer и тестах |
+| `rebar.config` damsel pin | ждёт `progressor_trace.thrift` в damsel — см. `docs/trace-api-thrift.md` |
 
 ### 5.3. Trace API
 
-- Сейчас: FF internal HTTP JSON (`ff_machine_handler` → `prg_machine:trace/2`)
+- Сейчас: FF internal HTTP JSON (`ff_machine_handler` → `progressor:trace/1`)
 - Цель (отдельно): Thrift по `progressor_trace.thrift`, см. `docs/trace-api-thrift.md`
 - В git status были черновики `hg_progressor_trace*` — **не** в финальном дереве (app `hg_progressor` удалён)
 
@@ -263,9 +268,13 @@ rebar3 ct --suite apps/hellgate/test/hg_direct_recurrent_tests_SUITE
 
 ### 5.5. Технический долг в runtime
 
-- `initial_model/2` — `_Handler` не используется; `model` в aux на практике не пишется
+- ~~`marshal_intent` портит aux_state при отсутствии `auxst`~~ — **исправлено** (этап 1)
+- ~~`initial_model/2` badmap на не-map aux_state~~ — **исправлено** (этап 1)
+- ~~registry на пустом supervisor, `ets:lookup_element` badarg~~ — **исправлено** (`prg_machine_registry`, этап 3)
+- ~~stacktrace теряется в `process/3`~~ — **исправлено** (4-tuple + log metadata, этап 3)
 - `binary_to_term` в decode без `[safe]` в fallback path `prg_machine` — стоит проверить
 - `hg_invoice` vs FF: унификация через `apply_event/4` в runtime (вариант C); HG migration — goal `goal-hg-collapse.md`
+- L1: FF `marshal_event_body` оборачивает тело в фиктивный `{ev, {ts,0}, Body}` — косметика, не блокер
 
 ### 5.6. Grep-инварианты (целевые после полного P5)
 
@@ -296,6 +305,8 @@ rg "client => machinery_prg_backend" config/sys.config                     # 0
 | Путь | Зачем смотреть |
 |------|----------------|
 | `apps/prg_machine/src/prg_machine.erl` | behaviour, process/3, collapse |
+| `apps/prg_machine/src/prg_machine_registry.erl` | ETS registry owner |
+| `docs/prg-machine-review-plan.md` | поэтапный план ревью и доработок |
 | `apps/prg_machine/src/prg_machine_action.erl` | таймеры |
 | `config/sys.config` | все prod NS |
 | `apps/hellgate/src/hellgate.erl` | HG registry |
@@ -315,4 +326,4 @@ rg "client => machinery_prg_backend" config/sys.config                     # 0
 - **Open:** task 37 — full CT; review round 1 не закрыт (`review_phase_completed: false`)
 - **Устаревший артефакт:** `.ralph/summary.md` в ralph-2 — обновлён ссылкой на этот документ
 
-*Дата отчёта: 2026-06-04*
+*Дата отчёта: 2026-06-07*

@@ -36,9 +36,11 @@
 |------|----------------|
 | HTTP | Cowboy (не Woody): `GET /traces/internal/{entity}/{process_id}` |
 | Handler | `apps/ff_server/src/ff_machine_handler.erl` |
-| Домен | `ff_machine:trace/2` → `machinery:trace/3` → `machinery_prg_backend:trace/3` |
-| Декодирование | `ff_*_machinery_schema` + codec (`ff_deposit_codec`, …) |
-| Ответ | `json:encode/1` после `ff_machine:json_compatible_value/1` |
+| Домен | `ff_machine_handler` → `progressor:trace/1` (сырой trace из storage) |
+| Декодирование | codec доменов (`ff_deposit_codec`, …) в handler |
+| Ответ | `json:encode/1` (временный формат до Thrift) |
+
+**Зависимость:** bump тега `damsel` в `rebar.config` после релиза `progressor_trace.thrift` в damsel (см. комментарий у `{damsel, …}`).
 
 Маршруты (`ff_machine_handler:get_routes/0`):
 
