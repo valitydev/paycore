@@ -268,10 +268,11 @@ process_payment(?processed(), <<"sleeping_with_user_interaction">>, PaymentInfo,
     Key = {get_invoice_id(PaymentInfo), get_payment_id(PaymentInfo)},
     TrxID = hg_utils:construct_complex_id([get_payment_id(PaymentInfo), get_ctx_opts_override(CtxOpts)]),
     Trx = mk_trx(TrxID, PaymentInfo),
+    MaxPending = offsite_preauth_max_pending_polls(get_payment_info_scenario(PaymentInfo)),
     case get_transaction_state(Key) of
         processed ->
             finish(success(PaymentInfo), Trx);
-        {pending, Count} when Count > 2 ->
+        {pending, Count} when Count > MaxPending ->
             finish(failure(authorization_failed), undefined);
         {pending, Count} ->
             set_transaction_state(Key, {pending, Count + 1}),
@@ -861,6 +862,11 @@ set_transaction_state(Key, Value) ->
 
 get_transaction_state(Key) ->
     hg_kv_store:get(Key).
+
+offsite_preauth_max_pending_polls(preauth_3ds_offsite) ->
+    5;
+offsite_preauth_max_pending_polls(_) ->
+    2.
 
 maybe_sleep(#{<<"sleep_ms">> := TimeMs}) when is_binary(TimeMs) ->
     timer:sleep(binary_to_integer(TimeMs));

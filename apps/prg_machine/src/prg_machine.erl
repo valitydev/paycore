@@ -6,7 +6,8 @@
 -include_lib("progressor/include/progressor.hrl").
 
 -define(TABLE, prg_machine_dispatch).
--define(PROCESSOR_EXCEPTION(Class, Reason, Stacktrace), {exception, Class, Reason, Stacktrace}).
+%% progressor is_retryable/5 and machinery_prg_backend expect a 3-tuple; stacktrace stays in logs only.
+-define(PROCESSOR_EXCEPTION(Class, Reason, _Stacktrace), {exception, Class, Reason}).
 
 %% Types
 
@@ -621,10 +622,10 @@ registry_runtime_test_() ->
         ?_test(process_unknown_namespace_returns_error())
     ]}.
 
--spec process_stacktrace_test_() -> _.
-process_stacktrace_test_() ->
+-spec process_exception_test_() -> _.
+process_exception_test_() ->
     {setup, fun setup_aux_state_test/0, fun cleanup_aux_state_test/1, [
-        ?_test(process_crash_includes_stacktrace())
+        ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
 -spec noop_when_hooks_absent() -> _.
@@ -809,8 +810,8 @@ process_unknown_namespace_returns_error() ->
         process({init, term_to_binary(#{}), Process}, Opts, <<>>)
     ).
 
--spec process_crash_includes_stacktrace() -> _.
-process_crash_includes_stacktrace() ->
+-spec process_crash_conforms_progressor_exception() -> _.
+process_crash_conforms_progressor_exception() ->
     Opts = #{ns => ?AUX_STATE_TEST_NS},
     Process = #{
         process_id => <<"crash-test">>,
@@ -819,9 +820,9 @@ process_crash_includes_stacktrace() ->
         aux_state => undefined
     },
     {ok, _} = process({init, term_to_binary(#{}), Process}, Opts, <<>>),
-    {error, {exception, error, deliberate_crash, Stacktrace}} =
-        process({call, term_to_binary(crash), Process}, Opts, <<>>),
-    ?assert(is_list(Stacktrace)),
-    ?assert(lists:keymember(prg_machine_aux_state_test_handler, 1, Stacktrace)).
+    ?assertEqual(
+        {error, {exception, error, deliberate_crash}},
+        process({call, term_to_binary(crash), Process}, Opts, <<>>)
+    ).
 
 -endif.
