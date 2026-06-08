@@ -398,6 +398,14 @@ handle_expiration(St) ->
     response => ok | term(),
     state => st()
 }.
+%% Result of handle_call / handle_signal / handle_repair before marshaling to progressor.
+-type handler_result() :: #{
+    changes => [invoice_change()],
+    action => action(),
+    response => ok | term(),
+    state => st(),
+    validate => boolean()
+}.
 
 -spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
 process_call(Call, Machine) ->
@@ -409,7 +417,7 @@ process_call(Call, Machine) ->
         {call_response(Response), to_prg_result(CallResult)}
     catch
         throw:Exception ->
-            {{exception, Exception}, to_prg_result(#{})}
+            {{exception, Exception}, #{}}
     end.
 
 -spec handle_call(call(), st()) -> call_result().
@@ -697,24 +705,26 @@ wrap_payment_impact(PaymentID, {Response, {Changes, Action}}, St, OccurredAt) ->
         state => St
     }.
 
--spec to_prg_result(map()) -> prg_result().
+-spec to_prg_result(handler_result()) -> prg_result().
 to_prg_result(Result) ->
     _ = validate_changes(Result),
     to_prg_result_(Result).
 
-to_prg_result_(#{changes := Changes = [_ | _]} = Result) ->
-    genlib_map:compact(#{
-        events => [Changes],
-        action => maps:get(action, Result, undefined),
-        auxst => maps:get(auxst, Result, #{})
-    });
-to_prg_result_(#{action := Action} = Result) ->
-    genlib_map:compact(#{
-        action => Action,
-        auxst => maps:get(auxst, Result, #{})
-    });
-to_prg_result_(#{}) ->
-    #{auxst => #{}}.
+%% No `auxst` here: invoice sets it only in `init/2`; call/signal/repair must not touch aux_state (M1).
+to_prg_result_(Result) ->
+    Base =
+        case maps:get(changes, Result, []) of
+            [_ | _] = Changes ->
+                #{events => [Changes]};
+            _ ->
+                #{}
+        end,
+    case maps:is_key(action, Result) of
+        true ->
+            Base#{action => maps:get(action, Result)};
+        false ->
+            Base
+    end.
 
 -spec call_response(ok | term()) -> prg_machine:response().
 call_response(ok) ->

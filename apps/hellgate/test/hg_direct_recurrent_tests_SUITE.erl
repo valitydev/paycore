@@ -164,7 +164,7 @@ init_per_suite(C) ->
 
 -spec end_per_suite(config()) -> config().
 end_per_suite(C) ->
-    _ = hg_domain:cleanup_hellgate(),
+    _ = hg_domain:cleanup(),
     _ = application:stop(progressor),
     _ = hg_ct_helper:cleanup_progressor_namespaces(),
     [application:stop(App) || App <- cfg(apps, C)].
