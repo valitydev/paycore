@@ -5625,7 +5625,7 @@ payment_with_offsite_preauth_success(C) ->
 payment_with_offsite_preauth_failed(C) ->
     Client = cfg(client, C),
     InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(3), 42000, C),
-    {PaymentTool, Session} = hg_dummy_provider:make_payment_tool(preauth_3ds_offsite, ?pmt_sys(<<"jcb-ref">>)),
+    {PaymentTool, Session} = hg_dummy_provider:make_payment_tool(preauth_3ds_offsite_fail, ?pmt_sys(<<"jcb-ref">>)),
     PaymentParams = make_payment_params(PaymentTool, Session, instant),
     PaymentID = start_payment(InvoiceID, PaymentParams, Client),
     _UserInteraction = await_payment_process_interaction(InvoiceID, PaymentID, Client),
