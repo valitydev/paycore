@@ -149,6 +149,7 @@ start_optional_apps(_) ->
 
 setup_dominant(Config0, Options) ->
     Config1 = setup_dominant_internal(Config0, Options),
+    _ = ct_domain_config:cleanup(),
     Config2 = ct_limiter:init_per_suite(Config1),
     DomainConfig = domain_config(Config2, Options),
     _ = ct_domain_config:upsert(DomainConfig),

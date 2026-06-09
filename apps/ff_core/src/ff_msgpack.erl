@@ -9,6 +9,7 @@
 -export([unwrap/1]).
 -export([nil/0]).
 -export([pack/1]).
+-export([unpack/1]).
 
 -type t() :: mg_proto_msgpack_thrift:'Value'().
 
@@ -72,8 +73,16 @@ nil() ->
 
 -spec pack(t()) -> {ok, binary()}.
 pack(Value) ->
-    Type = {struct, union, {mg_proto_msgpack_thrift, 'Value'}},
+    Type = value_type(),
     {ok, serialize(Type, Value)}.
+
+-spec unpack(binary()) -> {ok, t()}.
+unpack(Bin) when is_binary(Bin) ->
+    Type = value_type(),
+    {ok, deserialize(Type, Bin)}.
+
+value_type() ->
+    {struct, union, {mg_proto_msgpack_thrift, 'Value'}}.
 
 serialize(Type, Data) ->
     {ok, Trans} = thrift_membuffer_transport:new(),
@@ -81,6 +90,16 @@ serialize(Type, Data) ->
     case thrift_protocol:write(Proto, {Type, Data}) of
         {NewProto, ok} ->
             {_, {ok, Result}} = thrift_protocol:close_transport(NewProto),
+            Result;
+        {_NewProto, {error, Reason}} ->
+            erlang:error({thrift, {protocol, Reason}})
+    end.
+
+deserialize(Type, Data) ->
+    {ok, Trans} = thrift_membuffer_transport:new(Data),
+    {ok, Proto} = thrift_binary_protocol:new(Trans, [{strict_read, true}, {strict_write, true}]),
+    case thrift_protocol:read(Proto, Type) of
+        {_NewProto, {ok, Result}} ->
             Result;
         {_NewProto, {error, Reason}} ->
             erlang:error({thrift, {protocol, Reason}})

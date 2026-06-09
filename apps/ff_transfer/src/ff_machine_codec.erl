@@ -5,6 +5,7 @@
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
 -export([payload_to_binary/1]).
+-export([binary_to_payload/1]).
 
 -type domain() :: deposit | source | destination | withdrawal | withdrawal_session.
 -type format_version() :: pos_integer().
@@ -93,8 +94,10 @@ marshal_aux_state(AuxSt) ->
     payload_to_binary(ff_machine_schema:marshal(AuxSt)).
 
 -spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(<<>>) ->
+    #{};
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    ff_machine_schema:unmarshal({bin, Payload}).
+    ff_machine_schema:unmarshal(binary_to_payload(Payload)).
 
 -spec payload_to_binary(ff_msgpack:t()) -> binary().
 payload_to_binary({bin, Bin}) when is_binary(Bin) ->
@@ -102,6 +105,11 @@ payload_to_binary({bin, Bin}) when is_binary(Bin) ->
 payload_to_binary(Payload) ->
     {ok, Bin} = ff_msgpack:pack(Payload),
     Bin.
+
+-spec binary_to_payload(binary()) -> ff_msgpack:t().
+binary_to_payload(Bin) when is_binary(Bin) ->
+    {ok, Payload} = ff_msgpack:unpack(Bin),
+    Payload.
 
 -spec marshal_thrift_event(
     timestamped_event(),

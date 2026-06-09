@@ -1020,7 +1020,9 @@ handle_child_result({undefined, Events} = Result, Withdrawal) ->
             {ok, Wallet} = fetch_wallet(wallet_id(Withdrawal), party_id(Withdrawal), DomainRevision),
             ok = ff_party:wallet_log_balance(wallet_id(Withdrawal), Wallet),
             Result
-    end.
+    end;
+handle_child_result({_OtherAction, _Events} = Result, _Withdrawal) ->
+    Result.
 
 -spec is_childs_active(withdrawal_state()) -> boolean().
 is_childs_active(Withdrawal) ->
