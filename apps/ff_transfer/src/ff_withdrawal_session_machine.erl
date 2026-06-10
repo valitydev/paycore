@@ -120,7 +120,7 @@ repair(ID, Scenario) ->
 
 -spec process_callback(callback_params()) ->
     {ok, process_callback_response()}
-    | {error, process_callback_error()}.
+    | {error, process_callback_error() | failed}.
 process_callback(#{tag := Tag} = Params) ->
     case ff_machine_tag:get_binding(?NS, Tag) of
         {ok, EntityID} ->
@@ -168,7 +168,11 @@ call(Ref, Call) ->
         {ok, Reply} ->
             Reply;
         {error, notfound} ->
-            {error, {unknown_session, Ref}}
+            {error, {unknown_session, Ref}};
+        {error, failed} ->
+            {error, failed};
+        {error, _} = Error ->
+            Error
     end.
 
 codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->

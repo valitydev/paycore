@@ -72,18 +72,18 @@ groups() ->
 
 -spec init_per_suite(config()) -> config().
 init_per_suite(C) ->
-    ff_ct_machine:load_per_suite(),
-    ct_helper:makeup_cfg(
+    C1 = ct_helper:makeup_cfg(
         [
             ct_helper:test_case_name(init),
             ct_payment_system:setup()
         ],
         C
-    ).
+    ),
+    C1.
 
 -spec end_per_suite(config()) -> _.
 end_per_suite(C) ->
-    ff_ct_machine:unload_per_suite(),
+    maybe_unload_ff_ct_machine(),
     ok = ct_payment_system:shutdown(C).
 
 %%
@@ -543,30 +543,34 @@ await_provider_retry(FirstAmount, SecondAmount, TotalAmount, C) ->
     },
     Activity = {fail, session},
     {ok, Barrier} = ff_ct_barrier:start_link(),
-    ok = ff_ct_machine:set_hook(
-        timeout,
-        fun
-            (Machine, ff_withdrawal, _Args) ->
-                Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
-                case {ff_withdrawal:id(Withdrawal), ff_withdrawal:activity(Withdrawal)} of
-                    {WithdrawalID1, Activity} ->
-                        ff_ct_barrier:enter(Barrier, _Timeout = 10000);
-                    _ ->
-                        ok
-                end;
-            (_Machine, _Handler, _Args) ->
-                false
-        end
-    ),
-    ok = ff_withdrawal_machine:create(WithdrawalParams1, ff_entity_context:new()),
-    _ = await_withdrawal_activity(Activity, WithdrawalID1),
-    ok = ff_withdrawal_machine:create(WithdrawalParams2, ff_entity_context:new()),
-    ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID2)),
-    ok = ff_ct_barrier:release(Barrier),
-    Status = await_final_withdrawal_status(WithdrawalID1),
-    ok = ff_ct_machine:clear_hook(timeout),
-    ok = ff_ct_barrier:stop(Barrier),
-    Status.
+    try
+        ok = ff_ct_machine:load_per_suite(),
+        ok = ff_ct_machine:set_hook(
+            timeout,
+            fun
+                (Machine, ff_withdrawal, _Args) ->
+                    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+                    case {ff_withdrawal:id(Withdrawal), ff_withdrawal:activity(Withdrawal)} of
+                        {WithdrawalID1, Activity} ->
+                            ff_ct_barrier:enter(Barrier, _Timeout = 10000);
+                        _ ->
+                            ok
+                    end;
+                (_Machine, _Handler, _Args) ->
+                    ok
+            end
+        ),
+        ok = ff_withdrawal_machine:create(WithdrawalParams1, ff_entity_context:new()),
+        _ = await_withdrawal_activity(Activity, WithdrawalID1),
+        ok = ff_withdrawal_machine:create(WithdrawalParams2, ff_entity_context:new()),
+        ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID2)),
+        ok = ff_ct_barrier:release(Barrier),
+        await_final_withdrawal_status(WithdrawalID1)
+    after
+        ok = ff_ct_machine:clear_hook(timeout),
+        maybe_unload_ff_ct_machine(),
+        ok = ff_ct_barrier:stop(Barrier)
+    end.
 
 set_retryable_errors(PartyID, ErrorList) ->
     application:set_env(ff_transfer, withdrawal, #{
@@ -613,7 +617,12 @@ prepare_standard_environment({_Amount, Currency} = WithdrawalCash, C) ->
         PartyID, Currency, #domain_TermSetHierarchyRef{id = 1}, #domain_PaymentInstitutionRef{id = 1}
     ),
     ok = await_wallet_balance({0, Currency}, WalletID),
-    DestinationID = ct_objects:create_destination(PartyID, undefined),
+    DestinationID = create_destination(
+        PartyID,
+        Currency,
+        #{sender => <<"SenderToken">>, receiver => <<"ReceiverToken">>},
+        C
+    ),
     SourceID = ct_objects:create_source(PartyID, Currency),
     {_DepositID, _} = ct_objects:create_deposit(PartyID, WalletID, SourceID, WithdrawalCash),
     ok = await_wallet_balance(WithdrawalCash, WalletID),
@@ -655,7 +664,7 @@ await_withdrawal_activity(Activity, WithdrawalID) ->
             {ok, Machine} = ff_withdrawal_machine:get(WithdrawalID),
             ff_withdrawal:activity(ff_withdrawal_machine:withdrawal(Machine))
         end,
-        genlib_retry:linear(20, 1000)
+        genlib_retry:linear(50, 200)
     ).
 
 create_party(_C) ->
@@ -677,20 +686,7 @@ get_wallet_balance(ID) ->
 
 create_destination(IID, Currency, AuthData, _C) ->
     ID = genlib:bsuuid(),
-    StoreSource = ct_cardstore:bank_card(<<"4150399999000900">>, {12, 2025}),
-    Resource =
-        {bank_card, #'fistful_base_ResourceBankCard'{
-            bank_card = #'fistful_base_BankCard'{
-                token = maps:get(token, StoreSource),
-                bin = maps:get(bin, StoreSource, undefined),
-                masked_pan = maps:get(masked_pan, StoreSource, undefined),
-                exp_date = #'fistful_base_BankCardExpDate'{
-                    month = 12,
-                    year = 2025
-                },
-                cardholder_name = maps:get(cardholder_name, StoreSource, undefined)
-            }
-        }},
+    Resource = {bank_card, #{bank_card => ct_cardstore:bank_card(<<"4150399999000900">>, {12, 2025})}},
     Params = genlib_map:compact(#{
         id => ID,
         party_id => IID,
@@ -702,3 +698,9 @@ create_destination(IID, Currency, AuthData, _C) ->
     }),
     ok = ff_destination_machine:create(Params, ff_entity_context:new()),
     ID.
+
+maybe_unload_ff_ct_machine() ->
+    case lists:member(prg_machine, meck:mocked()) of
+        true -> ff_ct_machine:unload_per_suite();
+        false -> ok
+    end.

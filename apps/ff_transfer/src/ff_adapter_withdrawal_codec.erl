@@ -338,7 +338,7 @@ unmarshal(intent, {finish, #wthd_provider_FinishIntent{status = {failure, Failur
 unmarshal(intent, {sleep, #wthd_provider_SleepIntent{timer = Timer, callback_tag = Tag}}) ->
     {sleep,
         genlib_map:compact(#{
-            timer => ff_codec:unmarshal(timer, Timer),
+            timer => unmarshal_provider_timer(ff_codec:unmarshal(timer, Timer)),
             tag => Tag
         })};
 unmarshal(process_callback_result, _NotImplemented) ->
@@ -419,3 +419,12 @@ unmarshal_msgpack({arr, V}) when is_list(V) ->
     [unmarshal_msgpack(ListItem) || ListItem <- V];
 unmarshal_msgpack({obj, V}) when is_map(V) ->
     maps:fold(fun(Key, Value, Map) -> Map#{unmarshal_msgpack(Key) => unmarshal_msgpack(Value)} end, #{}, V).
+
+%% base.Timer deadline on the wire is base.Timestamp (RFC3339).
+%% progressor_action:timer() expects {deadline, calendar:datetime() | binary()}.
+unmarshal_provider_timer({deadline, Deadline}) when is_binary(Deadline) ->
+    {deadline, Deadline};
+unmarshal_provider_timer({deadline, {DateTime, _USec}}) ->
+    {deadline, DateTime};
+unmarshal_provider_timer(Timer) ->
+    Timer.

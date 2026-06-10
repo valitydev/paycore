@@ -316,6 +316,7 @@ rg "client => machinery_prg_backend" config/sys.config                     # 0
 | `apps/hellgate/src/hg_invoicing_machine_client.erl` | Thrift → prg_machine |
 | `apps/fistful/src/ff_repair.erl` | repair + collapse |
 | `docs/trace-api-thrift.md` | следующий этап trace |
+| `docs/prg-machine-error-semantics-hg-ff.md` | семантика ошибок, HG vs FF, CT-регрессии, meck |
 
 ---
 

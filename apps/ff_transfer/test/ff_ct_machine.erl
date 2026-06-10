@@ -11,15 +11,24 @@
 -export([clear_hook/1]).
 
 -define(DISPATCH_TABLE, prg_machine_dispatch).
+-define(ORIGINAL_MODULE, 'prg_machine_meck_original').
 
 -spec load_per_suite() -> ok.
 load_per_suite() ->
-    meck:new(prg_machine, [no_link, passthrough]),
-    meck:expect(prg_machine, process, fun process/3).
+    case lists:member(prg_machine, meck:mocked()) of
+        true ->
+            ok;
+        false ->
+            ok = meck:new(prg_machine, [no_link, passthrough]),
+            meck:expect(prg_machine, process, fun process/3)
+    end.
 
 -spec unload_per_suite() -> ok.
 unload_per_suite() ->
-    meck:unload(prg_machine).
+    case lists:member(prg_machine, meck:mocked()) of
+        true -> meck:unload(prg_machine);
+        false -> ok
+    end.
 
 -type hook() :: fun((prg_machine:machine(), module(), _) -> _).
 
@@ -38,12 +47,12 @@ process({timeout, _BinArgs, #{process_id := ID} = _Process} = Call, #{ns := NS} 
             Handler = handler_module(NS),
             {ok, Machine} = prg_machine:get(NS, ID),
             _ = Fun(Machine, Handler, undefined),
-            meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]]);
+            ?ORIGINAL_MODULE:process(Call, Opts, BinCtx);
         undefined ->
-            meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]])
+            ?ORIGINAL_MODULE:process(Call, Opts, BinCtx)
     end;
 process(Call, Opts, BinCtx) ->
-    meck:passthrough([prg_machine, process, [Call, Opts, BinCtx]]).
+    ?ORIGINAL_MODULE:process(Call, Opts, BinCtx).
 
 handler_module(NS) ->
     case ets:lookup(?DISPATCH_TABLE, NS) of

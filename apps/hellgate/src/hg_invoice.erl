@@ -282,16 +282,17 @@ process_with_tag(Tag, F) ->
 
 -spec fail(prg_machine:id()) -> ok.
 fail(ID) ->
-    try prg_machine:call(?NS, ID, fail) of
+    case prg_machine:call(?NS, ID, fail) of
         {error, failed} ->
+            ok;
+        {error, {exception, _, _}} ->
+            ok;
+        {error, {exception, _, _, _}} ->
             ok;
         {error, Error} ->
             erlang:error({unexpected_error, Error});
         {ok, Result} ->
             erlang:error({unexpected_result, Result})
-    catch
-        _Class:_Term:_Trace ->
-            ok
     end.
 
 %%

@@ -145,18 +145,16 @@ start(NS, ID, Args) ->
             Ok;
         {error, <<"process already exists">>} ->
             {error, exists};
-        {error, {exception, _, _} = Exception} ->
-            raise_exception(Exception);
-        {error, {exception, _, _, _} = Exception} ->
-            raise_exception(Exception)
+        {error, _} = Error ->
+            Error
     end.
 
--spec call(namespace(), id(), call()) -> {ok, response()} | {error, notfound | term()}.
+-spec call(namespace(), id(), call()) -> {ok, response()} | {error, notfound | failed | term()}.
 call(NS, ID, CallArgs) ->
     call(NS, ID, CallArgs, undefined, undefined, forward).
 
 -spec call(namespace(), id(), call(), event_id() | undefined, non_neg_integer() | undefined, forward | backward) ->
-    {ok, response()} | {error, notfound | term()}.
+    {ok, response()} | {error, notfound | failed | term()}.
 call(NS, ID, CallArgs, After, Limit, Direction) ->
     Req = request(NS, ID, CallArgs, encode_range(After, Limit, Direction)),
     case progressor:call(Req) of
@@ -168,16 +166,12 @@ call(NS, ID, CallArgs, After, Limit, Direction) ->
             {error, notfound};
         {error, <<"process is error">>} ->
             {error, failed};
-        {error, {exception, _, _} = Exception} ->
-            raise_exception(Exception);
-        {error, {exception, _, _, _} = Exception} ->
-            raise_exception(Exception);
         {error, _} = Error ->
             Error
     end.
 
 -spec repair(namespace(), id(), args()) ->
-    {ok, term()} | {error, notfound | working | failed | {repair, {failed, binary()}}}.
+    {ok, term()} | {error, notfound | working | failed | {repair, {failed, term()}}}.
 repair(NS, ID, Args) ->
     Req = #{
         ns => NS,
@@ -196,10 +190,6 @@ repair(NS, ID, Args) ->
             {error, working};
         {error, <<"process is error">>} ->
             {error, failed};
-        {error, {exception, _, _} = Exception} ->
-            raise_exception(Exception);
-        {error, {exception, _, _, _} = Exception} ->
-            raise_exception(Exception);
         {error, Reason} ->
             {error, {repair, {failed, Reason}}}
     end.

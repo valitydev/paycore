@@ -88,9 +88,9 @@ process_withdrawal(#{id := _}, nil, _Options) ->
     }};
 process_withdrawal(#{id := WithdrawalID}, <<"sleeping">>, _Options) ->
     CallbackTag = <<"cb_", WithdrawalID/binary>>,
-    Deadline = calendar:system_time_to_universal_time(erlang:system_time(millisecond) + 5000, millisecond),
+    Deadline = genlib_rfc3339:format_relaxed(erlang:system_time(second) + 5, second),
     {ok, #{
-        intent => {sleep, #{timer => {deadline, {Deadline, 0}}, tag => CallbackTag}},
+        intent => {sleep, #{timer => {deadline, Deadline}, tag => CallbackTag}},
         next_state => <<"callback_processing">>,
         transaction_info => #{id => <<"SleepyID">>, extra => #{}}
     }}.

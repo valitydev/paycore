@@ -200,7 +200,11 @@ call(ID, Call) ->
         {ok, Reply} ->
             Reply;
         {error, notfound} ->
-            {error, {unknown_withdrawal, ID}}
+            {error, {unknown_withdrawal, ID}};
+        {error, failed} ->
+            {error, failed};
+        {error, _} = Error ->
+            Error
     end.
 
 codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
