@@ -173,7 +173,8 @@ trace_destination_test(C) ->
             ],
             <<"task_status">> := <<"finished">>,
             <<"task_type">> := <<"init">>
-        }
+        },
+        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>}
     ] = json:decode(Body),
     ok.
 

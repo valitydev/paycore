@@ -264,8 +264,13 @@ meck:expect(prg_machine, process, fun process/3).
 
 ---
 
-## 10. Открытые вопросы
+## 10. Trace HTTP (`ff_machine_handler`)
+
+После миграции `progressor:trace/1` + `json:encode` ломался на сырых binary в `event_payload` (`invalid_byte, 131`).
+
+**Фикс:** `ff_machine_trace:trace/2` в `apps/ff_transfer` — порт `ff_machine:unmarshal_trace` (handler `unmarshal_event_body` + `json_compatible_value`).
+
+## 11. Открытые вопросы
 
 1. **Нужна ли эмуляция `{ok, {error, Reason}}`** для guard-ошибок progressor на call (как machinery) — или pass-through достаточен при текущих тестах.
-2. **`lib.ff_server` 4 FAIL** — отдельное расследование.
-3. **Полный зелёный `lib.hellgate`** после pass-through fix — подтвердить прогоном.
+2. **`repair_failed_session_with_failure`** — отдельно от trace: `{badmatch,{error,notfound}}` в session repair.
