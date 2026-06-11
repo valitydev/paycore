@@ -51,6 +51,7 @@
 -type create_error() :: none().
 
 -export_type([id/0]).
+-export_type([action/0]).
 -export_type([event/0]).
 -export_type([changes/0]).
 -export_type([cash_flow_change/0]).

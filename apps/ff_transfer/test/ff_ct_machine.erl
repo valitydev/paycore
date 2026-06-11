@@ -47,11 +47,14 @@ process({timeout, _BinArgs, #{process_id := ID} = _Process} = Call, #{ns := NS} 
             Handler = handler_module(NS),
             {ok, Machine} = prg_machine:get(NS, ID),
             _ = Fun(Machine, Handler, undefined),
-            ?ORIGINAL_MODULE:process(Call, Opts, BinCtx);
+            call_original_process(Call, Opts, BinCtx);
         undefined ->
-            ?ORIGINAL_MODULE:process(Call, Opts, BinCtx)
+            call_original_process(Call, Opts, BinCtx)
     end;
 process(Call, Opts, BinCtx) ->
+    call_original_process(Call, Opts, BinCtx).
+
+call_original_process(Call, Opts, BinCtx) ->
     ?ORIGINAL_MODULE:process(Call, Opts, BinCtx).
 
 handler_module(NS) ->

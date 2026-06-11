@@ -59,10 +59,10 @@ decode_context(undefined) ->
     #{};
 decode_context(<<>>) ->
     #{};
-decode_context(Bin) when is_binary(Bin) ->
-    woody_rpc_helper:decode_rpc_context(decode_term(Bin));
 decode_context(Ctx) when is_map(Ctx) ->
-    Ctx.
+    Ctx;
+decode_context(Value) ->
+    woody_rpc_helper:decode_rpc_context(decode_term(Value)).
 
 extract_trace_id(#{<<"otel">> := [OtelTraceID | _]}) ->
     OtelTraceID;
@@ -81,13 +81,12 @@ extract_error_response({error, Reason}) ->
 extract_error_response(_) ->
     null.
 
-decode_trace_value(undefined) ->
-    undefined;
-decode_trace_value(Bin) when is_binary(Bin) ->
-    decode_term(Bin);
 decode_trace_value(Value) ->
-    Value.
+    decode_term(Value).
 
+%% progressor trace may return storage blobs (binary) or already-decoded terms.
+%% Same contract as prg_machine:decode_term/1.
+-spec decode_term(term()) -> term().
 decode_term(Bin) when is_binary(Bin) ->
     binary_to_term(Bin, [safe]);
 decode_term(Term) ->

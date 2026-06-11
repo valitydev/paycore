@@ -31,10 +31,7 @@
 -type unknown_withdrawal_error() ::
     {unknown_withdrawal, id()}.
 
--type action() ::
-    continue
-    | sleep
-    | undefined.
+-type action() :: ff_withdrawal:action().
 
 -type adjustment_params() :: ff_withdrawal:adjustment_params().
 

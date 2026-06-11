@@ -187,7 +187,14 @@
 -type invalid_withdrawal_status_error() ::
     {invalid_withdrawal_status, status()}.
 
--type action() :: sleep | continue | undefined.
+%% Transfer-layer action before map_action/1. Adapter timers normally live on the
+%% session machine; {setup_timer, _} is supported at this boundary for repair and
+%% symmetry with ff_withdrawal_session.
+-type action() ::
+    sleep
+    | continue
+    | undefined
+    | {setup_timer, progressor_action:timer()}.
 
 -export_type([withdrawal/0]).
 -export_type([withdrawal_state/0]).
