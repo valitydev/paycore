@@ -56,6 +56,8 @@ process(Call, Opts, BinCtx) ->
 call_original_process(Call, Opts, BinCtx) ->
     'prg_machine_meck_original':process(Call, Opts, BinCtx).
 
+-dialyzer({nowarn_function, call_original_process/3}).
+
 handler_module(NS) ->
     case ets:lookup(?DISPATCH_TABLE, NS) of
         [{NS, Handler}] ->
