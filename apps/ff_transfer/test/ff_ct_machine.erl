@@ -11,7 +11,6 @@
 -export([clear_hook/1]).
 
 -define(DISPATCH_TABLE, prg_machine_dispatch).
--define(ORIGINAL_MODULE, 'prg_machine_meck_original').
 
 -spec load_per_suite() -> ok.
 load_per_suite() ->
@@ -55,7 +54,7 @@ process(Call, Opts, BinCtx) ->
     call_original_process(Call, Opts, BinCtx).
 
 call_original_process(Call, Opts, BinCtx) ->
-    ?ORIGINAL_MODULE:process(Call, Opts, BinCtx).
+    'prg_machine_meck_original':process(Call, Opts, BinCtx).
 
 handler_module(NS) ->
     case ets:lookup(?DISPATCH_TABLE, NS) of

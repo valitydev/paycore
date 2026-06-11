@@ -14,6 +14,12 @@
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
+-record(state, {
+    handlers :: [module()]
+}).
+
+-type state() :: #state{}.
+
 -spec get_child_spec([module()]) -> supervisor:child_spec().
 get_child_spec(Handlers) ->
     #{
@@ -53,20 +59,20 @@ ensure_table() ->
             ok
     end.
 
--spec init([module()]) -> {ok, #{handlers := [module()]}}.
+-spec init([module()]) -> {ok, state()}.
 init(Handlers) ->
     ok = ensure_table(),
-    true = ets:insert(?TABLE, [{H:namespace(), H} || H <- Handlers]),
-    {ok, #{handlers => Handlers}}.
+    true = ets:insert(?TABLE, [{prg_machine:handler_namespace(H), H} || H <- Handlers]),
+    {ok, #state{handlers = Handlers}}.
 
--spec handle_call(term(), {pid(), term()}, map()) -> {reply, term(), map()}.
+-spec handle_call(term(), {pid(), term()}, state()) -> {reply, term(), state()}.
 handle_call(_Request, _From, State) ->
     {reply, {error, unsupported}, State}.
 
--spec handle_cast(term(), map()) -> {noreply, map()}.
+-spec handle_cast(term(), state()) -> {noreply, state()}.
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
--spec handle_info(term(), map()) -> {noreply, map()}.
+-spec handle_info(term(), state()) -> {noreply, state()}.
 handle_info(_Info, State) ->
     {noreply, State}.

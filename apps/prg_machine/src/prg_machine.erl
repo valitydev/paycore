@@ -122,6 +122,8 @@
 %% Registry (namespace -> handler module)
 
 -export([get_child_spec/1]).
+-export([handler_namespace/1]).
+-export([unmarshal_event_body/3]).
 
 %% Event-sourcing helpers (replaces ff_machine)
 
@@ -295,6 +297,10 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
 get_child_spec(Handlers) ->
     prg_machine_registry:get_child_spec(Handlers).
 
+-spec handler_namespace(module()) -> namespace().
+handler_namespace(Handler) ->
+    Handler:namespace().
+
 %% Event-sourcing (replaces ff_machine collapse/emit)
 
 -spec collapse(module(), machine()) -> term().
@@ -426,6 +432,7 @@ marshal_event_body(Handler, Body) ->
             {undefined, term_to_binary(Body)}
     end.
 
+-spec unmarshal_event_body(module(), undefined | pos_integer(), binary()) -> event_body().
 unmarshal_event_body(Handler, Format, Payload) ->
     case erlang:function_exported(Handler, unmarshal_event_body, 2) of
         true ->
