@@ -1,6 +1,6 @@
--module(hg_machine_action).
+-module(prg_action).
 
-%%% Scheduling helpers for wire `action()` in processor intent.
+%%% Scheduling helpers: domain timer/deadline → wire `action()` for processor intent.
 
 -include_lib("progressor/include/progressor.hrl").
 

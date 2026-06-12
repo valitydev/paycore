@@ -103,7 +103,7 @@
 -type event() :: dmsl_payproc_thrift:'InvoicePaymentChangePayload'().
 -type event_payload() :: dmsl_payproc_thrift:'InvoicePaymentRefundChangePayload'().
 -type events() :: [event()].
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type result() :: {events(), action()}.
 -type machine_result() :: {next | done, result()}.
 
@@ -453,7 +453,7 @@ get_manual_refund_events(_) ->
 
 retry_session(_Action, Timeout) ->
     NewEvents = [hg_session:wrap_event(?refunded(), hg_session:create())],
-    NewAction = hg_machine_action:schedule_timer({timeout, Timeout}),
+    NewAction = prg_action:schedule_timer({timeout, Timeout}),
     {NewEvents, NewAction}.
 
 -spec check_retry_possibility(failure(), t()) ->

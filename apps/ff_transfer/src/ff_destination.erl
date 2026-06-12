@@ -319,7 +319,7 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action()) -> hg_machine_action:t().
+-spec map_action(action()) -> prg_action:t().
 map_action(undefined) ->
     idle;
 map_action(continue) ->

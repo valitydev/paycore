@@ -194,7 +194,7 @@
     sleep
     | continue
     | undefined
-    | {setup_timer, hg_machine_action:timer()}.
+    | {setup_timer, prg_action:timer()}.
 
 -export_type([withdrawal/0]).
 -export_type([withdrawal_state/0]).
@@ -1938,7 +1938,7 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action()) -> hg_machine_action:t().
+-spec map_action(action()) -> prg_action:t().
 map_action(undefined) ->
     idle;
 map_action(continue) ->
@@ -1946,7 +1946,7 @@ map_action(continue) ->
 map_action(sleep) ->
     suspend;
 map_action({setup_timer, Timer}) ->
-    hg_machine_action:schedule_timer(Timer).
+    prg_action:schedule_timer(Timer).
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

@@ -98,7 +98,7 @@
     dmsl_payproc_thrift:'SessionChangePayload'()
     | {invoice_payment_rec_token_acquired, dmsl_payproc_thrift:'InvoicePaymentRecTokenAcquired'()}.
 -type events() :: [event()].
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type result() :: {events(), action()}.
 
 -type callback() :: dmsl_proxy_provider_thrift:'Callback'().
@@ -367,7 +367,7 @@ handle_proxy_intent(#proxy_provider_FinishIntent{status = {failure, Failure}}, A
     Events = [?session_finished(?session_failed({failure, Failure}))],
     {Events, Action};
 handle_proxy_intent(#proxy_provider_SleepIntent{timer = Timer}, _Action0, _Session) ->
-    Action1 = hg_machine_action:schedule_timer(Timer),
+    Action1 = prg_action:schedule_timer(Timer),
     {[], Action1};
 handle_proxy_intent(
     #proxy_provider_SuspendIntent{tag = Tag, timeout = Timer, timeout_behaviour = TimeoutBehaviour},
@@ -376,7 +376,7 @@ handle_proxy_intent(
 ) ->
     #{payment_id := PaymentID, invoice_id := InvoiceID} = tag_context(Session),
     ok = hg_machine_tag:create_binding(hg_invoice:namespace(), Tag, PaymentID, InvoiceID),
-    Action1 = hg_machine_action:schedule_timer(Timer),
+    Action1 = prg_action:schedule_timer(Timer),
     Events = [?session_suspended(Tag, TimeoutBehaviour)],
     {Events, Action1}.
 

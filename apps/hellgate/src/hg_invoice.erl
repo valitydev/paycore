@@ -96,7 +96,7 @@
 
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 
 %% API
 
@@ -367,7 +367,7 @@ construct_repair_action(CA) when CA /= undefined ->
                 undefined ->
                     idle;
                 {set_timer, #repair_SetTimerAction{timer = Timer}} ->
-                    hg_machine_action:schedule_timer(Timer);
+                    prg_action:schedule_timer(Timer);
                 {unset_timer, #repair_UnsetTimerAction{}} ->
                     suspend
             end
@@ -542,7 +542,7 @@ set_invoice_timer(Action, #st{invoice = Invoice} = St) ->
     set_invoice_timer(Invoice#domain_Invoice.status, Action, St).
 
 set_invoice_timer(?invoice_unpaid(), _Action, #st{invoice = #domain_Invoice{due = Due}}) ->
-    hg_machine_action:schedule_deadline(Due);
+    prg_action:schedule_deadline(Due);
 set_invoice_timer(_Status, Action, _St) ->
     Action.
 
@@ -1100,7 +1100,7 @@ action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
                 undefined ->
                     idle;
                 {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
-                    hg_machine_action:schedule_timer(T);
+                    prg_action:schedule_timer(T);
                 {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
                     suspend
             end

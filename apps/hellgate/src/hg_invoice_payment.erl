@@ -388,7 +388,7 @@ get_chargeback_opts(#st{opts = Opts} = St) ->
 %%
 
 -type event() :: dmsl_payproc_thrift:'InvoicePaymentChangePayload'().
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type events() :: [event()].
 -type result() :: {events(), action()}.
 -type machine_result() :: {next | done, result()}.
@@ -2647,13 +2647,13 @@ get_action(?processed(), _Action, St) ->
         ?invoice_payment_flow_instant() ->
             timeout;
         ?invoice_payment_flow_hold(_, HeldUntil) ->
-            hg_machine_action:schedule_deadline(HeldUntil)
+            prg_action:schedule_deadline(HeldUntil)
     end;
 get_action(_Target, Action, _St) ->
     Action.
 
 set_timer(Timer, _Action) ->
-    hg_machine_action:schedule_timer(Timer).
+    prg_action:schedule_timer(Timer).
 
 get_provider_payment_terms(St, Revision) ->
     Opts = get_opts(St),

@@ -121,8 +121,8 @@
 -type action() ::
     undefined
     | continue
-    | {setup_callback, ff_withdrawal_callback:tag(), hg_machine_action:timer()}
-    | {setup_timer, hg_machine_action:timer()}
+    | {setup_callback, ff_withdrawal_callback:tag(), prg_action:timer()}
+    | {setup_timer, prg_action:timer()}
     | retry
     | finish.
 
@@ -489,16 +489,16 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action(), session_state()) -> hg_machine_action:t().
+-spec map_action(action(), session_state()) -> prg_action:t().
 map_action(undefined, _Session) ->
     idle;
 map_action(continue, _Session) ->
     timeout;
 map_action({setup_callback, Tag, Timer}, Session) ->
     ok = ff_machine_tag:create_binding(?NS, Tag, id(Session)),
-    hg_machine_action:schedule_timer(Timer);
+    prg_action:schedule_timer(Timer);
 map_action({setup_timer, Timer}, _Session) ->
-    hg_machine_action:schedule_timer(Timer);
+    prg_action:schedule_timer(Timer);
 map_action(finish, _Session) ->
     suspend;
 map_action(retry, _Session) ->

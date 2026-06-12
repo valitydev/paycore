@@ -139,7 +139,7 @@
     dmsl_payproc_thrift:'InvoicePaymentChargebackChangePayload'().
 
 -type action() ::
-    hg_machine_action:t().
+    prg_action:t().
 
 -type activity() ::
     preparing_initial_cash_flow
