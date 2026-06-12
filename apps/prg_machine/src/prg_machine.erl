@@ -16,11 +16,16 @@
 -type call() :: term().
 -type response() :: ok | {ok, term()} | {error, term()} | {exception, term()}.
 
--type timestamp() :: calendar:datetime().
+%% Machinery timestamp format: a UTC datetime plus a microsecond remainder.
+-type timestamp() :: {calendar:datetime(), non_neg_integer()}.
 -type event_body() :: term().
 %% Domain history tuple (not progressor storage event() map).
 -type machine_event() :: {event_id(), timestamp(), event_body()}.
 -type history() :: [machine_event()].
+-type get_error() ::
+    notfound
+    | {unknown_namespace, namespace()}
+    | {exception, atom(), term()}.
 
 -type machine() :: #{
     namespace := namespace(),
@@ -45,7 +50,8 @@
     ns := namespace(),
     env_enter => env_enter_fun(),
     env_leave => fun(() -> ok),
-    context_binding => context_binding()
+    context_binding => context_binding(),
+    default_handling_timeout => timeout()
 }.
 
 -export_type([
@@ -61,6 +67,7 @@
     machine_event/0,
     history/0,
     machine/0,
+    get_error/0,
     signal/0,
     result/0,
     process_options/0
@@ -193,10 +200,12 @@ repair(NS, ID, Args) ->
         {error, <<"process is error">>} ->
             {error, failed};
         {error, Reason} ->
-            {error, {repair, {failed, Reason}}}
+            %% The repair-failed reason is our own term encoded by process/3
+            %% (marshal_process_result -> encode_term); hand it back as a term.
+            {error, {repair, {failed, decode_term(Reason)}}}
     end.
 
--spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, notfound | {unknown_namespace, namespace()}}.
+-spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, get_error()}.
 get(NS, ID, Range) ->
     Req = request(NS, ID, undefined, Range),
     case progressor:get(Req) of
@@ -209,27 +218,27 @@ get(NS, ID, Range) ->
             end;
         {error, <<"process not found">>} ->
             {error, notfound};
-        {error, {exception, _, _} = Exception} ->
-            raise_exception(Exception);
-        {error, {exception, _, _, _} = Exception} ->
-            raise_exception(Exception)
+        {error, {exception, _Class, _Reason} = Exception} ->
+            {error, Exception};
+        {error, {exception, Class, Reason, _Stacktrace}} ->
+            {error, {exception, Class, Reason}}
     end.
 
--spec get(namespace(), id()) -> {ok, machine()} | {error, notfound}.
+-spec get(namespace(), id()) -> {ok, machine()} | {error, get_error()}.
 get(NS, ID) ->
     get(NS, ID, #{direction => forward}).
 
--spec get_history(namespace(), id()) -> {ok, history()} | {error, notfound}.
+-spec get_history(namespace(), id()) -> {ok, history()} | {error, get_error()}.
 get_history(NS, ID) ->
     get_history(NS, ID, undefined, undefined, forward).
 
 -spec get_history(namespace(), id(), event_id() | undefined, non_neg_integer() | undefined) ->
-    {ok, history()} | {error, notfound}.
+    {ok, history()} | {error, get_error()}.
 get_history(NS, ID, After, Limit) ->
     get_history(NS, ID, After, Limit, forward).
 
 -spec get_history(namespace(), id(), event_id() | undefined, non_neg_integer() | undefined, forward | backward) ->
-    {ok, history()} | {error, notfound}.
+    {ok, history()} | {error, get_error()}.
 get_history(NS, ID, After, Limit, Direction) ->
     case get(NS, ID, history_range(After, Limit, Direction)) of
         {ok, #{history := History}} ->
@@ -238,18 +247,20 @@ get_history(NS, ID, After, Limit, Direction) ->
             Error
     end.
 
--spec notify(namespace(), id(), args()) -> ok | {error, notfound}.
+-spec notify(namespace(), id(), args()) ->
+    ok | {error, notfound | failed | {exception, atom(), term()} | term()}.
 notify(NS, ID, Args) ->
     case call(NS, ID, {notify, Args}) of
         {ok, _} -> ok;
-        {error, notfound} = Error -> Error
+        {error, _} = Error -> Error
     end.
 
--spec remove(namespace(), id()) -> ok | {error, notfound}.
+-spec remove(namespace(), id()) ->
+    ok | {error, notfound | failed | {exception, atom(), term()} | term()}.
 remove(NS, ID) ->
     case call(NS, ID, remove) of
         {ok, _} -> ok;
-        {error, notfound} = Error -> Error
+        {error, _} = Error -> Error
     end.
 
 -spec history_range(undefined | event_id(), undefined | non_neg_integer(), forward | backward) ->
@@ -270,13 +281,19 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
             {error, _} = Error ->
                 Error;
             {ok, Handler} ->
-                {WoodyCtx, OtelCtx} = decode_rpc_context(BinCtx),
+                {WoodyCtx0, OtelCtx} = decode_rpc_context(BinCtx),
                 ok = woody_rpc_helper:attach_otel_context(OtelCtx),
+                WoodyCtx = ensure_deadline_set(WoodyCtx0, Opts),
                 ok = run_env_enter(Enter, WoodyCtx),
-                LastEventID = maps:get(last_event_id, Process),
-                Machine = unmarshal_machine(Handler, NS, Process),
-                Result = dispatch(Handler, CallType, BinArgs, Machine),
-                marshal_process_result(Handler, LastEventID, Result)
+                %% Enter succeeded: from here Leave must run exactly once. Errors
+                %% raised before this point fall through to the outer catch and are
+                %% returned as {error, _} without being masked by a Leave exception.
+                run_with_env_leave(Leave, fun() ->
+                    LastEventID = maps:get(last_event_id, Process),
+                    Machine = unmarshal_machine(Handler, NS, Process),
+                    Result = dispatch(Handler, CallType, BinArgs, Machine),
+                    marshal_process_result(Handler, LastEventID, Result)
+                end)
         end
     catch
         Class:Reason:Stacktrace ->
@@ -287,8 +304,19 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
                 #{stacktrace => Stacktrace, exception => Exception}
             ),
             {error, Exception}
-    after
-        Leave()
+    end.
+
+%% Default woody deadline (30s, configurable per namespace via opts), restoring the
+%% old hg_progressor behaviour (hg_woody_service_wrapper:ensure_woody_deadline_set/2).
+-define(DEFAULT_HANDLING_TIMEOUT, 30000).
+
+ensure_deadline_set(WoodyCtx, Opts) ->
+    case woody_context:get_deadline(WoodyCtx) of
+        undefined ->
+            Timeout = maps:get(default_handling_timeout, Opts, ?DEFAULT_HANDLING_TIMEOUT),
+            woody_context:set_deadline(woody_deadline:from_timeout(Timeout), WoodyCtx);
+        _Set ->
+            WoodyCtx
     end.
 
 %% Registry
@@ -324,7 +352,9 @@ emit_events(Events) ->
 
 -spec timestamp() -> timestamp().
 timestamp() ->
-    calendar:universal_time().
+    Now = erlang:system_time(microsecond),
+    {Seconds, Micro} = prg_utils:split_timestamp(Now),
+    {calendar:system_time_to_universal_time(Seconds, second), Micro}.
 
 %% Internals — dispatch
 
@@ -406,20 +436,22 @@ unmarshal_event(Handler, #{
     metadata := Meta,
     payload := Payload
 }) ->
-    Format = maps:get(<<"format">>, Meta, maps:get(format, Meta, undefined)),
+    Format = unmarshal_event_format(Meta),
     Body = unmarshal_event_body(Handler, Format, Payload),
     {EventID, event_timestamp_to_datetime(TsSec), Body};
 unmarshal_event(_Handler, #{event_id := EventID} = Ev) ->
     erlang:error({missing_event_payload, EventID, maps:keys(Ev)}).
 
 marshal_new_events(Handler, LastEventID, Bodies) ->
+    %% One microsecond timestamp for the whole batch (as the old emit_events did).
+    %% The PG backend stores timestamptz with microseconds and auto-detects units.
     Ts = erlang:system_time(microsecond),
     lists:zipwith(
         fun(EventID, Body) ->
             {Format, Bin} = marshal_event_body(Handler, Body),
             #{
                 event_id => EventID,
-                timestamp => Ts div 1000000,
+                timestamp => Ts,
                 metadata => event_metadata(Format),
                 payload => Bin
             }
@@ -442,7 +474,7 @@ unmarshal_event_body(Handler, Format, Payload) ->
         true ->
             Handler:unmarshal_event_body(Format, Payload);
         false ->
-            binary_to_term(Payload, [safe])
+            binary_to_term(Payload)
     end.
 
 marshal_aux_state(Handler, AuxSt) ->
@@ -460,19 +492,36 @@ unmarshal_aux_state(Handler, Bin) when is_binary(Bin) ->
         true ->
             Handler:unmarshal_aux_state(Bin);
         false ->
-            binary_to_term(Bin, [safe])
+            binary_to_term(Bin)
     end.
 
+%% Write both legacy keys: old HG reader expects <<"format_version">>,
+%% old FF reader expects <<"format">>. Keeping both keeps rollback safe for
+%% both stacks and feeds the event sink (prg_notifier reads <<"format_version">>).
 event_metadata(undefined) ->
-    #{<<"format">> => 0};
+    event_metadata(0);
 event_metadata(Format) when is_integer(Format) ->
-    #{<<"format">> => Format}.
+    #{<<"format_version">> => Format, <<"format">> => Format}.
 
+%% Read order: legacy HG <<"format_version">> → legacy FF <<"format">> →
+%% atom format (defensive) → undefined.
+unmarshal_event_format(Meta) ->
+    maps:get(
+        <<"format_version">>,
+        Meta,
+        maps:get(<<"format">>, Meta, maps:get(format, Meta, undefined))
+    ).
+
+%% Already in machinery format {datetime, micro}.
+event_timestamp_to_datetime({{{_, _, _}, {_, _, _}}, Micro} = DtMicro) when is_integer(Micro) ->
+    DtMicro;
+%% Bare datetime (defensive) — assume zero microseconds.
 event_timestamp_to_datetime({{_, _, _}, {_, _, _}} = Dt) ->
-    Dt;
+    {Dt, 0};
+%% Integer timestamp stored by progressor — split into seconds + microseconds.
 event_timestamp_to_datetime(Ts) when is_integer(Ts) ->
-    TsSeconds = prg_utils:to_seconds(Ts),
-    calendar:system_time_to_universal_time(TsSeconds, second).
+    {Seconds, Micro} = prg_utils:split_timestamp(Ts),
+    {calendar:system_time_to_universal_time(Seconds, second), Micro}.
 
 dispatch_apply_event(Handler, EventID, Ts, Body, Model) ->
     case erlang:function_exported(Handler, apply_event, 4) of
@@ -507,18 +556,7 @@ request(NS, ID, Args, Range) ->
     }).
 
 encode_rpc_context() ->
-    WoodyContext =
-        try application:get_env(prg_machine, woody_context_loader, undefined) of
-            {M, F} when is_atom(M), is_atom(F) ->
-                M:F();
-            Loader when is_function(Loader, 0) ->
-                Loader();
-            undefined ->
-                woody_context:new()
-        catch
-            _:_ ->
-                woody_context:new()
-        end,
+    WoodyContext = operation_context:current_woody_context(),
     encode_term(woody_rpc_helper:encode_rpc_context(WoodyContext, otel_ctx:get_current())).
 
 decode_rpc_context(<<>>) ->
@@ -557,11 +595,25 @@ run_env_enter(Enter, WoodyCtx) when is_function(Enter, 1) ->
 run_env_enter(Enter, _WoodyCtx) when is_function(Enter, 0) ->
     Enter().
 
+run_with_env_leave(Leave, Fun) when is_function(Leave, 0), is_function(Fun, 0) ->
+    try
+        Fun()
+    after
+        Leave()
+    end.
+
 encode_term(Term) ->
     term_to_binary(Term).
 
 decode_term(Term) when is_binary(Term) ->
-    binary_to_term(Term, [safe]);
+    case binary_to_term(Term) of
+        %% Legacy double envelope: old hg_machine wrote
+        %% term_to_binary({bin, term_to_binary(Args)}) for call/init args.
+        {bin, Bin} when is_binary(Bin) ->
+            binary_to_term(Bin);
+        Decoded ->
+            Decoded
+    end;
 decode_term(Term) ->
     Term.
 
@@ -576,12 +628,6 @@ range_from_process(#{range := Range = #{}}) ->
     Range;
 range_from_process(_) ->
     #{direction => forward}.
-
--spec raise_exception({exception, atom(), term()} | {exception, atom(), term(), list()}) -> no_return().
-raise_exception({exception, Class, Reason, Stacktrace}) when is_list(Stacktrace) ->
-    erlang:raise(Class, Reason, Stacktrace);
-raise_exception({exception, Class, Reason}) ->
-    erlang:raise(Class, Reason, []).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -825,5 +871,40 @@ process_crash_conforms_progressor_exception() ->
         {error, {exception, error, deliberate_crash}},
         process({call, term_to_binary(crash), Process}, Opts, <<>>)
     ).
+
+%% --- Golden tests: legacy format compatibility (stage 1) -------------------
+
+-spec event_metadata_writes_both_keys_test() -> _.
+event_metadata_writes_both_keys_test() ->
+    %% Old HG reader expects <<"format_version">>, old FF reader expects
+    %% <<"format">>; we must keep both so a rollback to either stack still reads.
+    ?assertEqual(#{<<"format_version">> => 1, <<"format">> => 1}, event_metadata(1)),
+    ?assertEqual(#{<<"format_version">> => 0, <<"format">> => 0}, event_metadata(undefined)).
+
+-spec unmarshal_event_format_reads_legacy_keys_test() -> _.
+unmarshal_event_format_reads_legacy_keys_test() ->
+    %% New (both keys).
+    ?assertEqual(2, unmarshal_event_format(#{<<"format_version">> => 2, <<"format">> => 2})),
+    %% Legacy HG metadata: only <<"format_version">>.
+    ?assertEqual(1, unmarshal_event_format(#{<<"format_version">> => 1})),
+    %% Legacy FF metadata: only <<"format">>.
+    ?assertEqual(1, unmarshal_event_format(#{<<"format">> => 1})),
+    %% Defensive atom key and absence.
+    ?assertEqual(3, unmarshal_event_format(#{format => 3})),
+    ?assertEqual(undefined, unmarshal_event_format(#{})).
+
+-spec decode_term_reads_legacy_double_envelope_test() -> _.
+decode_term_reads_legacy_double_envelope_test() ->
+    Args = #{<<"some">> => <<"args">>, n => 42},
+    %% Legacy hg_machine wrapped call/init args as
+    %% term_to_binary({bin, term_to_binary(Args)}).
+    Legacy = term_to_binary({bin, term_to_binary(Args)}),
+    ?assertEqual(Args, decode_term(Legacy)),
+    %% New single envelope still works (rollback/forward invariant).
+    ?assertEqual(Args, decode_term(encode_term(Args))),
+    %% A genuine {bin, Bin} payload that is not double-wrapped term is returned
+    %% as the inner term only when the inner binary decodes — guard keeps us safe
+    %% for non-binary tuples.
+    ?assertEqual({bin, not_a_binary}, decode_term(term_to_binary({bin, not_a_binary}))).
 
 -endif.

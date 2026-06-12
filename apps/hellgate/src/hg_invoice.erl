@@ -20,6 +20,7 @@
 -include("hg_invoice.hrl").
 
 -include_lib("damsel/include/dmsl_repair_thrift.hrl").
+-include_lib("mg_proto/include/mg_proto_state_processing_thrift.hrl").
 -define(NS, invoice).
 -define(EVENT_FORMAT_VERSION, 1).
 
@@ -98,7 +99,7 @@
 
 %% API
 
--spec get(prg_machine:id()) -> {ok, st()} | {error, notfound}.
+-spec get(prg_machine:id()) -> {ok, st()} | {error, prg_machine:get_error()}.
 get(ID) ->
     case prg_machine:get(?NS, ID) of
         {ok, Machine} ->
@@ -389,17 +390,27 @@ handle_expiration(St) ->
 }.
 
 -spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.
-process_call(Call, Machine) ->
+process_call(Call0, Machine) ->
+    Call = normalize_call(Call0),
     St = prg_machine:collapse(?MODULE, Machine),
     try
         CallResult = handle_call(Call, St),
-        _ = log_changes(maps:get(changes, CallResult, []), validate_changes(CallResult)),
         Response = maps:get(response, CallResult, ok),
         {call_response(Response), to_prg_result(CallResult)}
     catch
         throw:Exception ->
             {{exception, Exception}, #{}}
     end.
+
+%% Compat: legacy hg_machine stored pending call args as the double-wrapped
+%% {thrift_call, ServiceName, FunRef, EncodedArgs}; the current form is {FunRef, Args}.
+%% Only in-flight call/init tasks at deploy time hit this branch.
+normalize_call({thrift_call, ServiceName, {Service, _Function} = FunRef, EncodedArgs}) ->
+    {Module, Service} = hg_proto:get_service(ServiceName),
+    Args = hg_proto_utils:deserialize_function_args({Module, FunRef}, EncodedArgs),
+    {FunRef, Args};
+normalize_call(Call) ->
+    Call.
 
 -spec handle_call(call(), st()) -> call_result().
 handle_call({{'Invoicing', 'StartPayment'}, {_InvoiceID, PaymentParams}}, St0) ->
@@ -688,7 +699,10 @@ wrap_payment_impact(PaymentID, {Response, {Changes, Action}}, St, OccurredAt) ->
 
 -spec to_prg_result(handler_result()) -> prg_result().
 to_prg_result(Result) ->
-    _ = validate_changes(Result),
+    %% Validate once (collapsing the changes) and log them, as the old handle_result
+    %% did for signal/call/repair alike.
+    St = validate_changes(Result),
+    _ = log_changes(maps:get(changes, Result, []), St),
     to_prg_result_(Result).
 
 %% No `auxst` here: invoice sets it only in `init/2`; call/signal/repair must not touch aux_state (M1).
@@ -1006,6 +1020,10 @@ apply_event(EventID, Ts, Changes, St0) ->
 
 event_timestamp_to_binary(Bin) when is_binary(Bin) ->
     Bin;
+event_timestamp_to_binary({{_, _} = Dt, Micro}) when is_integer(Micro) ->
+    %% Format with microseconds, matching the legacy MG RFC3339 created_at.
+    USec = genlib_time:daytime_to_unixtime(Dt) * 1000000 + Micro,
+    hg_datetime:format_ts(USec, microsecond);
 event_timestamp_to_binary(Dt) ->
     hg_datetime:format_dt(Dt).
 
@@ -1038,11 +1056,14 @@ marshal_aux_state(AuxSt) ->
 unmarshal_aux_state(<<>>) ->
     #{};
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    try
-        mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))
-    catch
-        _:_ ->
-            binary_to_term(Payload, [safe])
+    %% Legacy hg_progressor stored term_to_binary(#mg_stateproc_Content{data = Msgp});
+    %% the current branch stores term_to_binary(mg_msgpack_marshalling:marshal(AuxSt)).
+    %% Both unwrap to a msgpack Value that mg_msgpack_marshalling:unmarshal decodes.
+    case binary_to_term(Payload) of
+        #mg_stateproc_Content{data = Data} ->
+            mg_msgpack_marshalling:unmarshal(Data);
+        Msgp ->
+            mg_msgpack_marshalling:unmarshal(Msgp)
     end.
 
 msgpack_payload_to_binary(Msgp) ->
@@ -1058,7 +1079,7 @@ decode_event_body(Payload) ->
 
 try_unmarshal_msgpack_payload(Payload) ->
     try
-        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))}
+        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload))}
     catch
         _:_ ->
             {error, invalid_msgpack_payload}
@@ -1142,5 +1163,24 @@ construct_refund_id_test() ->
     IDs = [X || {_, X} <- lists:sort([{rand:uniform(), N} || N <- lists:seq(1, 10)])],
     Refunds = lists:map(fun create_dummy_refund_with_id/1, IDs),
     ?assert(<<"11">> =:= construct_refund_id(Refunds)).
+
+%% --- Golden tests: legacy HG aux_state compatibility (stage 1.4) -----------
+
+-spec aux_state_roundtrip_test() -> _.
+aux_state_roundtrip_test() ->
+    AuxSt = #{<<"k">> => <<"v">>},
+    ?assertEqual(AuxSt, unmarshal_aux_state(marshal_aux_state(AuxSt))).
+
+-spec aux_state_empty_test() -> _.
+aux_state_empty_test() ->
+    ?assertEqual(#{}, unmarshal_aux_state(<<>>)).
+
+-spec aux_state_reads_legacy_mg_content_test() -> _.
+aux_state_reads_legacy_mg_content_test() ->
+    %% Legacy hg_progressor stored term_to_binary(#mg_stateproc_Content{data = Msgp}).
+    AuxSt = #{<<"legacy">> => 1},
+    Msgp = mg_msgpack_marshalling:marshal(AuxSt),
+    Legacy = term_to_binary(#mg_stateproc_Content{format_version = 1, data = Msgp}),
+    ?assertEqual(AuxSt, unmarshal_aux_state(Legacy)).
 
 -endif.

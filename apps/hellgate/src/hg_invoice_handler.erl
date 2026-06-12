@@ -150,7 +150,8 @@ ensure_started(ID, TemplateID, Params, Allocation, Mutations, DomainRevision) ->
     Invoice = hg_invoice:create(ID, TemplateID, Params, Allocation, Mutations, DomainRevision),
     case prg_machine:start(hg_invoice:namespace(), ID, hg_invoice:marshal_invoice(Invoice)) of
         {ok, _} -> ok;
-        {error, exists} -> ok
+        {error, exists} -> ok;
+        {error, Reason} -> erlang:error(Reason)
     end.
 
 call(ID, Function, Args) ->
@@ -226,7 +227,10 @@ get_state(ID) ->
         {ok, St} ->
             St;
         {error, notfound} ->
-            throw({exception, #payproc_InvoiceNotFound{}})
+            throw(#payproc_InvoiceNotFound{});
+        {error, {exception, Class, Reason}} ->
+            _ = logger:error("invoice ~p get failed: ~p:~p", [ID, Class, Reason]),
+            erlang:error({process_exception, Class, Reason})
     end.
 
 get_state(ID, AfterID, Limit) ->

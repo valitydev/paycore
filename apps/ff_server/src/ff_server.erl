@@ -39,7 +39,6 @@ start() ->
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
     ok = setup_metrics(),
-    ok = application:set_env(prg_machine, woody_context_loader, fun woody_rpc_context/0),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec stop(any()) -> ok.
@@ -133,15 +132,3 @@ wrap_handler(Handler, WrapperOpts) ->
 setup_metrics() ->
     ok = woody_ranch_prometheus_collector:setup(),
     ok = woody_hackney_prometheus_collector:setup().
-
--spec woody_rpc_context() -> woody_context:ctx().
-woody_rpc_context() ->
-    try operation_context:load_fistful() of
-        Ctx ->
-            operation_context:get_woody_context(Ctx)
-    catch
-        Class:Reason ->
-            _ = logger:warning("Failed to load context with error class '~s' and reason: ~p", [Class, Reason]),
-            _ = logger:info("Creating empty fallback context"),
-            woody_context:new()
-    end.

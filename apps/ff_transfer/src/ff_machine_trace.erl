@@ -88,7 +88,7 @@ decode_trace_value(Value) ->
 %% Same contract as prg_machine:decode_term/1.
 -spec decode_term(term()) -> term().
 decode_term(Bin) when is_binary(Bin) ->
-    binary_to_term(Bin, [safe]);
+    binary_to_term(Bin);
 decode_term(Term) ->
     Term.
 

@@ -223,6 +223,15 @@ process_session(#{status := {finished, _}, id := ID, result := Result, withdrawa
     case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, Result}) of
         ok ->
             {suspend, []};
+        {error, failed} ->
+            %% The target withdrawal machine is already in error. The legacy
+            %% machinery notify was fire-and-forget, so a broken target never
+            %% poisoned the session — keep that behaviour, just log a warning.
+            _ = logger:warning(
+                "Withdrawal ~p is in error, dropping session_finished notification for session ~p",
+                [WithdrawalID, ID]
+            ),
+            {suspend, []};
         {error, _} = Error ->
             erlang:error({unable_to_finish_session, Error})
     end;
@@ -428,27 +437,27 @@ process_repair(Scenario, Machine) ->
             {ok, {ok, #{action => Action, events => Events}}}
         end
     },
-    case ff_repair:apply_scenario(?MODULE, to_repair_machine(Machine), Scenario, ScenarioProcessors) of
+    case ff_repair:apply_scenario(?MODULE, ff_machine_lib:to_repair_machine(Machine), Scenario, ScenarioProcessors) of
         {ok, {_Response, Result}} ->
-            from_repair_result(Result, Machine);
+            ff_machine_lib:from_repair_result(Result, Machine);
         {error, Reason} ->
             {error, Reason}
     end.
 
 -spec process_notification(term(), machine()) -> prg_result().
 process_notification(_Args, _Machine) ->
-    #{events => [], action => timeout}.
+    #{}.
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->
-    Timestamped = {ev, {prg_machine:timestamp(), 0}, Body},
+    Timestamped = {ev, prg_machine:timestamp(), Body},
     Encoded = ff_machine_codec:marshal_event(withdrawal_session, ?EVENT_FORMAT_VERSION, Timestamped),
     {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
 
 -spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
 unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
     Timestamped = ff_machine_codec:unmarshal_event(withdrawal_session, ?EVENT_FORMAT_VERSION, Payload),
-    event_body_from_timestamped(Timestamped);
+    ff_machine_lib:event_body_from_timestamped(Timestamped);
 unmarshal_event_body(Format, _Payload) ->
     erlang:error({unknown_event_format, Format}).
 
@@ -466,37 +475,4 @@ process_session_result({Action, Events}, Machine) ->
         events => Events,
         action => Action,
         auxst => maps:get(aux_state, Machine, #{})
-    }.
-
--type repair_result() :: #{
-    events := [term()],
-    action => action(),
-    aux_state => term()
-}.
-
--spec from_repair_result(repair_result(), machine()) -> prg_result().
-from_repair_result(#{events := Events} = Result, Machine) ->
-    #{
-        events => repair_events_to_domain(Events),
-        action => maps:get(action, Result, idle),
-        auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
-    }.
-
--spec repair_events_to_domain([term()]) -> [event()].
-repair_events_to_domain(Events) ->
-    [event_body_from_timestamped(E) || E <- Events].
-
--spec event_body_from_timestamped(term()) -> event().
-event_body_from_timestamped({ev, _Timestamp, Change}) ->
-    Change;
-event_body_from_timestamped(Change) ->
-    Change.
-
--spec to_repair_machine(machine()) -> ff_repair:machine().
-to_repair_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxState}) ->
-    #{
-        namespace => NS,
-        id => ID,
-        history => [{EventID, {ev, Timestamp, Body}} || {EventID, Timestamp, Body} <- History],
-        aux_state => AuxState
     }.

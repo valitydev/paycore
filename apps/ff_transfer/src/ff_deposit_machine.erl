@@ -13,8 +13,7 @@
 -type event() :: {integer(), timestamped_event(change())}.
 -type st() :: #{
     model := deposit(),
-    ctx := ctx(),
-    times => {timestamp() | undefined, timestamp() | undefined}
+    ctx := ctx()
 }.
 -type deposit() :: ff_deposit:deposit_state().
 -type external_id() :: id().
@@ -91,7 +90,9 @@ get(ID, {After, Limit}) ->
         {ok, Machine} ->
             {ok, machine_to_st(Machine)};
         {error, notfound} ->
-            {error, {unknown_deposit, ID}}
+            {error, {unknown_deposit, ID}};
+        {error, {exception, Class, Reason}} ->
+            erlang:error({process_exception, Class, Reason})
     end.
 
 -spec events(id(), event_range()) ->
@@ -100,9 +101,11 @@ get(ID, {After, Limit}) ->
 events(ID, {After, Limit}) ->
     case prg_machine:get_history(?NS, ID, After, Limit, forward) of
         {ok, History} ->
-            {ok, history_to_events(History)};
+            {ok, ff_machine_lib:history_to_events(History)};
         {error, notfound} ->
-            {error, {unknown_deposit, ID}}
+            {error, {unknown_deposit, ID}};
+        {error, {exception, Class, Reason}} ->
+            erlang:error({process_exception, Class, Reason})
     end.
 
 -spec repair(id(), ff_repair:scenario()) ->
@@ -115,10 +118,8 @@ repair(ID, Scenario) ->
             {error, notfound};
         {error, working} ->
             {error, working};
-        {error, failed} ->
-            {error, {failed, {invalid_result, unexpected_failure}}};
-        {error, {repair, {failed, _Reason}}} = Error ->
-            Error
+        {error, {repair, {failed, Reason}}} ->
+            {error, {failed, Reason}}
     end.
 
 %% Accessors
@@ -134,36 +135,12 @@ ctx(#{ctx := Ctx}) ->
 %% Internals
 
 -spec machine_to_st(prg_machine:machine()) -> st().
-machine_to_st(#{history := History, aux_state := AuxState} = Machine) ->
+machine_to_st(#{aux_state := undefined} = Machine) ->
+    machine_to_st(Machine#{aux_state => #{}});
+machine_to_st(#{aux_state := AuxState} = Machine) ->
     Model = prg_machine:collapse(ff_deposit, Machine),
     Ctx = maps:get(ctx, AuxState, #{}),
     #{
         model => Model,
-        ctx => Ctx,
-        times => history_times(History)
+        ctx => Ctx
     }.
-
--spec history_to_events(prg_machine:history()) -> [event()].
-history_to_events(History) ->
-    [{EventID, {ev, codec_timestamp(Timestamp), Body}} || {EventID, Timestamp, Body} <- History].
-
--spec history_times(prg_machine:history()) ->
-    {prg_machine:timestamp() | undefined, prg_machine:timestamp() | undefined}.
-history_times([]) ->
-    {undefined, undefined};
-history_times(History) ->
-    lists:foldl(
-        fun({_EventID, Timestamp, _Body}, {Created, _Updated}) ->
-            case Created of
-                undefined -> {Timestamp, Timestamp};
-                _ -> {Created, Timestamp}
-            end
-        end,
-        {undefined, undefined},
-        History
-    ).
-
-codec_timestamp({DateTime, USec} = Timestamp) when is_integer(USec) ->
-    {DateTime, USec} = Timestamp;
-codec_timestamp(DateTime) ->
-    {DateTime, 0}.

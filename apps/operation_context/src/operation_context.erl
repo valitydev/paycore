@@ -25,6 +25,7 @@
 -export([fistful_binding/0]).
 -export([env_enter/2]).
 -export([env_leave/1]).
+-export([current_woody_context/0]).
 
 -type registry_key() :: {p, l, term()}.
 -type cleanup_mode() :: strict | lenient.
@@ -152,6 +153,32 @@ env_enter(WoodyCtx, #{registry_key := RegistryKey}) ->
 -spec env_leave(binding()) -> ok.
 env_leave(#{registry_key := RegistryKey, cleanup_mode := CleanupMode}) ->
     cleanup(RegistryKey, CleanupMode).
+
+%% Resolve the woody context bound to the current process: try the hellgate
+%% binding first, then the fistful one (their gproc keys differ, so there is no
+%% collision), falling back to a fresh context with a warning. Replaces the old
+%% global prg_machine woody_context_loader app-env hook.
+-spec current_woody_context() -> woody_context().
+current_woody_context() ->
+    case try_load_woody_context([?HG_REGISTRY_KEY, ?FF_REGISTRY_KEY]) of
+        {ok, WoodyContext} ->
+            WoodyContext;
+        error ->
+            _ = logger:warning(
+                "operation_context: no woody context bound to the current process, using a fresh one"
+            ),
+            woody_context:new()
+    end.
+
+-spec try_load_woody_context([registry_key()]) -> {ok, woody_context()} | error.
+try_load_woody_context([]) ->
+    error;
+try_load_woody_context([Key | Rest]) ->
+    try get_woody_context(load(Key)) of
+        WoodyContext -> {ok, WoodyContext}
+    catch
+        _:_ -> try_load_woody_context(Rest)
+    end.
 
 -spec get_woody_context(context()) -> woody_context().
 get_woody_context(#{woody_context := WoodyContext}) ->

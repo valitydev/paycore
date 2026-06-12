@@ -12,7 +12,7 @@
 -export_type([t/0, timer/0, seconds/0, timer_field/0, remove_field/0]).
 
 -type seconds() :: timeout_sec().
--type datetime() :: calendar:datetime() | binary().
+-type datetime() :: calendar:datetime() | {calendar:datetime(), non_neg_integer()} | binary().
 -type timer() :: {timeout, seconds()} | {deadline, datetime()}.
 -type t() :: action().
 
@@ -29,21 +29,23 @@ schedule_timer(Timer) ->
 schedule_after(0) ->
     timeout;
 schedule_after(Seconds) when is_integer(Seconds), Seconds > 0 ->
-    {schedule, #{at => erlang:system_time(second) + Seconds, action => timeout}}.
+    {schedule, #{at => erlang:system_time(microsecond) + Seconds * 1000000, action => timeout}}.
 
 -spec schedule_deadline(datetime()) -> t().
 schedule_deadline(Deadline) ->
     {schedule, #{at => marshal_timer({deadline, Deadline}), action => timeout}}.
 
--spec marshal_timer(timer()) -> timestamp_sec().
+-spec marshal_timer(timer()) -> timestamp_us().
 marshal_timer({timeout, 0}) ->
-    erlang:system_time(second);
+    erlang:system_time(microsecond);
 marshal_timer({timeout, Seconds}) when is_integer(Seconds), Seconds >= 0 ->
-    erlang:system_time(second) + Seconds;
-marshal_timer({deadline, {_, _} = Dt}) ->
-    calendar:datetime_to_gregorian_seconds(Dt) - ?EPOCH_DIFF;
+    erlang:system_time(microsecond) + Seconds * 1000000;
+marshal_timer({deadline, {{{_, _, _}, {_, _, _}} = Dt, USec}}) when is_integer(USec) ->
+    datetime_to_microseconds(Dt, USec);
+marshal_timer({deadline, {{_, _, _}, {_, _, _}} = Dt}) ->
+    datetime_to_microseconds(Dt, 0);
 marshal_timer({deadline, Bin}) when is_binary(Bin) ->
-    calendar:rfc3339_to_system_time(unicode:characters_to_list(Bin), [{unit, second}]);
+    calendar:rfc3339_to_system_time(unicode:characters_to_list(Bin), [{unit, microsecond}]);
 marshal_timer(Other) ->
     error({invalid_timer, Other}).
 
@@ -102,3 +104,9 @@ repair_remove_field(undefined) ->
     undefined;
 repair_remove_field(#repair_RemoveAction{}) ->
     remove.
+
+%%
+
+datetime_to_microseconds(Dt, USec) ->
+    Sec = calendar:datetime_to_gregorian_seconds(Dt) - ?EPOCH_DIFF,
+    Sec * 1000000 + USec.

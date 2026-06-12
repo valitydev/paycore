@@ -89,22 +89,29 @@ unmarshal_event(withdrawal_session, 1, Payload) ->
 unmarshal_event(Domain, Format, _Payload) ->
     erlang:error({unknown_event_format, Domain, Format}).
 
+%% aux_state: write in the legacy envelope term_to_binary(AuxSt) (as the old
+%% machinery_prg_backend did). Reading tries both: legacy term first, then the
+%% msgpack-thrift form this branch briefly wrote.
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->
-    payload_to_binary(ff_machine_schema:marshal(AuxSt)).
+    term_to_binary(AuxSt).
 
 -spec unmarshal_aux_state(binary()) -> term().
 unmarshal_aux_state(<<>>) ->
     #{};
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    ff_machine_schema:unmarshal(binary_to_payload(Payload)).
+    try
+        binary_to_term(Payload)
+    catch
+        error:badarg ->
+            ff_machine_schema:unmarshal(binary_to_payload(Payload))
+    end.
 
+%% Event payload: write the legacy envelope term_to_binary({bin, ThriftBin})
+%% (machinery_prg_backend used machinery_utils:encode(term, ...)).
 -spec payload_to_binary(ff_msgpack:t()) -> binary().
-payload_to_binary({bin, Bin}) when is_binary(Bin) ->
-    Bin;
 payload_to_binary(Payload) ->
-    {ok, Bin} = ff_msgpack:pack(Payload),
-    Bin.
+    term_to_binary(Payload).
 
 -spec binary_to_payload(binary()) -> ff_msgpack:t().
 binary_to_payload(Bin) when is_binary(Bin) ->
@@ -122,6 +129,20 @@ marshal_thrift_event(Timestamped, MarshalFun, ThriftModule, ThriftStruct) ->
     Type = {struct, struct, {ThriftModule, ThriftStruct}},
     {bin, ff_proto_utils:serialize(Type, ThriftChange)}.
 
+%% Sniff the stored payload: legacy events are term_to_binary({bin, ThriftBin})
+%% (first byte 131); events written by this branch are raw thrift. The sniff is
+%% only safe in this direction — a thrift struct never starts with 131, whereas
+%% msgpack fixmap(3) is 0x83, so we must check the term envelope first.
+sniff_thrift_payload(<<131, _/binary>> = Payload) ->
+    case binary_to_term(Payload) of
+        {bin, Bin} when is_binary(Bin) ->
+            Bin;
+        Other ->
+            erlang:error({legacy_msgpack_event, Other})
+    end;
+sniff_thrift_payload(Payload) when is_binary(Payload) ->
+    Payload.
+
 -spec unmarshal_thrift_event(
     binary(),
     fun((term()) -> timestamped_event()),
@@ -129,6 +150,39 @@ marshal_thrift_event(Timestamped, MarshalFun, ThriftModule, ThriftStruct) ->
     atom()
 ) -> timestamped_event().
 unmarshal_thrift_event(Payload, UnmarshalFun, ThriftModule, ThriftStruct) ->
+    ThriftBin = sniff_thrift_payload(Payload),
     Type = {struct, struct, {ThriftModule, ThriftStruct}},
-    ThriftChange = ff_proto_utils:deserialize(Type, Payload),
+    ThriftChange = ff_proto_utils:deserialize(Type, ThriftBin),
     UnmarshalFun(ThriftChange).
+
+%% --- Golden tests: legacy FF format compatibility (stage 1) ----------------
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec aux_state_roundtrip_test() -> _.
+aux_state_roundtrip_test() ->
+    AuxSt = #{ctx => #{<<"k">> => <<"v">>}, model => some_model},
+    ?assertEqual(AuxSt, unmarshal_aux_state(marshal_aux_state(AuxSt))).
+
+-spec aux_state_empty_test() -> _.
+aux_state_empty_test() ->
+    ?assertEqual(#{}, unmarshal_aux_state(<<>>)).
+
+-spec aux_state_reads_legacy_term_to_binary_test() -> _.
+aux_state_reads_legacy_term_to_binary_test() ->
+    %% Legacy machinery wrote aux_state as plain term_to_binary(AuxSt).
+    AuxSt = #{ctx => #{}, model => legacy},
+    ?assertEqual(AuxSt, unmarshal_aux_state(term_to_binary(AuxSt))).
+
+-spec sniff_thrift_payload_reads_legacy_envelope_test() -> _.
+sniff_thrift_payload_reads_legacy_envelope_test() ->
+    ThriftBin = <<0, 1, 2, 3, 4>>,
+    %% Legacy machinery_prg_backend wrote events as term_to_binary({bin, ThriftBin}).
+    ?assertEqual(ThriftBin, sniff_thrift_payload(term_to_binary({bin, ThriftBin}))),
+    %% New format: raw thrift binary returned as-is.
+    ?assertEqual(ThriftBin, sniff_thrift_payload(ThriftBin)).
+
+-endif.
