@@ -421,7 +421,7 @@ unmarshal_msgpack({obj, V}) when is_map(V) ->
     maps:fold(fun(Key, Value, Map) -> Map#{unmarshal_msgpack(Key) => unmarshal_msgpack(Value)} end, #{}, V).
 
 %% base.Timer deadline on the wire is base.Timestamp (RFC3339).
-%% progressor_action:timer() expects {deadline, calendar:datetime() | binary()}.
+%% hg_machine_action:timer() expects {deadline, calendar:datetime() | binary()}.
 unmarshal_provider_timer({deadline, Deadline}) when is_binary(Deadline) ->
     {deadline, Deadline};
 unmarshal_provider_timer({deadline, {DateTime, _USec}}) ->

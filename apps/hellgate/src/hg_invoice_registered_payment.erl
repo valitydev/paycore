@@ -109,7 +109,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
     ChangeOpts = #{
         invoice_id => Invoice#domain_Invoice.id
     },
-    {collapse_changes(Events, undefined, ChangeOpts), {Events, progressor_action:instant()}}.
+    {collapse_changes(Events, undefined, ChangeOpts), {Events, timeout}}.
 
 -spec merge_change(
     hg_invoice_payment:change(),
@@ -147,19 +147,18 @@ process_signal(timeout, St, Options) ->
     ).
 
 process_timeout(St) ->
-    Action = progressor_action:new(),
+    Action = idle,
     process_timeout(hg_invoice_payment:get_activity(St), Action, St).
 
-process_timeout({payment, processing_capture}, Action, St) ->
+process_timeout({payment, processing_capture}, _Action, St) ->
     %% It is an intermediate activity in hg_invoice_payment, but is used to initiate holds,
     %% due to need to save Transaction Info during initiation.
-    process_processing_capture(Action, St);
+    process_processing_capture(St);
 process_timeout(Activity, Action, St) ->
     hg_invoice_payment:process_timeout(Activity, Action, St).
 
--spec process_processing_capture(hg_invoice_payment:action(), hg_invoice_payment:st()) ->
-    hg_invoice_payment:machine_result().
-process_processing_capture(Action, St) ->
+-spec process_processing_capture(hg_invoice_payment:st()) -> hg_invoice_payment:machine_result().
+process_processing_capture(St) ->
     Opts = hg_invoice_payment:get_opts(St),
     Invoice = hg_invoice_payment:get_invoice(Opts),
     #domain_InvoicePayment{
@@ -172,7 +171,7 @@ process_processing_capture(Action, St) ->
         hg_session:wrap_event(?captured(?CAPTURE_REASON, Cost), hg_session:create()),
         hg_session:wrap_event(?captured(?CAPTURE_REASON, Cost), ?session_finished(?session_succeeded()))
     ],
-    {next, {Events, progressor_action:set_timeout(0, Action)}}.
+    {next, {Events, timeout}}.
 
 hold_payment_cashflow(St) ->
     PlanID = hg_invoice_payment:construct_payment_plan_id(St),

@@ -330,7 +330,7 @@ namespace() ->
 init({Events, Ctx}, _Machine) ->
     #{
         events => Events,
-        action => progressor_action:instant(),
+        action => timeout,
         auxst => #{ctx => Ctx}
     }.
 
@@ -682,11 +682,11 @@ from_repair_result(#{events := Events} = Result, Machine) ->
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
 
--spec map_action(action()) -> progressor_action:t() | undefined.
+-spec map_action(action()) -> hg_machine_action:t().
 map_action(undefined) ->
-    undefined;
+    idle;
 map_action(continue) ->
-    progressor_action:instant().
+    timeout.
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

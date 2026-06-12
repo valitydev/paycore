@@ -255,7 +255,7 @@ namespace() ->
 init({Events, Ctx}, _Machine) ->
     #{
         events => Events,
-        action => progressor_action:instant(),
+        action => timeout,
         auxst => #{ctx => Ctx}
     }.
 
@@ -280,7 +280,7 @@ process_repair(Scenario, Machine) ->
 
 -spec process_notification(term(), machine()) -> prg_result().
 process_notification(_Args, _Machine) ->
-    #{events => [], action => progressor_action:instant()}.
+    #{events => [], action => timeout}.
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->
@@ -303,13 +303,27 @@ marshal_aux_state(AuxSt) ->
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
     ff_machine_codec:unmarshal_aux_state(Payload).
 
--spec from_repair_result(map(), machine()) -> prg_result().
+-type action() :: continue | undefined.
+
+-type repair_result() :: #{
+    events := [term()],
+    action => action(),
+    aux_state => term()
+}.
+
+-spec from_repair_result(repair_result(), machine()) -> prg_result().
 from_repair_result(#{events := Events} = Result, Machine) ->
     #{
         events => repair_events_to_domain(Events),
-        action => undefined,
+        action => map_action(maps:get(action, Result, undefined)),
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
+
+-spec map_action(action()) -> hg_machine_action:t().
+map_action(undefined) ->
+    idle;
+map_action(continue) ->
+    timeout.
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

@@ -96,7 +96,7 @@
 
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
--type action() :: progressor_action:t().
+-type action() :: hg_machine_action:t().
 
 %% API
 
@@ -307,7 +307,7 @@ init(Invoice, _Machine) ->
     Changes = [?invoice_created(UnmarshalledInvoice)],
     #{
         events => [Changes],
-        action => set_invoice_timer(progressor_action:new(), #st{invoice = UnmarshalledInvoice}),
+        action => set_invoice_timer(idle, #st{invoice = UnmarshalledInvoice}),
         auxst => #{}
     }.
 
@@ -359,22 +359,21 @@ handle_signal(timeout, #st{activity = invoice} = St) ->
     handle_expiration(St).
 
 construct_repair_action(CA) when CA /= undefined ->
-    lists:foldl(
-        fun merge_repair_action/2,
-        progressor_action:new(),
-        [{timer, CA#repair_ComplexAction.timer}, {remove, CA#repair_ComplexAction.remove}]
-    );
+    case CA#repair_ComplexAction.remove of
+        #repair_RemoveAction{} ->
+            remove;
+        undefined ->
+            case CA#repair_ComplexAction.timer of
+                undefined ->
+                    idle;
+                {set_timer, #repair_SetTimerAction{timer = Timer}} ->
+                    hg_machine_action:schedule_timer(Timer);
+                {unset_timer, #repair_UnsetTimerAction{}} ->
+                    suspend
+            end
+    end;
 construct_repair_action(undefined) ->
-    progressor_action:new().
-
-merge_repair_action({timer, {set_timer, #repair_SetTimerAction{timer = Timer}}}, Action) ->
-    progressor_action:set_timer(Timer, Action);
-merge_repair_action({timer, {unset_timer, #repair_UnsetTimerAction{}}}, Action) ->
-    progressor_action:unset_timer(Action);
-merge_repair_action({remove, #repair_RemoveAction{}}, Action) ->
-    progressor_action:mark_removal(Action);
-merge_repair_action({_, undefined}, Action) ->
-    Action.
+    idle.
 
 should_validate_transitions(#payproc_InvoiceRepairParams{validate_transitions = V}) when is_boolean(V) ->
     V;
@@ -473,7 +472,7 @@ handle_call({{'Invoicing', 'Rescind'}, {_InvoiceID, Reason}}, St0) ->
     #{
         response => ok,
         changes => [?invoice_status_changed(?invoice_cancelled(hg_utils:format_reason(Reason)))],
-        action => progressor_action:unset_timer(),
+        action => suspend,
         state => St
     };
 handle_call({{'Invoicing', 'RefundPayment'}, {_InvoiceID, PaymentID, Params}}, St0) ->
@@ -542,8 +541,8 @@ assert_no_pending_payment(_) ->
 set_invoice_timer(Action, #st{invoice = Invoice} = St) ->
     set_invoice_timer(Invoice#domain_Invoice.status, Action, St).
 
-set_invoice_timer(?invoice_unpaid(), Action, #st{invoice = #domain_Invoice{due = Due}}) ->
-    progressor_action:set_deadline(Due, Action);
+set_invoice_timer(?invoice_unpaid(), _Action, #st{invoice = #domain_Invoice{due = Due}}) ->
+    hg_machine_action:schedule_deadline(Due);
 set_invoice_timer(_Status, Action, _St) ->
     Action.
 
@@ -1091,24 +1090,23 @@ changes_from_msgpack_data(#{format_version := V, data := Data}) ->
 changes_from_msgpack_data(Changes) when is_list(Changes) ->
     Changes.
 
--spec action_to_prg(progressor_action:t() | undefined) -> action().
+-spec action_to_prg(action() | undefined) -> action().
 action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
-    Action0 = progressor_action:new(),
-    Action1 =
-        case Timer of
-            undefined ->
-                Action0;
-            {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
-                progressor_action:set_timer(T, Action0);
-            {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
-                progressor_action:unset_timer(Action0)
-        end,
     case Remove of
-        undefined ->
-            Action1;
         #mg_stateproc_RemoveAction{} ->
-            progressor_action:mark_removal(Action1)
+            remove;
+        undefined ->
+            case Timer of
+                undefined ->
+                    idle;
+                {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
+                    hg_machine_action:schedule_timer(T);
+                {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
+                    suspend
+            end
     end;
+action_to_prg(undefined) ->
+    idle;
 action_to_prg(Action) ->
     Action.
 

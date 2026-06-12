@@ -33,7 +33,7 @@
 -type signal() :: timeout | {repair, args()}.
 -type result() :: #{
     events => [event_body()],
-    action => progressor_action:t(),
+    action => action(),
     auxst => term()
 }.
 
@@ -341,7 +341,7 @@ dispatch(Handler, call, BinArgs, Machine) ->
         {notify, Args} ->
             dispatch_notification(Handler, Args, Machine);
         remove ->
-            #{events => [], action => progressor_action:remove(), auxst => maps:get(aux_state, Machine)};
+            #{events => [], action => remove, auxst => maps:get(aux_state, Machine)};
         Call ->
             Handler:process_call(Call, Machine)
     end;
@@ -371,15 +371,19 @@ marshal_process_result(_Handler, _LastEventID, {error, Reason}) ->
     {error, encode_term(Reason)}.
 
 marshal_intent(Handler, LastEventID, Result) when is_map(Result) ->
-    Base = genlib_map:compact(#{
-        events => marshal_new_events(Handler, LastEventID, maps:get(events, Result, [])),
-        action => maps:get(action, Result, progressor_action:new())
-    }),
+    Base0 = #{events => marshal_new_events(Handler, LastEventID, maps:get(events, Result, []))},
+    Base1 =
+        case maps:get(action, Result, idle) of
+            idle ->
+                Base0;
+            Action ->
+                Base0#{action => Action}
+        end,
     case maps:is_key(auxst, Result) of
         true ->
-            Base#{aux_state => marshal_aux_state(Handler, maps:get(auxst, Result))};
+            Base1#{aux_state => marshal_aux_state(Handler, maps:get(auxst, Result))};
         false ->
-            Base
+            Base1
     end.
 
 %% Internals — progressor <-> machine

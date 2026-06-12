@@ -24,14 +24,14 @@ namespace() ->
 init(_Args, _Machine) ->
     #{
         events => [],
-        action => progressor_action:new(),
+        action => idle,
         auxst => #{model => initialized}
     }.
 
 -spec process_signal(prg_machine:signal(), prg_machine:machine()) -> prg_machine:result().
 process_signal(timeout, Machine) ->
     _ = prg_machine:collapse(?MODULE, Machine),
-    #{events => [], action => progressor_action:new()}.
+    #{events => [], action => idle}.
 
 -spec process_call(prg_machine:call(), prg_machine:machine()) ->
     {prg_machine:response(), prg_machine:result()}.
@@ -41,11 +41,11 @@ process_call(crash, _Machine) ->
     erlang:error(deliberate_crash);
 process_call(recheck, Machine) ->
     Model = prg_machine:collapse(?MODULE, Machine),
-    {ok, #{events => [], action => progressor_action:new(), auxst => #{model => Model}}}.
+    {ok, #{events => [], action => idle, auxst => #{model => Model}}}.
 
 -spec process_repair(prg_machine:args(), prg_machine:machine()) -> prg_machine:result() | {error, term()}.
 process_repair(_Args, _Machine) ->
-    #{events => [], action => progressor_action:new()}.
+    #{events => [], action => idle}.
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(undefined) ->
