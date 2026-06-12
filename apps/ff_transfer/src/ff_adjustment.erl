@@ -92,7 +92,7 @@
 -type target_status() :: term().
 -type final_cash_flow() :: ff_cash_flow:final_cash_flow().
 -type p_transfer() :: ff_postings_transfer:transfer().
--type action() :: continue | undefined.
+-type action() :: prg_action:t().
 -type process_result() :: {action(), [event()]}.
 -type legacy_event() :: any().
 -type external_id() :: id().
@@ -158,7 +158,7 @@ create(Params) ->
         operation_timestamp => Timestamp,
         external_id => maps:get(external_id, Params, undefined)
     }),
-    {ok, {continue, [{created, Adjustment}]}}.
+    {ok, {timeout, [{created, Adjustment}]}}.
 
 %% Transfer logic callbacks
 
@@ -234,10 +234,10 @@ do_process_transfer(p_transfer_start, Adjustment) ->
     create_p_transfer(Adjustment);
 do_process_transfer(p_transfer_prepare, Adjustment) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Adjustment, fun ff_postings_transfer:prepare/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(p_transfer_commit, Adjustment) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Adjustment, fun ff_postings_transfer:commit/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(finish, Adjustment) ->
     process_transfer_finish(Adjustment).
 
@@ -251,11 +251,11 @@ create_p_transfer(Adjustment) ->
     {ok, FinalCashFlow} = ff_cash_flow:combine(Old, New),
     PTransferID = construct_p_transfer_id(id(Adjustment)),
     {ok, PostingsTransferEvents} = ff_postings_transfer:create(PTransferID, FinalCashFlow),
-    {continue, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
+    {timeout, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
 
 -spec process_transfer_finish(adjustment()) -> process_result().
 process_transfer_finish(_Adjustment) ->
-    {undefined, [{status_changed, succeeded}]}.
+    {idle, [{status_changed, succeeded}]}.
 
 -spec construct_p_transfer_id(id()) -> id().
 construct_p_transfer_id(ID) ->

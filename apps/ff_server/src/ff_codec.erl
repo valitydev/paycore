@@ -363,25 +363,16 @@ unmarshal(three_ds_verification, Value) when
         Value =:= authentication_could_not_be_performed
 ->
     Value;
+unmarshal(complex_action, undefined) ->
+    undefined;
 unmarshal(complex_action, #repairer_ComplexAction{
     timer = TimerAction,
     remove = RemoveAction
 }) ->
-    unmarshal(timer_action, TimerAction) ++ unmarshal(remove_action, RemoveAction);
-unmarshal(timer_action, undefined) ->
-    [];
-unmarshal(timer_action, {set_timer, SetTimerAction}) ->
-    [{set_timer, unmarshal(set_timer_action, SetTimerAction)}];
-unmarshal(timer_action, {unset_timer, #repairer_UnsetTimerAction{}}) ->
-    [unset_timer];
-unmarshal(remove_action, undefined) ->
-    [];
-unmarshal(remove_action, #repairer_RemoveAction{}) ->
-    [remove];
-unmarshal(set_timer_action, #repairer_SetTimerAction{
-    timer = Timer
-}) ->
-    unmarshal(timer, Timer);
+    prg_action:from_timer_remove(
+        unmarshal_repairer_timer_field(TimerAction),
+        unmarshal_repairer_remove_field(RemoveAction)
+    );
 unmarshal(timer, {timeout, Timeout}) ->
     {timeout, unmarshal(integer, Timeout)};
 unmarshal(timer, {deadline, Deadline}) ->
@@ -578,6 +569,18 @@ unmarshal(range, #'fistful_base_EventRange'{
     {Cursor, Limit, forward};
 unmarshal(bool, V) when is_boolean(V) ->
     V.
+
+unmarshal_repairer_timer_field(undefined) ->
+    undefined;
+unmarshal_repairer_timer_field({set_timer, #repairer_SetTimerAction{timer = Timer}}) ->
+    {set_timer, unmarshal(timer, Timer)};
+unmarshal_repairer_timer_field({unset_timer, _}) ->
+    unset_timer.
+
+unmarshal_repairer_remove_field(undefined) ->
+    undefined;
+unmarshal_repairer_remove_field(#repairer_RemoveAction{}) ->
+    remove.
 
 maybe_unmarshal(_Type, undefined) ->
     undefined;

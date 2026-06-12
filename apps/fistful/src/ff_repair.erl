@@ -17,7 +17,7 @@
 
 -type repair_result() :: #{
     events := [timestamped_event(model_event())],
-    action => term(),
+    action => prg_action:t(),
     aux_state => model_aux_state()
 }.
 

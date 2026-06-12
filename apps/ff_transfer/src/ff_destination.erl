@@ -303,7 +303,7 @@ marshal_aux_state(AuxSt) ->
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
     ff_machine_codec:unmarshal_aux_state(Payload).
 
--type action() :: continue | undefined.
+-type action() :: prg_action:t().
 
 -type repair_result() :: #{
     events := [term()],
@@ -315,15 +315,9 @@ unmarshal_aux_state(Payload) when is_binary(Payload) ->
 from_repair_result(#{events := Events} = Result, Machine) ->
     #{
         events => repair_events_to_domain(Events),
-        action => map_action(maps:get(action, Result, undefined)),
+        action => maps:get(action, Result, idle),
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
-
--spec map_action(action()) -> prg_action:t().
-map_action(undefined) ->
-    idle;
-map_action(continue) ->
-    timeout.
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

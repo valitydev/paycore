@@ -118,13 +118,7 @@
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
 
--type action() ::
-    undefined
-    | continue
-    | {setup_callback, ff_withdrawal_callback:tag(), prg_action:timer()}
-    | {setup_timer, prg_action:timer()}
-    | retry
-    | finish.
+-type action() :: prg_action:t().
 
 -type process_result() :: {action(), [event()]}.
 
@@ -228,7 +222,7 @@ process_session(#{status := {finished, _}, id := ID, result := Result, withdrawa
     WithdrawalID = ff_adapter_withdrawal:id(Withdrawal),
     case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, Result}) of
         ok ->
-            {finish, []};
+            {suspend, []};
         {error, _} = Error ->
             erlang:error({unable_to_finish_session, Error})
     end;
@@ -267,13 +261,13 @@ process_callback(#{tag := CallbackTag} = Params, Session) ->
     {ok, Callback} = find_callback(CallbackTag, Session),
     case ff_withdrawal_callback:status(Callback) of
         succeeded ->
-            {ok, {ff_withdrawal_callback:response(Callback), {undefined, []}}};
+            {ok, {ff_withdrawal_callback:response(Callback), {idle, []}}};
         pending ->
             case status(Session) of
                 active ->
                     do_process_callback(Params, Callback, Session);
                 {finished, _} ->
-                    {error, {{session_already_finished, make_session_finish_params(Session)}, {undefined, []}}}
+                    {error, {{session_already_finished, make_session_finish_params(Session)}, {idle, []}}}
             end
     end.
 
@@ -321,14 +315,15 @@ process_adapter_intent(Intent, Session, Events0) ->
 process_adapter_intent({finish, {success, _TransactionInfo}}, _Session) ->
     %% we ignore TransactionInfo here
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
-    {continue, [{finished, success}]};
+    {timeout, [{finished, success}]};
 process_adapter_intent({finish, Result}, _Session) ->
-    {continue, [{finished, Result}]};
+    {timeout, [{finished, Result}]};
 process_adapter_intent({sleep, #{timer := Timer, tag := Tag}}, Session) ->
+    ok = ff_machine_tag:create_binding(?NS, Tag, id(Session)),
     Events = create_callback(Tag, Session),
-    {{setup_callback, Tag, Timer}, Events};
+    {prg_action:schedule_timer(Timer), Events};
 process_adapter_intent({sleep, #{timer := Timer}}, _Session) ->
-    {{setup_timer, Timer}, []}.
+    {prg_action:schedule_timer(Timer), []}.
 
 %%
 
@@ -467,42 +462,25 @@ unmarshal_aux_state(Payload) when is_binary(Payload) ->
 
 -spec process_session_result(process_result(), machine()) -> prg_result().
 process_session_result({Action, Events}, Machine) ->
-    Session = prg_machine:collapse(?MODULE, Machine),
     #{
         events => Events,
-        action => map_action(Action, Session),
+        action => Action,
         auxst => maps:get(aux_state, Machine, #{})
     }.
 
 -type repair_result() :: #{
     events := [term()],
-    action => action() | undefined,
+    action => action(),
     aux_state => term()
 }.
 
 -spec from_repair_result(repair_result(), machine()) -> prg_result().
 from_repair_result(#{events := Events} = Result, Machine) ->
-    Session = prg_machine:collapse(?MODULE, Machine),
     #{
         events => repair_events_to_domain(Events),
-        action => map_action(maps:get(action, Result, undefined), Session),
+        action => maps:get(action, Result, idle),
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
-
--spec map_action(action(), session_state()) -> prg_action:t().
-map_action(undefined, _Session) ->
-    idle;
-map_action(continue, _Session) ->
-    timeout;
-map_action({setup_callback, Tag, Timer}, Session) ->
-    ok = ff_machine_tag:create_binding(?NS, Tag, id(Session)),
-    prg_action:schedule_timer(Timer);
-map_action({setup_timer, Timer}, _Session) ->
-    prg_action:schedule_timer(Timer);
-map_action(finish, _Session) ->
-    suspend;
-map_action(retry, _Session) ->
-    timeout.
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

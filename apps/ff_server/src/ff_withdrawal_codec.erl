@@ -501,9 +501,7 @@ unmarshal_repair_scenario_test() ->
             events => [
                 {status_changed, pending}
             ],
-            action => [
-                {set_timer, {timeout, 0}}
-            ]
+            action => timeout
         }},
         unmarshal(repair_scenario, Scenario)
     ).

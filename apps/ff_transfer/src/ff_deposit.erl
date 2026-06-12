@@ -151,7 +151,7 @@
 -type is_negative() :: boolean().
 -type cash() :: ff_cash:cash().
 -type cash_range() :: ff_range:range(cash()).
--type action() :: continue | undefined.
+-type action() :: prg_action:t().
 -type ctx() :: ff_entity_context:context().
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
@@ -431,7 +431,7 @@ do_process_transfer(p_transfer_start, Deposit) ->
     create_p_transfer(Deposit);
 do_process_transfer(p_transfer_prepare, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:prepare/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(p_transfer_commit, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:commit/1),
     {ok, Wallet} = ff_party:get_wallet(
@@ -440,10 +440,10 @@ do_process_transfer(p_transfer_commit, Deposit) ->
         domain_revision(Deposit)
     ),
     ok = ff_party:wallet_log_balance(wallet_id(Deposit), Wallet),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(p_transfer_cancel, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:cancel/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(limit_check, Deposit) ->
     process_limit_check(Deposit);
 do_process_transfer({fail, Reason}, Deposit) ->
@@ -456,7 +456,7 @@ create_p_transfer(Deposit) ->
     FinalCashFlow = make_final_cash_flow(Deposit),
     PTransferID = construct_p_transfer_id(id(Deposit)),
     {ok, PostingsTransferEvents} = ff_postings_transfer:create(PTransferID, FinalCashFlow),
-    {continue, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
+    {timeout, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
 
 -spec process_limit_check(deposit_state()) -> process_result().
 process_limit_check(Deposit) ->
@@ -488,16 +488,16 @@ process_limit_check(Deposit) ->
                 },
                 [{limit_check, {wallet_receiver, {failed, Details}}}]
         end,
-    {continue, Events}.
+    {timeout, Events}.
 
 -spec process_transfer_finish(deposit_state()) -> process_result().
 process_transfer_finish(_Deposit) ->
-    {undefined, [{status_changed, succeeded}]}.
+    {idle, [{status_changed, succeeded}]}.
 
 -spec process_transfer_fail(fail_type(), deposit_state()) -> process_result().
 process_transfer_fail(limit_check, Deposit) ->
     Failure = build_failure(limit_check, Deposit),
-    {undefined, [{status_changed, {failed, Failure}}]}.
+    {idle, [{status_changed, {failed, Failure}}]}.
 
 -spec make_final_cash_flow(deposit_state()) -> final_cash_flow().
 make_final_cash_flow(Deposit) ->
@@ -664,13 +664,13 @@ build_failure(limit_check, Deposit) ->
 process_transfer_result({Action, Events}, Machine) ->
     #{
         events => Events,
-        action => map_action(Action),
+        action => Action,
         auxst => maps:get(aux_state, Machine, #{})
     }.
 
 -type repair_result() :: #{
     events := [term()],
-    action => continue | undefined,
+    action => action(),
     aux_state => term()
 }.
 
@@ -678,15 +678,9 @@ process_transfer_result({Action, Events}, Machine) ->
 from_repair_result(#{events := Events} = Result, Machine) ->
     #{
         events => repair_events_to_domain(Events),
-        action => map_action(maps:get(action, Result, undefined)),
+        action => maps:get(action, Result, idle),
         auxst => maps:get(aux_state, Result, maps:get(aux_state, Machine, #{}))
     }.
-
--spec map_action(action()) -> prg_action:t().
-map_action(undefined) ->
-    idle;
-map_action(continue) ->
-    timeout.
 
 -spec repair_events_to_domain([term()]) -> [event()].
 repair_events_to_domain(Events) ->

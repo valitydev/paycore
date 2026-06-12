@@ -161,16 +161,9 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 - Progressor: CHANGELOG + tag `vX.Y.0`
 - Hellgate: bump tag в `rebar.config` (сейчас branch `add_action_module`, ref `4f6d78a`)
 
-### Границы thrift / repair (не блокер)
+### Thrift → wire
 
-Прикладной код не обязан повторять семантику progressor. Сейчас conversion корректна, но не «нативный wire на входе»:
-
-| Место | Сейчас |
-|-------|--------|
-| `hg_invoice:action_to_prg/1`, `construct_repair_action/1` | inline `#mg_stateproc_ComplexAction{}` / `#repair_ComplexAction{}` → wire |
-| `ff_codec` | unmarshal repair → `[set_timer \| remove]`, дальше `map_action/1` |
-
-HG repair timer + remove: `remove` побеждает timer — осознанная прикладная семантика.
+`prg_action:from_mg/1`, `from_repair/1` — MG/damsel repair на границе. `ff_codec` — `repairer_ComplexAction` → wire. Домены FF/HG — только `prg_action:t()`.
 
 ### HG invoice — двойной collapse
 

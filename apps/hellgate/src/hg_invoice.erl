@@ -20,8 +20,6 @@
 -include("hg_invoice.hrl").
 
 -include_lib("damsel/include/dmsl_repair_thrift.hrl").
--include_lib("mg_proto/include/mg_proto_state_processing_thrift.hrl").
-
 -define(NS, invoice).
 -define(EVENT_FORMAT_VERSION, 1).
 
@@ -326,7 +324,7 @@ handle_repair({changes, Changes, RepairAction, Params}, St) ->
             [] ->
                 #{}
         end,
-    Action = construct_repair_action(RepairAction),
+    Action = prg_action:from_repair(RepairAction),
     Result#{
         state => St,
         action => Action,
@@ -357,23 +355,6 @@ handle_signal(timeout, #st{activity = {payment, PaymentID}} = St) ->
 handle_signal(timeout, #st{activity = invoice} = St) ->
     % invoice is expired
     handle_expiration(St).
-
-construct_repair_action(CA) when CA /= undefined ->
-    case CA#repair_ComplexAction.remove of
-        #repair_RemoveAction{} ->
-            remove;
-        undefined ->
-            case CA#repair_ComplexAction.timer of
-                undefined ->
-                    idle;
-                {set_timer, #repair_SetTimerAction{timer = Timer}} ->
-                    prg_action:schedule_timer(Timer);
-                {unset_timer, #repair_UnsetTimerAction{}} ->
-                    suspend
-            end
-    end;
-construct_repair_action(undefined) ->
-    idle.
 
 should_validate_transitions(#payproc_InvoiceRepairParams{validate_transitions = V}) when is_boolean(V) ->
     V;
@@ -443,7 +424,7 @@ handle_call({{'Invoicing', 'CapturePayment'}, {_InvoiceID, PaymentID, Params}}, 
     #{
         response => ok,
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     };
 handle_call({{'Invoicing', 'CancelPayment'}, {_InvoiceID, PaymentID, Reason}}, St0) ->
@@ -454,7 +435,7 @@ handle_call({{'Invoicing', 'CancelPayment'}, {_InvoiceID, PaymentID, Reason}}, S
     #{
         response => ok,
         changes => wrap_payment_changes(PaymentID, Changes, hg_datetime:format_now()),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     };
 handle_call({{'Invoicing', 'Fulfill'}, {_InvoiceID, Reason}}, St0) ->
@@ -591,7 +572,7 @@ do_register_payment(PaymentID, PaymentParams, St) ->
     #{
         response => get_payment_state(PaymentSession),
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     }.
 
@@ -604,7 +585,7 @@ do_start_payment(PaymentID, PaymentParams, St) ->
     #{
         response => get_payment_state(PaymentSession),
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     }.
 
@@ -635,7 +616,7 @@ handle_payment_result({next, {Changes, Action}}, PaymentID, _PaymentSession, St,
     #{timestamp := OccurredAt} = Opts,
     #{
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     };
 handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, Opts) ->
@@ -648,7 +629,7 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
         ?processed() ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => action_to_prg(Action),
+                action => Action,
                 state => St
             };
         ?captured() ->
@@ -661,7 +642,7 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
                 end,
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt) ++ MaybePaid,
-                action => action_to_prg(Action),
+                action => Action,
                 state => St
             };
         ?refunded() ->
@@ -677,13 +658,13 @@ handle_payment_result({done, {Changes, Action}}, PaymentID, PaymentSession, St, 
         ?failed(_) ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => set_invoice_timer(action_to_prg(Action), St),
+                action => set_invoice_timer(Action, St),
                 state => St
             };
         ?cancelled() ->
             #{
                 changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-                action => set_invoice_timer(action_to_prg(Action), St),
+                action => set_invoice_timer(Action, St),
                 state => St
             }
     end.
@@ -701,7 +682,7 @@ wrap_payment_impact(PaymentID, {Response, {Changes, Action}}, St, OccurredAt) ->
     #{
         response => Response,
         changes => wrap_payment_changes(PaymentID, Changes, OccurredAt),
-        action => action_to_prg(Action),
+        action => Action,
         state => St
     }.
 
@@ -1089,26 +1070,6 @@ changes_from_msgpack_data(#{format_version := V, data := Data}) ->
     unmarshal_event_payload(#{format_version => V, data => Data});
 changes_from_msgpack_data(Changes) when is_list(Changes) ->
     Changes.
-
--spec action_to_prg(action() | undefined) -> action().
-action_to_prg(#mg_stateproc_ComplexAction{timer = Timer, remove = Remove}) ->
-    case Remove of
-        #mg_stateproc_RemoveAction{} ->
-            remove;
-        undefined ->
-            case Timer of
-                undefined ->
-                    idle;
-                {set_timer, #mg_stateproc_SetTimerAction{timer = T}} ->
-                    prg_action:schedule_timer(T);
-                {unset_timer, #mg_stateproc_UnsetTimerAction{}} ->
-                    suspend
-            end
-    end;
-action_to_prg(undefined) ->
-    idle;
-action_to_prg(Action) ->
-    Action.
 
 %% Marshalling
 
