@@ -1060,6 +1060,8 @@ unmarshal_aux_state(Payload) when is_binary(Payload) ->
     %% the current branch stores term_to_binary(mg_msgpack_marshalling:marshal(AuxSt)).
     %% Both unwrap to a msgpack Value that mg_msgpack_marshalling:unmarshal decodes.
     case binary_to_term(Payload) of
+        #mg_stateproc_Content{data = {bin, <<>>}} ->
+            #{};
         #mg_stateproc_Content{data = Data} ->
             mg_msgpack_marshalling:unmarshal(Data);
         Msgp ->
@@ -1182,5 +1184,11 @@ aux_state_reads_legacy_mg_content_test() ->
     Msgp = mg_msgpack_marshalling:marshal(AuxSt),
     Legacy = term_to_binary(#mg_stateproc_Content{format_version = 1, data = Msgp}),
     ?assertEqual(AuxSt, unmarshal_aux_state(Legacy)).
+
+-spec aux_state_reads_legacy_empty_content_test() -> _.
+aux_state_reads_legacy_empty_content_test() ->
+    %% CT-captured empty invoice aux: Content with {bin, <<>>} data.
+    Legacy = term_to_binary(#mg_stateproc_Content{format_version = undefined, data = {bin, <<>>}}),
+    ?assertEqual(#{}, unmarshal_aux_state(Legacy)).
 
 -endif.

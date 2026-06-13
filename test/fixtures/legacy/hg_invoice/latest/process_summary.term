@@ -1,0 +1,3 @@
+#{extra => #{domain => hg_invoice},
+  status => <<"running">>,namespace => invoice,
+  process_id => <<"2HHYZX9fzk0">>,last_event_id => 1,history_len => 1}.

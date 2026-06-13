@@ -1,0 +1,3 @@
+#{index => 1,timestamp => 1781366490607970,event_id => 1,
+  metadata_keys => [<<"format_version">>],
+  payload_first_byte => 131,payload_size => 307}.

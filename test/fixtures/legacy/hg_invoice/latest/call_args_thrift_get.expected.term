@@ -1,0 +1,8 @@
+#{inner_call =>
+      {thrift_call,invoicing,
+                   {'Invoicing','Get'},
+                   <<11,0,2,0,0,0,11,50,72,72,89,90,88,57,102,122,107,48,12,0,
+                     3,0,0>>},
+  normalized_call =>
+      {{'Invoicing','Get'},
+       {<<"2HHYZX9fzk0">>,{payproc_EventRange,undefined,undefined}}}}.

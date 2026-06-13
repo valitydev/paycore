@@ -1148,7 +1148,7 @@ build_party_varset(#{body := Body, wallet_id := WalletID, party_id := PartyID} =
     BinData = maps:get(bin_data, Params, undefined),
     PaymentTool =
         case {Destination, Resource} of
-            {idle, _} ->
+            {undefined, _} ->
                 undefined;
             {_, Resource} ->
                 construct_payment_tool(Resource)

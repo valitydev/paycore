@@ -1,0 +1,4 @@
+#{extra => #{domain => source},
+  status => <<"running">>,namespace => 'ff/source_v1',
+  process_id => <<"EtH1KKKcf4giWhZX4ogD6Vlo69S">>,last_event_id => 2,
+  history_len => 2}.
