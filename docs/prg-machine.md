@@ -2,7 +2,7 @@
 
 Единый runtime поверх progressor для HG и FF. Контракт `action()` в progressor: `progressor/docs/step-effect-migration.md`.
 
-*Обновлено: 2026-06-12. CI (compile, dialyzer, CT + compose) — green локально.*
+*Обновлено: 2026-06-13. CI (compile, dialyzer, CT + compose) — green локально.*
 
 ---
 
@@ -45,10 +45,13 @@ sequenceDiagram
 | `prg_machine` | behaviour, client API, `process/3`, `collapse` / `emit_events` |
 | `prg_machine_registry` | ETS `{Namespace, Handler}`; `{unknown_namespace, NS}` |
 | `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()` |
+| `ff_machine_lib` | общие FF-хелперы: repair/history/timestamp для `*_machine` |
 
-**`process/3`:** `env_enter` → `unmarshal_machine` → `dispatch` → `marshal_process_result` → `env_leave`. Исключение в домене → `{error, {exception, Class, Reason, Stacktrace}}` + log.
+**`process/3`:** `env_enter` → `unmarshal_machine` → `dispatch` → `marshal_process_result` → `env_leave` (Leave только после успешного Enter). Исключение в домене → `{error, {exception, Class, Reason}}` + log (stacktrace только в логах, не на проводе).
 
-**Контекст RPC:** `woody_context_loader` в `hellgate` / `ff_server`; иначе `operation_context` по `context_binding` из `sys.config` (HG strict / FF lenient).
+**Контекст RPC:** `operation_context:current_woody_context/0` (hg-binding → ff-binding → fresh ctx + warning). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
+
+**События:** timestamp в microsecond (`timestamp_us()`); metadata пишет оба ключа `<<"format_version">>` и `<<"format">>`. FF payload — legacy `term_to_binary({bin, ThriftBin})`; HG payload — `term_to_binary(msgpack)`.
 
 ---
 
@@ -72,7 +75,7 @@ sequenceDiagram
 
 ```erlang
 idle | suspend | timeout | remove
-| {schedule, #{at := UnixSec, action := timeout | remove}}
+| {schedule, #{at := timestamp_us(), action := timeout | remove}}
 ```
 
 | Было (legacy) | Стало |
@@ -82,7 +85,7 @@ idle | suspend | timeout | remove
 | `remove()` | `remove` |
 | `set_timeout(N, _)` / deadline | `prg_action:schedule_timer/1`, `schedule_deadline/1` |
 
-`prg_action` — **не** адаптер MG/repair, только timer tuple → `{schedule, ...}`.
+`prg_action:from_mg/1`, `from_repair/1` — MG/damsel repair на границе (HG/FF handler → wire). `prg_action:marshal_timer/1` принимает `{deadline, {calendar:datetime(), Micro}}` (machinery-формат из `ff_codec:unmarshal(timer, ...)`).
 
 FF доменный `continue` / `sleep` / `{setup_timer, T}` → wire через `map_action/1` в каждом модуле.
 
@@ -107,7 +110,8 @@ processor => #{
     client => prg_machine,
     options => #{
         ns => <atom>,
-        context_binding => #{registry_key => ..., cleanup_mode => strict | lenient}
+        context_binding => #{registry_key => ..., cleanup_mode => strict | lenient},
+        default_handling_timeout => 30000   %% optional, woody deadline default
     }
 }
 ```
@@ -130,11 +134,11 @@ processor => #{
 |------------|------------------|
 | `<<"process not found">>` / `<<"process is init">>` | `{error, notfound}` |
 | `<<"process is error">>` | `{error, failed}` |
-| `{exception, ...}` | **pass-through** `{error, {exception, ...}}` |
+| `{exception, Class, Reason}` (3-tuple) | **pass-through** `{error, {exception, Class, Reason}}` |
 | прочие guard (`<<"process is waiting">>`, …) | **pass-through** `{error, Reason}` |
 | `<<"process already exists">>` (`start`) | `{error, exists}` |
 
-`repair`: + `{error, working}` для `<<"process is running">>`; остальное → `{error, {repair, {failed, Reason}}}` с сохранением `Reason`.
+`repair`: + `{error, working}` для `<<"process is running">>`; `{error, {repair, {failed, Reason}}}` → `{error, {failed, Reason}}` в `ff_*_machine` / `erlang:error(Reason)` в woody repair handler.
 
 **Антипаттерн:** catch-all `{error, _} -> {error, failed}` — ломает HG CT (waiting/running превращаются в `failed`).
 
@@ -159,21 +163,19 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 ### До релиза
 
 - Progressor: CHANGELOG + tag `vX.Y.0`
-- Hellgate: bump tag в `rebar.config` (сейчас branch `add_action_module`, ref `4f6d78a`)
-
-### Thrift → wire
-
-`prg_action:from_mg/1`, `from_repair/1` — MG/damsel repair на границе. `ff_codec` — `repairer_ComplexAction` → wire. Домены FF/HG — только `prg_action:t()`.
+- Hellgate: bump tag в `rebar.config` (сейчас branch `add_action_module`)
 
 ### HG invoice — двойной collapse
 
-Реплей: `prg_machine:collapse` (lenient). После call: `validate_changes` → `collapse_changes` strict **мимо** `collapse/2`, плюс повтор в `to_prg_result`. Цель — один фолд через `prg_machine` с параметром strict/lenient (`apply_new_events/3` + убрать двойной проход в `process_call`). Только HG invoice; FF на `apply_event/2`.
+Реплей: `prg_machine:collapse` (lenient). После call/signal/repair: `to_prg_result/1` → один `validate_changes` + `log_changes` (как старый `handle_result`). Остаётся отдельный strict-фолд `collapse_changes` **мимо** `prg_machine:collapse/2` при валидации новых changes — цель: один фолд с параметром strict/lenient. Только HG invoice; FF на `apply_event/2`.
 
 ### Прочее (низкий приоритет)
 
+- Golden-fixtures со стейджа для legacy payload/aux_state (см. `docs/prg-machine-fix-plan.md` §1.6)
 - Registry без ETS `heir` — краткое окно при рестарте
 - Фиктивная обёртка `{ev, Ts, Body}` в event payload
 - Trace: сейчас HTTP JSON (`ff_machine_trace`); Thrift — `docs/trace-api-thrift.md`
+- Единый конверт HG+FF (format 2) — этап 6 fix-plan
 
 ---
 
@@ -195,6 +197,7 @@ rg 'progressor_action|hg_machine_action' apps/              # 0
 rg '#{set_timer' apps/ --glob '*.erl'                        # 0
 rg 'machinery_prg_backend|ff_machine:' apps/fistful apps/ff_transfer apps/ff_server --glob '*.erl'  # 0
 rg "client => machinery_prg_backend" config/sys.config      # 0
+rg 'woody_context_loader' apps/hellgate apps/ff_server      # 0
 ```
 
 ---
@@ -205,7 +208,9 @@ rg "client => machinery_prg_backend" config/sys.config      # 0
 |------|-------|
 | `apps/prg_machine/src/prg_machine.erl` | behaviour, errors, marshal_intent |
 | `apps/prg_machine/src/prg_action.erl` | timer → wire |
-| `apps/hellgate/src/hg_invoice.erl` | HG behaviour, repair, `action_to_prg` |
+| `apps/ff_transfer/src/ff_machine_lib.erl` | FF repair/history helpers |
+| `apps/ff_transfer/src/ff_machine_codec.erl` | FF event/aux_state marshal, legacy sniff |
+| `apps/hellgate/src/hg_invoice.erl` | HG behaviour, repair, `to_prg_result` |
 | `apps/ff_transfer/src/ff_deposit.erl` | FF behaviour |
 | `apps/hellgate/src/hg_invoicing_machine_client.erl` | Thrift → prg_machine |
 | `apps/fistful/src/ff_repair.erl` | repair scenarios |

@@ -119,7 +119,9 @@ repair(ID, Scenario) ->
         {error, working} ->
             {error, working};
         {error, {repair, {failed, Reason}}} ->
-            {error, {failed, Reason}}
+            {error, {failed, Reason}};
+        {error, _} = Error ->
+            Error
     end.
 
 %% Accessors

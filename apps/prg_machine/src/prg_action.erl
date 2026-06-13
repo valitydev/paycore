@@ -110,3 +110,19 @@ repair_remove_field(#repair_RemoveAction{}) ->
 datetime_to_microseconds(Dt, USec) ->
     Sec = calendar:datetime_to_gregorian_seconds(Dt) - ?EPOCH_DIFF,
     Sec * 1000000 + USec.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec marshal_timer_machinery_deadline_test() -> _.
+marshal_timer_machinery_deadline_test() ->
+    Dt = {{2099, 6, 13}, {12, 34, 56}},
+    USec = 789000,
+    Sec = calendar:datetime_to_gregorian_seconds(Dt) - ?EPOCH_DIFF,
+    Expected = Sec * 1000000 + USec,
+    ?assertEqual(Expected, marshal_timer({deadline, {Dt, USec}})),
+    ?assertEqual(marshal_timer({deadline, {Dt, 0}}), marshal_timer({deadline, Dt})).
+
+-endif.

@@ -21,5 +21,7 @@ handle_function('Repair', {ID, Scenario}, _Opts) ->
         {error, notfound} ->
             woody_error:raise(business, #fistful_WithdrawalSessionNotFound{});
         {error, working} ->
-            woody_error:raise(business, #fistful_MachineAlreadyWorking{})
+            woody_error:raise(business, #fistful_MachineAlreadyWorking{});
+        {error, {failed, Reason}} ->
+            erlang:error(Reason)
     end.

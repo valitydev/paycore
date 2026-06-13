@@ -5,6 +5,7 @@
 -include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_payproc_thrift.hrl").
+-include_lib("mg_proto/include/mg_proto_state_processing_thrift.hrl").
 
 -define(NS, invoice_template).
 -define(EVENT_FORMAT_VERSION, 1).
@@ -364,11 +365,12 @@ marshal_aux_state(AuxSt) ->
 unmarshal_aux_state(<<>>) ->
     #{};
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    try
-        mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))
-    catch
-        _:_ ->
-            binary_to_term(Payload, [safe])
+    %% Same compat as hg_invoice: legacy #mg_stateproc_Content{} or current msgpack blob.
+    case binary_to_term(Payload) of
+        #mg_stateproc_Content{data = Data} ->
+            mg_msgpack_marshalling:unmarshal(Data);
+        Msgp ->
+            mg_msgpack_marshalling:unmarshal(Msgp)
     end.
 
 msgpack_payload_to_binary(Msgp) ->
@@ -384,7 +386,7 @@ decode_event_body(Payload) ->
 
 try_unmarshal_msgpack_payload(Payload) ->
     try
-        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload, [safe]))}
+        {ok, mg_msgpack_marshalling:unmarshal(binary_to_term(Payload))}
     catch
         _:_ ->
             {error, invalid_msgpack_payload}
@@ -417,3 +419,17 @@ unmarshal_event_payload(#{format_version := 1, data := {bin, Changes}}) ->
     Type = {struct, union, {dmsl_payproc_thrift, 'EventPayload'}},
     {invoice_template_changes, Buf} = hg_proto_utils:deserialize(Type, Changes),
     Buf.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec aux_state_reads_legacy_mg_content_test() -> _.
+aux_state_reads_legacy_mg_content_test() ->
+    AuxSt = #{<<"legacy">> => 1},
+    Msgp = mg_msgpack_marshalling:marshal(AuxSt),
+    Legacy = term_to_binary(#mg_stateproc_Content{format_version = 1, data = Msgp}),
+    ?assertEqual(AuxSt, unmarshal_aux_state(Legacy)).
+
+-endif.

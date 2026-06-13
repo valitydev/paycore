@@ -120,7 +120,9 @@ repair(ID, Scenario) ->
         {error, working} ->
             {error, working};
         {error, {repair, {failed, Reason}}} ->
-            {error, {failed, Reason}}
+            {error, {failed, Reason}};
+        {error, _} = Error ->
+            Error
     end.
 
 -spec process_callback(callback_params()) ->
