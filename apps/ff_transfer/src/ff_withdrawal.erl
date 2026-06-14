@@ -927,7 +927,9 @@ process_limit_check(Withdrawal) ->
                     expected_range => Range,
                     balance => Cash
                 },
-                [{limit_check, {wallet_sender, {failed, Details}}}]
+                [{limit_check, {wallet_sender, {failed, Details}}}];
+            {error, {terms_violation, {wallet_limit, {invalid_terms, Details}}}} ->
+                [{limit_check, {wallet_sender, {failed, #{reason => invalid_terms, details => Details}}}}]
         end,
     {timeout, Events}.
 
@@ -1474,15 +1476,16 @@ is_limit_check_ok({wallet_sender, {failed, _Details}}) ->
 
 -spec validate_wallet_limits(terms(), wallet()) ->
     {ok, valid}
-    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}.
+    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}
+    | {error, {terms_violation, {wallet_limit, {invalid_terms, term()}}}}.
 validate_wallet_limits(Terms, Wallet) ->
     case ff_party:validate_wallet_limits(Terms, Wallet) of
         {ok, valid} = Result ->
             Result;
         {error, {terms_violation, {cash_range, {Cash, CashRange}}}} ->
             {error, {terms_violation, {wallet_limit, {cash_range, {Cash, CashRange}}}}};
-        {error, {invalid_terms, _Details} = Reason} ->
-            erlang:error(Reason)
+        {error, {invalid_terms, _} = Reason} ->
+            {error, {terms_violation, {wallet_limit, Reason}}}
     end.
 
 %% Adjustment validators

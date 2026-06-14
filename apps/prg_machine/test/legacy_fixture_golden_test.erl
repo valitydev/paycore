@@ -15,29 +15,25 @@ test() ->
 
 legacy_ff_event_test_() ->
     [
-        {fixture_id(Dir, "_event"),
-            fun() -> legacy_ff_event_test(Domain, Dir) end}
+        {fixture_id(Dir, "_event"), fun() -> legacy_ff_event_test(Domain, Dir) end}
      || {Domain, Dir} <- legacy_fixture_lib:ff_fixtures()
     ].
 
 legacy_ff_metadata_test_() ->
     [
-        {fixture_id(Dir, "_metadata"),
-            fun() -> legacy_ff_metadata_test(Dir) end}
+        {fixture_id(Dir, "_metadata"), fun() -> legacy_ff_metadata_test(Dir) end}
      || {_Domain, Dir} <- legacy_fixture_lib:ff_fixtures()
     ].
 
 legacy_ff_aux_state_test_() ->
     [
-        {fixture_id(Dir, "_aux_state"),
-            fun() -> legacy_ff_aux_state_test(Dir) end}
+        {fixture_id(Dir, "_aux_state"), fun() -> legacy_ff_aux_state_test(Dir) end}
      || {_Domain, Dir} <- legacy_fixture_lib:ff_fixtures()
     ].
 
 legacy_ff_rollback_test_() ->
     [
-        {fixture_id(Dir, "_rollback"),
-            fun() -> legacy_ff_rollback_roundtrip_test(Domain, Dir) end}
+        {fixture_id(Dir, "_rollback"), fun() -> legacy_ff_rollback_roundtrip_test(Domain, Dir) end}
      || {Domain, Dir} <- legacy_fixture_lib:ff_fixtures()
     ].
 

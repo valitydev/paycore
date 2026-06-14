@@ -367,6 +367,8 @@ unmarshal_aux_state(<<>>) ->
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
     %% Same compat as hg_invoice: legacy #mg_stateproc_Content{} or current msgpack blob.
     case binary_to_term(Payload) of
+        #mg_stateproc_Content{data = {bin, <<>>}} ->
+            #{};
         #mg_stateproc_Content{data = Data} ->
             mg_msgpack_marshalling:unmarshal(Data);
         Msgp ->

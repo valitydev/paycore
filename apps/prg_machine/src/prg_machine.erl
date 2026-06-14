@@ -596,10 +596,26 @@ run_env_enter(Enter, _WoodyCtx) when is_function(Enter, 0) ->
     Enter().
 
 run_with_env_leave(Leave, Fun) when is_function(Leave, 0), is_function(Fun, 0) ->
+    try Fun() of
+        Result ->
+            safe_env_leave(Leave),
+            Result
+    catch
+        Class:Reason:Stacktrace ->
+            safe_env_leave(Leave),
+            erlang:raise(Class, Reason, Stacktrace)
+    end.
+
+safe_env_leave(Leave) ->
     try
-        Fun()
-    after
         Leave()
+    catch
+        Class:Reason:Stacktrace ->
+            logger:error(
+                "prg_machine env_leave failed: ~p:~p",
+                [Class, Reason],
+                #{stacktrace => Stacktrace}
+            )
     end.
 
 encode_term(Term) ->
