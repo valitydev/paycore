@@ -6,8 +6,6 @@
 -include_lib("progressor/include/progressor.hrl").
 
 -define(TABLE, prg_machine_dispatch).
-%% progressor is_retryable/5 and machinery_prg_backend expect a 3-tuple; stacktrace stays in logs only.
--define(PROCESSOR_EXCEPTION(Class, Reason, _Stacktrace), {exception, Class, Reason}).
 
 %% Types
 
@@ -26,6 +24,17 @@
     notfound
     | {unknown_namespace, namespace()}
     | {exception, atom(), term()}.
+
+-type processor_error() ::
+    {exception, atom(), term()}
+    | {exception, atom(), term(), list()}.
+
+-type repair_error() ::
+    notfound
+    | working
+    | failed
+    | processor_error()
+    | {repair, {failed, term()}}.
 
 -type machine() :: #{
     namespace := namespace(),
@@ -68,6 +77,7 @@
     history/0,
     machine/0,
     get_error/0,
+    repair_error/0,
     signal/0,
     result/0,
     process_options/0
@@ -180,7 +190,7 @@ call(NS, ID, CallArgs, After, Limit, Direction) ->
     end.
 
 -spec repair(namespace(), id(), args()) ->
-    {ok, term()} | {error, notfound | working | failed | {repair, {failed, term()}}}.
+    {ok, term()} | {error, repair_error()}.
 repair(NS, ID, Args) ->
     Req = #{
         ns => NS,
@@ -199,6 +209,10 @@ repair(NS, ID, Args) ->
             {error, working};
         {error, <<"process is error">>} ->
             {error, failed};
+        {error, {exception, _Class, _Reason} = Exception} ->
+            {error, Exception};
+        {error, {exception, Class, Reason, _Stacktrace}} ->
+            {error, {exception, Class, Reason}};
         {error, Reason} ->
             %% The repair-failed reason is our own term encoded by process/3
             %% (marshal_process_result -> encode_term); hand it back as a term.
@@ -297,7 +311,7 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
         end
     catch
         Class:Reason:Stacktrace ->
-            Exception = ?PROCESSOR_EXCEPTION(Class, Reason, Stacktrace),
+            Exception = {exception, Class, Reason},
             logger:error(
                 "prg_machine process failed: ~p:~p",
                 [Class, Reason],

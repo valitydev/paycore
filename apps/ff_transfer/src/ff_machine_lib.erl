@@ -1,7 +1,6 @@
 -module(ff_machine_lib).
 
-%%% Shared helpers for the ff_* prg_machine handlers (ff_withdrawal, ff_deposit,
-%%% ff_source, ff_destination, ff_withdrawal_session) and their thin machine
+%%% Shared helpers for the ff_* prg_machine handlers and their thin machine
 %%% clients. Extracted to remove the per-namespace copy-paste.
 
 -export([to_repair_machine/1]).
@@ -11,8 +10,19 @@
 -export([history_to_events/1]).
 -export([codec_timestamp/1]).
 
+-export_type([repair_call_error/0]).
+
 -type timestamp() :: prg_machine:timestamp().
 -type timestamped_event(T) :: {ev, timestamp(), T}.
+
+-type processor_error() :: {exception, atom(), term()}.
+
+-type repair_call_error() ::
+    notfound
+    | working
+    | failed
+    | {failed, ff_repair:repair_error()}
+    | processor_error().
 
 -spec to_repair_machine(prg_machine:machine()) -> ff_repair:machine().
 to_repair_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxState}) ->

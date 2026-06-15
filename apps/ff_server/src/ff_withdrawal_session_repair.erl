@@ -27,7 +27,5 @@ handle_function('Repair', {ID, Scenario}, _Opts) ->
         {error, failed} ->
             erlang:error(failed);
         {error, {exception, Class, Reason}} ->
-            erlang:error({process_exception, Class, Reason});
-        {error, {exception, Class, Reason, _Stacktrace}} ->
             erlang:error({process_exception, Class, Reason})
     end.

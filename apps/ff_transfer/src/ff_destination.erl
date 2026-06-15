@@ -8,11 +8,6 @@
 
 -module(ff_destination).
 
--behaviour(prg_machine).
-
--define(NS, 'ff/destination_v2').
--define(EVENT_FORMAT_VERSION, 1).
-
 -type id() :: binary().
 -type token() :: binary().
 -type name() :: binary().
@@ -114,26 +109,9 @@
 -export([is_accessible/1]).
 -export([apply_event/2]).
 
-%% prg_machine
-
--export([namespace/0]).
--export([init/2]).
--export([process_signal/2]).
--export([process_call/2]).
--export([process_repair/2]).
--export([process_notification/2]).
--export([marshal_event_body/1]).
--export([unmarshal_event_body/2]).
--export([marshal_aux_state/1]).
--export([unmarshal_aux_state/1]).
-
 %% Pipeline
 
 -import(ff_pipeline, [do/1, unwrap/1, unwrap/2]).
-
--type ctx() :: ff_entity_context:context().
--type machine() :: prg_machine:machine().
--type prg_result() :: prg_machine:result().
 
 %% Accessors
 
@@ -244,60 +222,3 @@ apply_event({account, Ev}, #{account := Account} = Destination) ->
     Destination#{account => ff_account:apply_event(Ev, Account)};
 apply_event({account, Ev}, Destination) ->
     apply_event({account, Ev}, Destination#{account => undefined}).
-
-%% prg_machine
-
--spec namespace() -> prg_machine:namespace().
-namespace() ->
-    ?NS.
-
--spec init({[event()], ctx()}, machine()) -> prg_result().
-init({Events, Ctx}, _Machine) ->
-    #{
-        events => Events,
-        auxst => #{ctx => Ctx}
-    }.
-
--spec process_signal(prg_machine:signal(), machine()) -> prg_result().
-process_signal(timeout, _Machine) ->
-    #{};
-process_signal({repair, _Args}, _Machine) ->
-    erlang:error({unexpected_signal, repair}).
-
--spec process_call(term(), machine()) -> no_return().
-process_call(CallArgs, _Machine) ->
-    erlang:error({unexpected_call, CallArgs}).
-
--spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
-process_repair(Scenario, Machine) ->
-    case ff_repair:apply_scenario(?MODULE, ff_machine_lib:to_repair_machine(Machine), Scenario) of
-        {ok, {_Response, Result}} ->
-            ff_machine_lib:from_repair_result(Result, Machine);
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
--spec process_notification(term(), machine()) -> prg_result().
-process_notification(_Args, _Machine) ->
-    #{}.
-
--spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
-marshal_event_body(Body) ->
-    Timestamped = {ev, prg_machine:timestamp(), Body},
-    Encoded = ff_machine_codec:marshal_event(destination, ?EVENT_FORMAT_VERSION, Timestamped),
-    {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
-
--spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
-unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
-    Timestamped = ff_machine_codec:unmarshal_event(destination, ?EVENT_FORMAT_VERSION, Payload),
-    ff_machine_lib:event_body_from_timestamped(Timestamped);
-unmarshal_event_body(Format, _Payload) ->
-    erlang:error({unknown_event_format, Format}).
-
--spec marshal_aux_state(term()) -> binary().
-marshal_aux_state(AuxSt) ->
-    ff_machine_codec:marshal_aux_state(AuxSt).
-
--spec unmarshal_aux_state(binary()) -> term().
-unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    ff_machine_codec:unmarshal_aux_state(Payload).

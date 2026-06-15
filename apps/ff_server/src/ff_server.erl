@@ -99,11 +99,11 @@ init([]) ->
     ),
     PartyClientSpec = party_client:child_spec(party_client, PartyClient),
     PrgMachineSpec = prg_machine:get_child_spec([
-        ff_deposit,
-        ff_source,
-        ff_destination,
-        ff_withdrawal,
-        ff_withdrawal_session
+        ff_deposit_machine,
+        ff_source_machine,
+        ff_destination_machine,
+        ff_withdrawal_machine,
+        ff_withdrawal_session_machine
     ]),
     % TODO
     %  - Zero thoughts given while defining this strategy.

@@ -1,8 +1,12 @@
 %%%
-%%% Withdrawal machine — thin prg_machine client
+%%% Withdrawal machine
 %%%
 
 -module(ff_withdrawal_machine).
+
+-behaviour(prg_machine).
+
+-define(EVENT_FORMAT_VERSION, 1).
 
 %% API
 
@@ -26,6 +30,7 @@
 
 -type repair_error() :: ff_repair:repair_error().
 -type repair_response() :: ff_repair:repair_response().
+-type repair_call_error() :: ff_machine_lib:repair_call_error().
 
 -type unknown_withdrawal_error() ::
     {unknown_withdrawal, id()}.
@@ -55,6 +60,7 @@
 -export_type([create_error/0]).
 -export_type([repair_error/0]).
 -export_type([repair_response/0]).
+-export_type([repair_call_error/0]).
 -export_type([start_adjustment_error/0]).
 
 %% API
@@ -72,6 +78,19 @@
 -export([withdrawal/1]).
 -export([ctx/1]).
 
+%% prg_machine
+
+-export([namespace/0]).
+-export([init/2]).
+-export([process_signal/2]).
+-export([process_call/2]).
+-export([process_repair/2]).
+-export([process_notification/2]).
+-export([marshal_event_body/1]).
+-export([unmarshal_event_body/2]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
+
 %% Pipeline
 
 -import(ff_pipeline, [do/1, unwrap/1]).
@@ -79,6 +98,8 @@
 %% Internal types
 
 -type ctx() :: ff_entity_context:context().
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
 
 -define(NS, 'ff/withdrawal_v2').
 
@@ -127,7 +148,7 @@ events(ID, {After, Limit}) ->
     end.
 
 -spec repair(id(), ff_repair:scenario()) ->
-    {ok, repair_response()} | {error, notfound | working | {failed, repair_error()}}.
+    {ok, repair_response()} | {error, repair_call_error()}.
 repair(ID, Scenario) ->
     case prg_machine:repair(?NS, ID, Scenario) of
         {ok, Response} ->
@@ -138,8 +159,10 @@ repair(ID, Scenario) ->
             {error, working};
         {error, {repair, {failed, Reason}}} ->
             {error, {failed, Reason}};
-        {error, _} = Error ->
-            Error
+        {error, failed} = Error ->
+            Error;
+        {error, {exception, _Class, _Reason} = Exception} ->
+            {error, Exception}
     end.
 
 -spec start_adjustment(id(), adjustment_params()) ->
@@ -163,6 +186,80 @@ withdrawal(#{model := Model}) ->
 ctx(#{ctx := Ctx}) ->
     Ctx.
 
+%% prg_machine
+
+-spec namespace() -> prg_machine:namespace().
+namespace() ->
+    ?NS.
+
+-spec init({[change()], ctx()}, machine()) -> prg_result().
+init({Events, Ctx}, _Machine) ->
+    #{
+        events => Events,
+        action => timeout,
+        auxst => #{ctx => Ctx}
+    }.
+
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
+process_signal(timeout, Machine) ->
+    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    process_transfer_result(ff_withdrawal:process_transfer(Withdrawal), Machine);
+process_signal({repair, _Args}, _Machine) ->
+    erlang:error({unexpected_signal, repair}).
+
+-spec process_call({start_adjustment, adjustment_params()}, machine()) ->
+    {ok | {error, start_adjustment_error()}, prg_result()}.
+process_call({start_adjustment, Params}, Machine) ->
+    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    case ff_withdrawal:start_adjustment(Params, Withdrawal) of
+        {ok, Result} ->
+            {ok, process_transfer_result(Result, Machine)};
+        {error, _Reason} = Error ->
+            {Error, #{}}
+    end;
+process_call(CallArgs, _Machine) ->
+    erlang:error({unexpected_call, CallArgs}).
+
+-spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
+process_repair(Scenario, Machine) ->
+    case ff_repair:apply_scenario(ff_withdrawal, ff_machine_lib:to_repair_machine(Machine), Scenario) of
+        {ok, {_Response, Result}} ->
+            ff_machine_lib:from_repair_result(Result, Machine);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+-spec process_notification(notify_args(), machine()) -> prg_result().
+process_notification({session_finished, SessionID, SessionResult}, Machine) ->
+    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    case ff_withdrawal:finalize_session(SessionID, SessionResult, Withdrawal) of
+        {ok, Result} ->
+            process_transfer_result(Result, Machine);
+        {error, Reason} ->
+            erlang:error({unable_to_finalize_session, Reason})
+    end.
+
+-spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Body) ->
+    Timestamped = {ev, prg_machine:timestamp(), Body},
+    Encoded = ff_machine_codec:marshal_event(withdrawal, ?EVENT_FORMAT_VERSION, Timestamped),
+    {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
+
+-spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
+unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
+    Timestamped = ff_machine_codec:unmarshal_event(withdrawal, ?EVENT_FORMAT_VERSION, Payload),
+    ff_machine_lib:event_body_from_timestamped(Timestamped);
+unmarshal_event_body(Format, _Payload) ->
+    erlang:error({unknown_event_format, Format}).
+
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    ff_machine_codec:marshal_aux_state(AuxSt).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    ff_machine_codec:unmarshal_aux_state(Payload).
+
 %% Internals
 
 -spec machine_to_st(prg_machine:machine()) -> st().
@@ -174,6 +271,14 @@ machine_to_st(#{aux_state := AuxState} = Machine) ->
     #{
         model => Model,
         ctx => Ctx
+    }.
+
+-spec process_transfer_result({prg_action:t(), [change()]}, machine()) -> prg_result().
+process_transfer_result({Action, Events}, Machine) ->
+    #{
+        events => Events,
+        action => Action,
+        auxst => maps:get(aux_state, Machine, #{})
     }.
 
 call(ID, Call) ->
