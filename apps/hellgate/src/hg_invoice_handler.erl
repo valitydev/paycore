@@ -254,12 +254,9 @@ publish_invoice_event(InvoiceID, {ID, Dt, Event}) ->
     #payproc_Event{
         id = ID,
         source = {invoice_id, InvoiceID},
-        created_at = format_event_timestamp(Dt),
+        created_at = Dt,
         payload = ?invoice_ev(Event)
     }.
-
-format_event_timestamp(Dt) ->
-    Dt.
 
 map_history_error({ok, Result}) ->
     Result;
