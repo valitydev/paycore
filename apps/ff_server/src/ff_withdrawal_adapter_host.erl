@@ -33,10 +33,10 @@ handle_function_('ProcessCallback', {Callback}, _Opts) ->
             woody_error:raise(business, #wthd_provider_SessionNotFound{});
         {error, failed} ->
             erlang:error(failed);
-        {error, {exception, _, _}} ->
-            erlang:error(failed);
-        {error, {exception, _, _, _}} ->
-            erlang:error(failed)
+        {error, {exception, Class, Reason}} ->
+            erlang:error({process_exception, Class, Reason});
+        {error, {exception, Class, Reason, _Stacktrace}} ->
+            erlang:error({process_exception, Class, Reason})
     end.
 
 %%

@@ -206,18 +206,10 @@ services(Options) ->
     },
     maps:get(services, Options, Default).
 
-postgres_host() ->
-    case inet:gethostbyname("db") of
-        {ok, _} ->
-            "db";
-        {error, _} ->
-            "127.0.0.1"
-    end.
-
 epg_databases() ->
     #{
         default_db => #{
-            host => postgres_host(),
+            host => "db",
             port => 5432,
             database => "fistful",
             username => "fistful",
