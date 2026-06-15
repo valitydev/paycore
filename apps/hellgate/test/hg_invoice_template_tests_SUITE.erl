@@ -95,10 +95,10 @@ init_per_suite(C) ->
     RootUrl = maps:get(hellgate_root_url, Ret),
     PartyConfigRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
     Client = {party_client:create_client(), party_client:create_context()},
-    ok = operation_context:save_hellgate(operation_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     ShopConfigRef =
         hg_ct_helper:create_party_and_shop(PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), Client),
-    ok = operation_context:cleanup_hellgate(),
+    ok = op_context:cleanup(hellgate),
     [
         {party_config_ref, PartyConfigRef},
         {party_client, Client},

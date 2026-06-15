@@ -1,4 +1,4 @@
-{application, operation_context, [
+{application, op_context, [
     {description, "Process-scoped operation context (woody + party_client) for HG and FF"},
     {vsn, "0.1.0"},
     {registered, []},

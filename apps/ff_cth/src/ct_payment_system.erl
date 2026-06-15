@@ -261,7 +261,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/source_v1',
-                    context_binding => operation_context:fistful_binding()
+                    context_binding => op_context:binding(fistful)
                 }
             }
         },
@@ -270,7 +270,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/destination_v2',
-                    context_binding => operation_context:fistful_binding()
+                    context_binding => op_context:binding(fistful)
                 }
             }
         },
@@ -279,7 +279,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/deposit_v1',
-                    context_binding => operation_context:fistful_binding()
+                    context_binding => op_context:binding(fistful)
                 }
             }
         },
@@ -288,7 +288,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/withdrawal_v2',
-                    context_binding => operation_context:fistful_binding()
+                    context_binding => op_context:binding(fistful)
                 }
             }
         },
@@ -297,7 +297,7 @@ progressor_namespaces() ->
                 client => prg_machine,
                 options => #{
                     ns => 'ff/withdrawal/session_v2',
-                    context_binding => operation_context:fistful_binding()
+                    context_binding => op_context:binding(fistful)
                 }
             }
         }

@@ -60,11 +60,11 @@ fill_blacklist(_BlCtx, []) ->
 fill_blacklist(BlCtx, [Route]) ->
     [hg_inspector:fill_blacklist(Route, BlCtx)];
 fill_blacklist(BlCtx, Routes) ->
-    HgContext = operation_context:load_hellgate(),
+    HgContext = op_context:load(op_context:key(hellgate)),
     try
         genlib_pmap:map(
             fun(Route) ->
-                ok = operation_context:save_hellgate(HgContext),
+                ok = op_context:save(op_context:key(hellgate), HgContext),
                 hg_inspector:fill_blacklist(Route, BlCtx)
             end,
             Routes,
@@ -268,9 +268,9 @@ acceptable_terminal(Predestination, ProviderRef, TerminalRef, VS, Revision) ->
     end.
 
 get_party_client() ->
-    HgContext = operation_context:load_hellgate(),
-    Client = operation_context:get_party_client(HgContext),
-    Context = operation_context:get_party_client_context(HgContext),
+    HgContext = op_context:load(op_context:key(hellgate)),
+    Client = op_context:get_party_client(HgContext),
+    Context = op_context:get_party_client_context(HgContext),
     {Client, Context}.
 
 check_terms_acceptability(payment, Terms, VS) ->
@@ -455,7 +455,7 @@ setup_fill_blacklist_test() ->
 -spec cleanup_fill_blacklist_test(_) -> ok.
 cleanup_fill_blacklist_test(_Ok) ->
     try
-        operation_context:cleanup_hellgate()
+        op_context:cleanup(hellgate)
     catch
         _:_ -> ok
     end,
@@ -468,15 +468,15 @@ cleanup_fill_blacklist_test(_Ok) ->
 
 -spec fill_blacklist_preserves_hg_context_in_workers() -> _.
 fill_blacklist_preserves_hg_context_in_workers() ->
-    HgCtx = operation_context:create(#{woody_context => woody_context:new()}),
-    ok = operation_context:save_hellgate(HgCtx),
+    HgCtx = op_context:create(#{woody_context => woody_context:new()}),
+    ok = op_context:save(op_context:key(hellgate), HgCtx),
     Parent = self(),
     Routes = [test_route(N) || N <- [1, 2, 3]],
     BlCtx = test_blacklist_context(hd(Routes)),
     Ref = make_ref(),
     ok = meck:new(hg_inspector, [passthrough]),
     ok = meck:expect(hg_inspector, fill_blacklist, fun(Route, _BlCtx) ->
-        ?assertEqual(HgCtx, operation_context:load_hellgate()),
+        ?assertEqual(HgCtx, op_context:load(op_context:key(hellgate))),
         Parent ! {worker_done, self(), Ref},
         Route
     end),
@@ -487,15 +487,15 @@ fill_blacklist_preserves_hg_context_in_workers() ->
         ?assert(lists:all(fun(Pid) -> Pid =/= Parent end, WorkerPids))
     after
         ok = meck:unload(hg_inspector),
-        ok = operation_context:cleanup_hellgate()
+        ok = op_context:cleanup(hellgate)
     end.
 
 -spec fill_blacklist_timeout_raises_transient_error() -> _.
 fill_blacklist_timeout_raises_transient_error() ->
     Routes = [test_route(1), test_route(2)],
     BlCtx = test_blacklist_context(hd(Routes)),
-    HgCtx = operation_context:create(#{woody_context => woody_context:new()}),
-    ok = operation_context:save_hellgate(HgCtx),
+    HgCtx = op_context:create(#{woody_context => woody_context:new()}),
+    ok = op_context:save(op_context:key(hellgate), HgCtx),
     PrevTimeout = application:get_env(hellgate, inspect_timeout, infinity),
     PrevLimit = application:get_env(hellgate, inspect_parallel_limit, 10),
     ok = application:set_env(hellgate, inspect_timeout, 100),
@@ -514,7 +514,7 @@ fill_blacklist_timeout_raises_transient_error() ->
         ok = application:set_env(hellgate, inspect_timeout, PrevTimeout),
         ok = application:set_env(hellgate, inspect_parallel_limit, PrevLimit),
         ok = meck:unload(hg_inspector),
-        ok = operation_context:cleanup_hellgate()
+        ok = op_context:cleanup(hellgate)
     end.
 
 -spec collect_worker_pids(reference(), non_neg_integer()) -> [pid()].

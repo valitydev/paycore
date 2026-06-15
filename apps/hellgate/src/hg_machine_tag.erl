@@ -13,7 +13,7 @@
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id(), machine_id()} | {error, notfound}.
 get_binding(NS, Tag) ->
-    WoodyContext = operation_context:get_woody_context(operation_context:load_hellgate()),
+    WoodyContext = op_context:get_woody_context(op_context:load(op_context:key(hellgate))),
     case bender_client:get_internal_id(tag_to_external_id(NS, Tag), WoodyContext) of
         {ok, EntityID} ->
             {ok, EntityID, EntityID};
@@ -34,7 +34,7 @@ create_binding(NS, Tag, EntityID, MachineID) ->
 %%
 
 create_binding_(NS, Tag, EntityID, Context) ->
-    WoodyContext = operation_context:get_woody_context(operation_context:load_hellgate()),
+    WoodyContext = op_context:get_woody_context(op_context:load(op_context:key(hellgate))),
     case bender_client:gen_constant(tag_to_external_id(NS, Tag), EntityID, WoodyContext, Context) of
         {ok, EntityID} ->
             ok;

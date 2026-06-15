@@ -324,7 +324,7 @@ start_app(progressor = AppName) ->
                         client => prg_machine,
                         options => #{
                             ns => invoice,
-                            context_binding => operation_context:hellgate_binding()
+                            context_binding => op_context:binding(hellgate)
                         }
                     },
                     worker_pool_size => 150
@@ -334,7 +334,7 @@ start_app(progressor = AppName) ->
                         client => prg_machine,
                         options => #{
                             ns => invoice_template,
-                            context_binding => operation_context:hellgate_binding()
+                            context_binding => op_context:binding(hellgate)
                         }
                     }
                 }

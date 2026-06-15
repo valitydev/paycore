@@ -4098,9 +4098,9 @@ get_message(invoice_payment_status_changed) ->
     "Invoice payment status is changed".
 
 get_party_client() ->
-    HgContext = operation_context:load_hellgate(),
-    Client = operation_context:get_party_client(HgContext),
-    Context = operation_context:get_party_client_context(HgContext),
+    HgContext = op_context:load(op_context:key(hellgate)),
+    Client = op_context:get_party_client(HgContext),
+    Context = op_context:get_party_client_context(HgContext),
     {Client, Context}.
 
 is_route_cascade_available(

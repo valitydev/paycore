@@ -44,7 +44,7 @@
 
 -type env_enter_fun() :: fun(() -> ok) | fun((woody_context:ctx()) -> ok).
 
--type context_binding() :: operation_context:binding().
+-type context_binding() :: op_context:binding().
 
 -type process_options() :: #{
     ns := namespace(),
@@ -556,7 +556,7 @@ request(NS, ID, Args, Range) ->
     }).
 
 encode_rpc_context() ->
-    WoodyContext = operation_context:current_woody_context(),
+    WoodyContext = op_context:current_woody_context(),
     encode_term(woody_rpc_helper:encode_rpc_context(WoodyContext, otel_ctx:get_current())).
 
 decode_rpc_context(<<>>) ->
@@ -571,7 +571,7 @@ resolve_env_enter(Opts) ->
         false ->
             case maps:get(context_binding, Opts, undefined) of
                 Binding when is_map(Binding) ->
-                    fun(WoodyCtx) -> operation_context:env_enter(WoodyCtx, Binding) end;
+                    fun(WoodyCtx) -> op_context:env_enter(WoodyCtx, Binding) end;
                 _ ->
                     fun(_) -> ok end
             end
@@ -584,7 +584,7 @@ resolve_env_leave(Opts) ->
         false ->
             case maps:get(context_binding, Opts, undefined) of
                 Binding when is_map(Binding) ->
-                    fun() -> operation_context:env_leave(Binding) end;
+                    fun() -> op_context:env_leave(Binding) end;
                 _ ->
                     fun() -> ok end
             end
@@ -729,7 +729,7 @@ setup_env_hook_test() ->
     {ok, _} = application:ensure_all_started(party_client),
     {ok, _} = application:ensure_all_started(opentelemetry_api),
     {ok, _} = application:ensure_all_started(opentelemetry),
-    {ok, _} = application:ensure_all_started(operation_context),
+    {ok, _} = application:ensure_all_started(op_context),
     _ = ensure_env_hook_dispatch_table(),
     true = ets:insert(?TABLE, {?TEST_NS, prg_machine_env_mock_handler}),
     ok = prg_machine_env_mock_context:reset(),
@@ -738,7 +738,7 @@ setup_env_hook_test() ->
 -spec cleanup_env_hook_test(_) -> ok.
 cleanup_env_hook_test(_) ->
     _ = ets:delete(?TABLE, ?TEST_NS),
-    operation_context:cleanup(?TEST_REGISTRY_KEY, lenient),
+    op_context:cleanup(?TEST_REGISTRY_KEY, lenient),
     ok.
 
 -spec ensure_woody_available() -> ok.

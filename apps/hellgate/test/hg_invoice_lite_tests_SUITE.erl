@@ -100,11 +100,11 @@ init_per_suite(C) ->
     _ = hg_domain:upsert(construct_domain_fixture()),
     PartyConfigRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
     PartyClient = {party_client:create_client(), party_client:create_context()},
-    ok = operation_context:save_hellgate(operation_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),
-    ok = operation_context:cleanup_hellgate(),
+    ok = op_context:cleanup(hellgate),
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
     ok = hg_invoice_helper:start_kv_store(SupPid),
@@ -147,7 +147,7 @@ end_per_group(_Group, _C) ->
 init_per_testcase(_, C) ->
     ApiClient = hg_ct_helper:create_client(hg_ct_helper:cfg(root_url, C)),
     Client = hg_client_invoicing:start_link(ApiClient),
-    ok = operation_context:save_hellgate(operation_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     [
         {client, Client}
         | C

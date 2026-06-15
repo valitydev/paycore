@@ -36,7 +36,7 @@
 handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
     WoodyContext = ensure_woody_deadline_set(WoodyContext0, Opts),
     {HandlerMod, HandlerOptions} = get_handler_opts(Handler),
-    ok = operation_context:save_fistful(create_context(WoodyContext, Opts)),
+    ok = op_context:save(op_context:key(fistful), create_context(WoodyContext, Opts)),
     try
         HandlerMod:handle_function(
             Func,
@@ -44,7 +44,7 @@ handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
             HandlerOptions
         )
     after
-        operation_context:cleanup_fistful()
+        op_context:cleanup(fistful)
     end.
 
 %% Internal functions
@@ -54,7 +54,7 @@ create_context(WoodyContext, Opts) ->
         woody_context => WoodyContext,
         party_client => maps:get(party_client, Opts)
     },
-    operation_context:create(ContextOptions).
+    op_context:create(ContextOptions).
 
 -spec ensure_woody_deadline_set(woody_context:ctx(), options()) -> woody_context:ctx().
 ensure_woody_deadline_set(WoodyContext, Opts) ->

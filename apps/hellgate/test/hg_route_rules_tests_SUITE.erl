@@ -132,13 +132,13 @@ end_per_group(_GroupName, _C) ->
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
 init_per_testcase(_, C) ->
-    Ctx = operation_context:set_party_client(cfg(party_client, C), operation_context:create()),
-    ok = operation_context:save_hellgate(Ctx),
+    Ctx = op_context:set_party_client(cfg(party_client, C), op_context:create()),
+    ok = op_context:save(op_context:key(hellgate), Ctx),
     C.
 
 -spec end_per_testcase(test_case_name(), config()) -> ok.
 end_per_testcase(_Name, _C) ->
-    ok = operation_context:cleanup_hellgate(),
+    ok = op_context:cleanup(hellgate),
     ok.
 
 cfg(Key, C) ->

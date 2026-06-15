@@ -49,7 +49,7 @@ sequenceDiagram
 
 **`process/3`:** `env_enter` → `unmarshal_machine` → `dispatch` → `marshal_process_result` → `env_leave` (Leave только после успешного Enter). Исключение в домене → `{error, {exception, Class, Reason}}` + log (stacktrace только в логах, не на проводе).
 
-**Контекст RPC:** `operation_context:current_woody_context/0` (hg-binding → ff-binding → fresh ctx + warning). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
+**Контекст RPC:** `op_context:current_woody_context/0` (hg-binding → ff-binding → fresh ctx + warning). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
 
 **События:** timestamp в microsecond (`timestamp_us()`); metadata пишет оба ключа `<<"format_version">>` и `<<"format">>`. FF payload — legacy `term_to_binary({bin, ThriftBin})`; HG payload — `term_to_binary(msgpack)`.
 

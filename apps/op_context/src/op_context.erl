@@ -1,18 +1,14 @@
--module(operation_context).
+-module(op_context).
 
 -export([create/0]).
 -export([create/1]).
 -export([save/2]).
 -export([load/1]).
+-export([cleanup/1]).
 -export([cleanup/2]).
 
--export([save_hellgate/1]).
--export([load_hellgate/0]).
--export([cleanup_hellgate/0]).
-
--export([save_fistful/1]).
--export([load_fistful/0]).
--export([cleanup_fistful/0]).
+-export([key/1]).
+-export([binding/1]).
 
 -export([get_woody_context/1]).
 -export([set_woody_context/2]).
@@ -21,12 +17,11 @@
 -export([get_party_client/1]).
 -export([set_party_client/2]).
 
--export([hellgate_binding/0]).
--export([fistful_binding/0]).
 -export([env_enter/2]).
 -export([env_leave/1]).
 -export([current_woody_context/0]).
 
+-type scope() :: hellgate | fistful.
 -type registry_key() :: {p, l, term()}.
 -type cleanup_mode() :: strict | lenient.
 
@@ -48,6 +43,7 @@
 }.
 
 -export_type([
+    scope/0,
     registry_key/0,
     cleanup_mode/0,
     binding/0,
@@ -60,9 +56,6 @@
 -type woody_context() :: woody_context:ctx().
 -type party_client() :: party_client:client().
 -type party_client_context() :: party_client:context().
-
--define(HG_REGISTRY_KEY, {p, l, stored_hg_context}).
--define(FF_REGISTRY_KEY, {p, l, {ff_context, stored_context}}).
 
 %% API
 
@@ -90,6 +83,10 @@ save(RegistryKey, Context) ->
 load(RegistryKey) ->
     gproc:get_value(RegistryKey).
 
+-spec cleanup(scope()) -> ok.
+cleanup(Scope) when Scope =:= hellgate; Scope =:= fistful ->
+    cleanup(key(Scope), cleanup_mode(Scope)).
+
 -spec cleanup(registry_key(), cleanup_mode()) -> ok.
 cleanup(RegistryKey, strict) ->
     true = gproc:unreg(RegistryKey),
@@ -102,42 +99,17 @@ cleanup(RegistryKey, lenient) ->
     end,
     ok.
 
--spec save_hellgate(context()) -> ok.
-save_hellgate(Context) ->
-    save(?HG_REGISTRY_KEY, Context).
+-spec key(scope()) -> registry_key().
+key(hellgate) ->
+    {p, l, stored_hg_context};
+key(fistful) ->
+    {p, l, {ff_context, stored_context}}.
 
--spec load_hellgate() -> context() | no_return().
-load_hellgate() ->
-    load(?HG_REGISTRY_KEY).
-
--spec cleanup_hellgate() -> ok.
-cleanup_hellgate() ->
-    cleanup(?HG_REGISTRY_KEY, strict).
-
--spec save_fistful(context()) -> ok.
-save_fistful(Context) ->
-    save(?FF_REGISTRY_KEY, Context).
-
--spec load_fistful() -> context() | no_return().
-load_fistful() ->
-    load(?FF_REGISTRY_KEY).
-
--spec cleanup_fistful() -> ok.
-cleanup_fistful() ->
-    cleanup(?FF_REGISTRY_KEY, lenient).
-
--spec hellgate_binding() -> binding().
-hellgate_binding() ->
+-spec binding(scope()) -> binding().
+binding(Scope) ->
     #{
-        registry_key => ?HG_REGISTRY_KEY,
-        cleanup_mode => strict
-    }.
-
--spec fistful_binding() -> binding().
-fistful_binding() ->
-    #{
-        registry_key => ?FF_REGISTRY_KEY,
-        cleanup_mode => lenient
+        registry_key => key(Scope),
+        cleanup_mode => cleanup_mode(Scope)
     }.
 
 -spec env_enter(woody_context(), binding()) -> ok.
@@ -160,12 +132,12 @@ env_leave(#{registry_key := RegistryKey, cleanup_mode := CleanupMode}) ->
 %% global prg_machine woody_context_loader app-env hook.
 -spec current_woody_context() -> woody_context().
 current_woody_context() ->
-    case try_load_woody_context([?HG_REGISTRY_KEY, ?FF_REGISTRY_KEY]) of
+    case try_load_woody_context([key(hellgate), key(fistful)]) of
         {ok, WoodyContext} ->
             WoodyContext;
         error ->
             _ = logger:warning(
-                "operation_context: no woody context bound to the current process, using a fresh one"
+                "op_context: no woody context bound to the current process, using a fresh one"
             ),
             woody_context:new()
     end.
@@ -208,6 +180,12 @@ set_party_client_context(PartyContext, Context) ->
 
 %% Internal functions
 
+-spec cleanup_mode(scope()) -> cleanup_mode().
+cleanup_mode(hellgate) ->
+    strict;
+cleanup_mode(fistful) ->
+    lenient.
+
 -spec ensure_woody_context_exists(options()) -> options().
 ensure_woody_context_exists(#{woody_context := _WoodyContext} = Options) ->
     Options;
@@ -223,9 +201,6 @@ ensure_party_context_exists(#{woody_context := WoodyContext} = Options) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--define(HG_TEST_KEY, {p, l, stored_hg_context}).
--define(FF_TEST_KEY, {p, l, {ff_context, stored_context}}).
-
 -spec test() -> _.
 
 -spec colocated_keys_isolated_test() -> _.
@@ -237,23 +212,23 @@ colocated_keys_isolated_test() ->
     try
         CtxHg = create(#{woody_context => WoodyHg}),
         CtxFf = create(#{woody_context => WoodyFf}),
-        ok = save(?HG_TEST_KEY, CtxHg),
-        ok = save(?FF_TEST_KEY, CtxFf),
-        CtxHgLoaded = load(?HG_TEST_KEY),
-        CtxFfLoaded = load(?FF_TEST_KEY),
+        ok = save(key(hellgate), CtxHg),
+        ok = save(key(fistful), CtxFf),
+        CtxHgLoaded = load(key(hellgate)),
+        CtxFfLoaded = load(key(fistful)),
         ?assertEqual(WoodyHg, get_woody_context(CtxHgLoaded)),
         ?assertEqual(WoodyFf, get_woody_context(CtxFfLoaded)),
         ?assertNotEqual(
             get_party_client_context(CtxHgLoaded),
             get_party_client_context(CtxFfLoaded)
         ),
-        ok = cleanup(?HG_TEST_KEY, strict),
-        CtxFfAfterHgCleanup = load(?FF_TEST_KEY),
+        ok = cleanup(hellgate),
+        CtxFfAfterHgCleanup = load(key(fistful)),
         ?assertEqual(WoodyFf, get_woody_context(CtxFfAfterHgCleanup)),
-        ok = cleanup(?FF_TEST_KEY, lenient)
+        ok = cleanup(fistful)
     after
-        cleanup(?HG_TEST_KEY, lenient),
-        cleanup(?FF_TEST_KEY, lenient)
+        cleanup(key(hellgate), lenient),
+        cleanup(fistful)
     end.
 
 -spec scoped_helpers_test() -> _.
@@ -262,12 +237,12 @@ scoped_helpers_test() ->
     {ok, _} = application:ensure_all_started(woody),
     WoodyCtx = woody_context:new(),
     try
-        ok = save_fistful(create(#{woody_context => WoodyCtx})),
-        ?assertEqual(WoodyCtx, get_woody_context(load_fistful())),
-        ok = cleanup_fistful(),
-        ok = cleanup_fistful()
+        ok = save(key(fistful), create(#{woody_context => WoodyCtx})),
+        ?assertEqual(WoodyCtx, get_woody_context(load(key(fistful)))),
+        ok = cleanup(fistful),
+        ok = cleanup(fistful)
     after
-        cleanup_fistful()
+        cleanup(fistful)
     end.
 
 -endif.
