@@ -44,7 +44,7 @@
     range => history_range()
 }.
 
--type signal() :: timeout | {repair, args()}.
+-type signal() :: timeout.
 -type result() :: #{
     events => [event_body()],
     action => action(),

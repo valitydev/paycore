@@ -176,9 +176,7 @@ init(Events, _Machine) ->
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
     Session = prg_machine:collapse(ff_withdrawal_session, Machine),
-    process_session_result(ff_withdrawal_session:process_session(Session), Machine);
-process_signal({repair, _Args}, _Machine) ->
-    erlang:error({unexpected_signal, repair}).
+    process_session_result(ff_withdrawal_session:process_session(Session), Machine).
 
 -spec process_call({process_callback, callback_params()}, machine()) ->
     {{ok, process_callback_response()} | {error, process_callback_error()}, prg_result()}.

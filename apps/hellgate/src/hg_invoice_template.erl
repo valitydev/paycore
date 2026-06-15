@@ -262,8 +262,6 @@ process_repair(_Args, _Machine) ->
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, _Machine) ->
-    #{};
-process_signal({repair, _}, _Machine) ->
     #{}.
 
 -spec process_call(call(), machine()) -> {prg_machine:response(), prg_result()}.

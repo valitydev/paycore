@@ -173,9 +173,7 @@ init({Events, Ctx}, _Machine) ->
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
     Deposit = prg_machine:collapse(ff_deposit, Machine),
-    process_transfer_result(ff_deposit:process_transfer(Deposit), Machine);
-process_signal({repair, _Args}, _Machine) ->
-    erlang:error({unexpected_signal, repair}).
+    process_transfer_result(ff_deposit:process_transfer(Deposit), Machine).
 
 -spec process_call(term(), machine()) -> no_return().
 process_call(CallArgs, _Machine) ->

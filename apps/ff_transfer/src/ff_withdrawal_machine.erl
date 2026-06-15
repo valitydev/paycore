@@ -203,9 +203,7 @@ init({Events, Ctx}, _Machine) ->
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
     Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
-    process_transfer_result(ff_withdrawal:process_transfer(Withdrawal), Machine);
-process_signal({repair, _Args}, _Machine) ->
-    erlang:error({unexpected_signal, repair}).
+    process_transfer_result(ff_withdrawal:process_transfer(Withdrawal), Machine).
 
 -spec process_call({start_adjustment, adjustment_params()}, machine()) ->
     {ok | {error, start_adjustment_error()}, prg_result()}.

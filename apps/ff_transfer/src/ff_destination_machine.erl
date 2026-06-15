@@ -140,9 +140,7 @@ init({Events, Ctx}, _Machine) ->
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, _Machine) ->
-    #{};
-process_signal({repair, _Args}, _Machine) ->
-    erlang:error({unexpected_signal, repair}).
+    #{}.
 
 -spec process_call(term(), machine()) -> no_return().
 process_call(CallArgs, _Machine) ->
