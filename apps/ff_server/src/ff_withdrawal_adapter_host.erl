@@ -30,9 +30,7 @@ handle_function_('ProcessCallback', {Callback}, _Opts) ->
         {error, {session_already_finished, Context}} ->
             {ok, marshal(process_callback_result, {finished, Context})};
         {error, {unknown_session, _Ref}} ->
-            woody_error:raise(business, #wthd_provider_SessionNotFound{});
-        {error, failed} ->
-            erlang:error(failed)
+            woody_error:raise(business, #wthd_provider_SessionNotFound{})
     end.
 
 %%

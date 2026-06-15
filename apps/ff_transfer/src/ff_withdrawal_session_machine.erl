@@ -146,7 +146,7 @@ repair(ID, Scenario) ->
 
 -spec process_callback(callback_params()) ->
     {ok, process_callback_response()}
-    | {error, process_callback_error() | failed}.
+    | {error, process_callback_error()}.
 process_callback(#{tag := Tag} = Params) ->
     case ff_machine_tag:get_binding(?NS, Tag) of
         {ok, EntityID} ->
@@ -262,9 +262,9 @@ call(Ref, Call) ->
         {error, notfound} ->
             {error, {unknown_session, Ref}};
         {error, failed} ->
-            {error, failed};
+            erlang:error({failed, ?NS, Ref});
         {error, {exception, _, _}} ->
-            {error, failed};
+            erlang:error({failed, ?NS, Ref});
         {error, _} = Error ->
             Error
     end.
