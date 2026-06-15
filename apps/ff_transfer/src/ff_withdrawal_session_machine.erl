@@ -67,10 +67,6 @@
     {unknown_session, {tag, id()}}
     | ff_withdrawal_session:process_callback_error().
 
--type processor_error() ::
-    {exception, atom(), term()}
-    | {exception, atom(), term(), list()}.
-
 -type ctx() :: ff_entity_context:context().
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
@@ -150,7 +146,7 @@ repair(ID, Scenario) ->
 
 -spec process_callback(callback_params()) ->
     {ok, process_callback_response()}
-    | {error, process_callback_error() | processor_error() | failed}.
+    | {error, process_callback_error() | failed}.
 process_callback(#{tag := Tag} = Params) ->
     case ff_machine_tag:get_binding(?NS, Tag) of
         {ok, EntityID} ->
@@ -266,6 +262,8 @@ call(Ref, Call) ->
         {error, notfound} ->
             {error, {unknown_session, Ref}};
         {error, failed} ->
+            {error, failed};
+        {error, {exception, _, _}} ->
             {error, failed};
         {error, _} = Error ->
             Error

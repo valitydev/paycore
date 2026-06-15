@@ -20,14 +20,12 @@
 %% Domain history tuple (not progressor storage event() map).
 -type machine_event() :: {event_id(), timestamp(), event_body()}.
 -type history() :: [machine_event()].
+-type processor_error() :: {exception, atom(), term()}.
+
 -type get_error() ::
     notfound
     | {unknown_namespace, namespace()}
-    | {exception, atom(), term()}.
-
--type processor_error() ::
-    {exception, atom(), term()}
-    | {exception, atom(), term(), list()}.
+    | processor_error().
 
 -type repair_error() ::
     notfound
@@ -77,6 +75,7 @@
     history/0,
     machine/0,
     get_error/0,
+    processor_error/0,
     repair_error/0,
     signal/0,
     result/0,
@@ -185,6 +184,10 @@ call(NS, ID, CallArgs, After, Limit, Direction) ->
             {error, notfound};
         {error, <<"process is error">>} ->
             {error, failed};
+        {error, {exception, _Class, _Reason} = Exception} ->
+            {error, Exception};
+        {error, {exception, Class, Reason, _Stacktrace}} ->
+            {error, {exception, Class, Reason}};
         {error, _} = Error ->
             Error
     end.
@@ -262,7 +265,7 @@ get_history(NS, ID, After, Limit, Direction) ->
     end.
 
 -spec notify(namespace(), id(), args()) ->
-    ok | {error, notfound | failed | {exception, atom(), term()} | term()}.
+    ok | {error, notfound | failed | processor_error() | term()}.
 notify(NS, ID, Args) ->
     case call(NS, ID, {notify, Args}) of
         {ok, _} -> ok;
@@ -270,7 +273,7 @@ notify(NS, ID, Args) ->
     end.
 
 -spec remove(namespace(), id()) ->
-    ok | {error, notfound | failed | {exception, atom(), term()} | term()}.
+    ok | {error, notfound | failed | processor_error() | term()}.
 remove(NS, ID) ->
     case call(NS, ID, remove) of
         {ok, _} -> ok;

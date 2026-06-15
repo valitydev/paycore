@@ -15,7 +15,7 @@
 -type timestamp() :: prg_machine:timestamp().
 -type timestamped_event(T) :: {ev, timestamp(), T}.
 
--type processor_error() :: {exception, atom(), term()}.
+-type processor_error() :: prg_machine:processor_error().
 
 -type repair_call_error() ::
     notfound

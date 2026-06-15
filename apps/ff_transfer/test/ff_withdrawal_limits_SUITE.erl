@@ -72,14 +72,13 @@ groups() ->
 
 -spec init_per_suite(config()) -> config().
 init_per_suite(C) ->
-    C1 = ct_helper:makeup_cfg(
+    ct_helper:makeup_cfg(
         [
             ct_helper:test_case_name(init),
             ct_payment_system:setup()
         ],
         C
-    ),
-    C1.
+    ).
 
 -spec end_per_suite(config()) -> _.
 end_per_suite(C) ->

@@ -886,7 +886,7 @@ session_repair_test(C) ->
     ?assertEqual(pending, await_session_processing_status(WithdrawalID, pending)),
     SessionID = get_session_id(WithdrawalID),
     ?assertEqual(<<"callback_processing">>, await_session_adapter_state(SessionID, <<"callback_processing">>)),
-    ?assertMatch({error, {exception, _, _}}, call_process_callback(Callback)),
+    ?assertEqual({error, failed}, call_process_callback(Callback)),
     timer:sleep(3000),
     ?assertEqual(pending, await_session_processing_status(WithdrawalID, pending)),
     ok = repair_withdrawal_session(WithdrawalID),
