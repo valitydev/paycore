@@ -46,6 +46,9 @@ legacy_hg_invoice_metadata_test_() ->
 legacy_hg_invoice_aux_state_test_() ->
     {"hg_invoice_aux_state", fun legacy_hg_invoice_aux_state_test/0}.
 
+legacy_hg_aux_state_rollback_test_() ->
+    {"hg_invoice_aux_state_rollback", fun legacy_hg_aux_state_rollback_test/0}.
+
 legacy_hg_call_args_test_() ->
     {"hg_call_args", fun legacy_hg_call_args_test/0}.
 
@@ -100,6 +103,11 @@ legacy_hg_invoice_aux_state_test() ->
     Dir = legacy_fixture_lib:hg_invoice_dir(),
     Aux = legacy_fixture_lib:read_aux_state(Dir),
     ?assertEqual(#{}, hg_invoice:unmarshal_aux_state(Aux)).
+
+legacy_hg_aux_state_rollback_test() ->
+    Dir = legacy_fixture_lib:hg_invoice_dir(),
+    LegacyAux = legacy_fixture_lib:read_aux_state(Dir),
+    ?assertEqual(LegacyAux, hg_invoice:marshal_aux_state(#{})).
 
 legacy_hg_call_args_test() ->
     Dir = legacy_fixture_lib:hg_invoice_dir(),

@@ -357,13 +357,22 @@ unmarshal_event_body(Format, _Payload) ->
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->
-    msgpack_payload_to_binary(mg_msgpack_marshalling:marshal(AuxSt)).
+    term_to_binary(marshal_aux_st_content(AuxSt)).
+
+marshal_aux_st_content(AuxSt) when map_size(AuxSt) =:= 0 ->
+    #mg_stateproc_Content{format_version = undefined, data = {bin, <<>>}};
+marshal_aux_st_content(AuxSt) ->
+    #mg_stateproc_Content{
+        format_version = undefined,
+        data = mg_msgpack_marshalling:marshal(AuxSt)
+    }.
 
 -spec unmarshal_aux_state(binary()) -> term().
 unmarshal_aux_state(<<>>) ->
     #{};
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    %% Same compat as hg_invoice: legacy #mg_stateproc_Content{} or current msgpack blob.
+    %% Legacy hg_progressor stored term_to_binary(#mg_stateproc_Content{data = Msgp}).
+    %% Keep reading bare msgpack blobs written by an intermediate branch version.
     case binary_to_term(Payload) of
         #mg_stateproc_Content{data = {bin, <<>>}} ->
             #{};
@@ -425,11 +434,21 @@ unmarshal_event_payload(#{format_version := 1, data := {bin, Changes}}) ->
 
 -spec test() -> _.
 
+-spec aux_state_roundtrip_test() -> _.
+aux_state_roundtrip_test() ->
+    AuxSt = #{<<"k">> => <<"v">>},
+    ?assertEqual(AuxSt, unmarshal_aux_state(marshal_aux_state(AuxSt))).
+
+-spec aux_state_writes_legacy_empty_content_test() -> _.
+aux_state_writes_legacy_empty_content_test() ->
+    Legacy = term_to_binary(#mg_stateproc_Content{format_version = undefined, data = {bin, <<>>}}),
+    ?assertEqual(Legacy, marshal_aux_state(#{})).
+
 -spec aux_state_reads_legacy_mg_content_test() -> _.
 aux_state_reads_legacy_mg_content_test() ->
     AuxSt = #{<<"legacy">> => 1},
-    Msgp = mg_msgpack_marshalling:marshal(AuxSt),
-    Legacy = term_to_binary(#mg_stateproc_Content{format_version = 1, data = Msgp}),
+    Legacy = term_to_binary(marshal_aux_st_content(AuxSt)),
+    ?assertEqual(Legacy, marshal_aux_state(AuxSt)),
     ?assertEqual(AuxSt, unmarshal_aux_state(Legacy)).
 
 -endif.
