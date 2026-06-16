@@ -301,7 +301,7 @@ marshal(_, Other) ->
 
 -spec unmarshal(type_name(), encoded_value()) -> decoded_value().
 unmarshal({list, T}, V) ->
-    [marshal(T, E) || E <- V];
+    [unmarshal(T, E) || E <- V];
 unmarshal({set, T}, V) ->
     ordsets:from_list([unmarshal(T, E) || E <- ordsets:to_list(V)]);
 unmarshal(id, V) ->

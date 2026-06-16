@@ -2,8 +2,6 @@
 
 %%% Namespace -> handler module registry (ETS owner).
 
--behaviour(gen_server).
-
 -define(TABLE, prg_machine_dispatch).
 -define(SERVER, ?MODULE).
 
@@ -11,14 +9,7 @@
 -export([start_link/1]).
 -export([lookup/1]).
 -export([ensure_table/0]).
-
--export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
-
--record(state, {
-    handlers :: [module()]
-}).
-
--type state() :: #state{}.
+-export([init/1]).
 
 -spec get_child_spec([module()]) -> supervisor:child_spec().
 get_child_spec(Handlers) ->
@@ -33,7 +24,7 @@ get_child_spec(Handlers) ->
 
 -spec start_link([module()]) -> {ok, pid()} | {error, term()}.
 start_link(Handlers) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Handlers, []).
+    proc_lib:start_link(?MODULE, init, [Handlers]).
 
 -spec lookup(prg_machine:namespace()) -> {ok, module()} | {error, {unknown_namespace, prg_machine:namespace()}}.
 lookup(NS) ->
@@ -59,20 +50,18 @@ ensure_table() ->
             ok
     end.
 
--spec init([module()]) -> {ok, state()}.
+-spec init([module()]) -> ok.
 init(Handlers) ->
+    true = register(?SERVER, self()),
     ok = ensure_table(),
     true = ets:insert(?TABLE, [{prg_machine:handler_namespace(H), H} || H <- Handlers]),
-    {ok, #state{handlers = Handlers}}.
+    proc_lib:init_ack({ok, self()}),
+    loop().
 
--spec handle_call(term(), {pid(), term()}, state()) -> {reply, term(), state()}.
-handle_call(_Request, _From, State) ->
-    {reply, {error, unsupported}, State}.
-
--spec handle_cast(term(), state()) -> {noreply, state()}.
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
--spec handle_info(term(), state()) -> {noreply, state()}.
-handle_info(_Info, State) ->
-    {noreply, State}.
+loop() ->
+    receive
+        stop ->
+            ok;
+        _Msg ->
+            loop()
+    end.

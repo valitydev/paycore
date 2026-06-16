@@ -25,6 +25,7 @@
 
 %% ff_machine
 -export([apply_event/2]).
+-export([apply_event/4]).
 
 %% ff_repair
 -export([set_session_result/2]).
@@ -195,6 +196,11 @@ apply_event({callback, _Ev} = WrappedEvent, Session) ->
     Callbacks0 = callbacks_index(Session),
     Callbacks1 = ff_withdrawal_callback_utils:apply_event(WrappedEvent, Callbacks0),
     set_callbacks_index(Callbacks1, Session).
+
+-spec apply_event(prg_machine:event_id(), prg_machine:timestamp(), event(), undefined | session_state()) ->
+    session_state().
+apply_event(_EventID, _Timestamp, Ev, Session) ->
+    apply_event(Ev, Session).
 
 -spec process_session(session_state()) -> process_result().
 process_session(#{status := {finished, _}, id := ID, result := Result, withdrawal := Withdrawal}) ->

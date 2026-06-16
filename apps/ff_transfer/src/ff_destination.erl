@@ -108,6 +108,7 @@
 -export([create/1]).
 -export([is_accessible/1]).
 -export([apply_event/2]).
+-export([apply_event/4]).
 
 %% Pipeline
 
@@ -222,3 +223,8 @@ apply_event({account, Ev}, #{account := Account} = Destination) ->
     Destination#{account => ff_account:apply_event(Ev, Account)};
 apply_event({account, Ev}, Destination) ->
     apply_event({account, Ev}, Destination#{account => undefined}).
+
+-spec apply_event(prg_machine:event_id(), prg_machine:timestamp(), event(), ff_maybe:'maybe'(destination_state())) ->
+    destination_state().
+apply_event(_EventID, _Timestamp, Ev, Destination) ->
+    apply_event(Ev, Destination).
