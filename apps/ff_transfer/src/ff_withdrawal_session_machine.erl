@@ -28,7 +28,6 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
--export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/2]).
 -export([marshal_aux_state/1]).
@@ -42,6 +41,11 @@
 -type repair_response() :: ff_repair:repair_response().
 -type repair_call_error() :: ff_machine_lib:repair_call_error().
 
+-export_type([id/0]).
+-export_type([st/0]).
+-export_type([event/0]).
+-export_type([params/0]).
+-export_type([event_range/0]).
 -export_type([repair_error/0]).
 -export_type([repair_response/0]).
 -export_type([repair_call_error/0]).
@@ -56,7 +60,7 @@
     ctx := ctx()
 }.
 -type session() :: ff_withdrawal_session:session_state().
--type event() :: ff_withdrawal_session:event().
+-type event() :: {integer(), timestamped_event(change())}.
 -type event_range() :: {After :: non_neg_integer() | undefined, Limit :: non_neg_integer() | undefined}.
 -type timestamp() :: prg_machine:timestamp().
 -type timestamped_event(T) :: {ev, timestamp(), T}.
@@ -104,45 +108,18 @@ get(ID) ->
     {ok, st()}
     | {error, notfound}.
 get(ID, {After, Limit}) ->
-    case prg_machine:get(?NS, ID, prg_machine:history_range(After, Limit, forward)) of
-        {ok, Machine} ->
-            {ok, machine_to_st(Machine)};
-        {error, notfound} ->
-            {error, notfound};
-        {error, {exception, Class, Reason}} ->
-            erlang:error({process_exception, Class, Reason})
-    end.
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ff_withdrawal_session, notfound).
 
 -spec events(id(), event_range()) ->
-    {ok, [{integer(), timestamped_event(event())}]}
+    {ok, [event()]}
     | {error, notfound}.
 events(ID, {After, Limit}) ->
-    case prg_machine:get_history(?NS, ID, After, Limit, forward) of
-        {ok, History} ->
-            {ok, ff_machine_lib:history_to_events(History)};
-        {error, notfound} ->
-            {error, notfound};
-        {error, {exception, Class, Reason}} ->
-            erlang:error({process_exception, Class, Reason})
-    end.
+    ff_machine_lib:events(?NS, ID, {After, Limit}, notfound).
 
 -spec repair(id(), ff_repair:scenario()) ->
     {ok, repair_response()} | {error, repair_call_error()}.
 repair(ID, Scenario) ->
-    case prg_machine:repair(?NS, ID, Scenario) of
-        {ok, Response} ->
-            {ok, Response};
-        {error, notfound} ->
-            {error, notfound};
-        {error, working} ->
-            {error, working};
-        {error, {repair, {failed, Reason}}} ->
-            {error, {failed, Reason}};
-        {error, failed} = Error ->
-            Error;
-        {error, {exception, _Class, _Reason} = Exception} ->
-            {error, Exception}
-    end.
+    ff_machine_lib:repair(?NS, ID, Scenario).
 
 -spec process_callback(callback_params()) ->
     {ok, process_callback_response()}
@@ -163,16 +140,12 @@ namespace() ->
 
 -spec init([change()], machine()) -> prg_result().
 init(Events, _Machine) ->
-    #{
-        events => Events,
-        action => timeout,
-        auxst => #{ctx => ff_entity_context:new()}
-    }.
+    ff_machine_lib:init_result(Events, ff_entity_context:new(), timeout).
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
     Session = prg_machine:collapse(ff_withdrawal_session, Machine),
-    process_session_result(ff_withdrawal_session:process_session(Session), Machine).
+    ff_machine_lib:to_prg_result(ff_withdrawal_session:process_session(Session)).
 
 -spec process_call({process_callback, callback_params()}, machine()) ->
     {{ok, process_callback_response()} | {error, process_callback_error()}, prg_result()}.
@@ -180,7 +153,7 @@ process_call({process_callback, Params}, Machine) ->
     Session = prg_machine:collapse(ff_withdrawal_session, Machine),
     case ff_withdrawal_session:process_callback(Params, Session) of
         {ok, {Response, Result}} ->
-            {{ok, Response}, process_session_result(Result, Machine)};
+            {{ok, Response}, ff_machine_lib:to_prg_result(Result)};
         {error, {Reason, _Result}} ->
             {{error, Reason}, #{}}
     end;
@@ -196,64 +169,23 @@ process_repair(Scenario, Machine) ->
             {ok, {ok, #{action => Action, events => Events}}}
         end
     },
-    case
-        ff_repair:apply_scenario(
-            ff_withdrawal_session, ff_machine_lib:to_repair_machine(Machine), Scenario, ScenarioProcessors
-        )
-    of
-        {ok, {_Response, Result}} ->
-            ff_machine_lib:from_repair_result(Result, Machine);
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
--spec process_notification(term(), machine()) -> prg_result().
-process_notification(_Args, _Machine) ->
-    #{}.
+    ff_machine_lib:process_repair(ff_withdrawal_session, Machine, Scenario, ScenarioProcessors).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->
-    Timestamped = {ev, prg_machine:timestamp(), Body},
-    Encoded = ff_machine_codec:marshal_event(withdrawal_session, ?EVENT_FORMAT_VERSION, Timestamped),
-    {?EVENT_FORMAT_VERSION, ff_machine_codec:payload_to_binary(Encoded)}.
+    ff_machine_lib:marshal_event_body(withdrawal_session, ?EVENT_FORMAT_VERSION, Body).
 
 -spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
-unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
-    Timestamped = ff_machine_codec:unmarshal_event(withdrawal_session, ?EVENT_FORMAT_VERSION, Payload),
-    ff_machine_lib:event_body_from_timestamped(Timestamped);
-unmarshal_event_body(Format, _Payload) ->
-    erlang:error({unknown_event_format, Format}).
+unmarshal_event_body(Format, Payload) ->
+    ff_machine_lib:unmarshal_event_body(withdrawal_session, ?EVENT_FORMAT_VERSION, Format, Payload).
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->
-    ff_machine_codec:marshal_aux_state(AuxSt).
+    ff_machine_lib:marshal_aux_state(AuxSt).
 
 -spec unmarshal_aux_state(binary()) -> term().
 unmarshal_aux_state(Payload) when is_binary(Payload) ->
-    ff_machine_codec:unmarshal_aux_state(Payload).
-
-%%
-%% Internals
-%%
-
--spec machine_to_st(prg_machine:machine()) -> st().
-machine_to_st(#{aux_state := undefined} = Machine) ->
-    machine_to_st(Machine#{aux_state => #{}});
-machine_to_st(#{aux_state := AuxState} = Machine) ->
-    Model = prg_machine:collapse(ff_withdrawal_session, Machine),
-    Ctx = maps:get(ctx, AuxState, #{}),
-    #{
-        model => Model,
-        ctx => Ctx
-    }.
-
--spec process_session_result(ff_withdrawal_session:process_result(), machine()) -> prg_result().
-process_session_result({Action, Events}, Machine) ->
-    #{
-        events => Events,
-        action => Action,
-        auxst => maps:get(aux_state, Machine, #{})
-    }.
+    ff_machine_lib:unmarshal_aux_state(Payload).
 
 call(Ref, Call) ->
     case prg_machine:call(?NS, Ref, Call) of
