@@ -2592,9 +2592,9 @@ process_fatal_payment_failure(?processed(), Events, _Action, Failure, _St) ->
     RollbackStarted = [?payment_rollback_started(Failure)],
     {next, {Events ++ RollbackStarted, timeout}}.
 
-retry_session(Action, Target, Timeout) ->
+retry_session(_Action, Target, Timeout) ->
     NewEvents = start_session(Target),
-    NewAction = set_timer({timeout, Timeout}, Action),
+    NewAction = prg_action:schedule_timer({timeout, Timeout}),
     {NewEvents, NewAction}.
 
 get_actual_retry_strategy(Target, #st{retry_attempts = Attempts}) ->
@@ -2651,9 +2651,6 @@ get_action(?processed(), _Action, St) ->
     end;
 get_action(_Target, Action, _St) ->
     Action.
-
-set_timer(Timer, _Action) ->
-    prg_action:schedule_timer(Timer).
 
 get_provider_payment_terms(St, Revision) ->
     Opts = get_opts(St),

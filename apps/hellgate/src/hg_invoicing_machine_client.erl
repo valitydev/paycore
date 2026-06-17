@@ -5,33 +5,18 @@
 %%% hg_proto stays in apps/hellgate (not in prg_machine).
 
 -export([thrift_call/5]).
--export([thrift_call/8]).
 
 -type namespace() :: prg_machine:namespace().
 -type id() :: prg_machine:id().
 -type service_name() :: atom().
 -type function_ref() :: hg_proto_utils:thrift_fun_ref().
 -type args() :: woody:args().
--type event_id() :: prg_machine:event_id().
 -type response() :: prg_machine:response().
 
 -spec thrift_call(namespace(), id(), service_name(), function_ref(), args()) ->
     response() | {error, notfound | failed}.
-thrift_call(NS, ID, Service, FunRef, Args) ->
-    thrift_call(NS, ID, Service, FunRef, Args, undefined, undefined, forward).
-
--spec thrift_call(
-    namespace(),
-    id(),
-    service_name(),
-    function_ref(),
-    args(),
-    event_id() | undefined,
-    non_neg_integer() | undefined,
-    forward | backward
-) -> response() | {error, notfound | failed}.
-thrift_call(NS, ID, _ServiceName, FunRef, Args, After, Limit, Direction) ->
-    case prg_machine:call(NS, ID, {FunRef, Args}, After, Limit, Direction) of
+thrift_call(NS, ID, _ServiceName, FunRef, Args) ->
+    case prg_machine:call(NS, ID, {FunRef, Args}) of
         {ok, Response} ->
             normalize_response(Response);
         {error, notfound} ->

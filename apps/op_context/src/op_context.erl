@@ -11,7 +11,6 @@
 -export([binding/1]).
 
 -export([get_woody_context/1]).
--export([set_woody_context/2]).
 -export([get_party_client_context/1]).
 -export([set_party_client_context/2]).
 -export([get_party_client/1]).
@@ -155,10 +154,6 @@ try_load_woody_context([Key | Rest]) ->
 -spec get_woody_context(context()) -> woody_context().
 get_woody_context(#{woody_context := WoodyContext}) ->
     WoodyContext.
-
--spec set_woody_context(woody_context(), context()) -> context().
-set_woody_context(WoodyContext, Context) ->
-    Context#{woody_context => WoodyContext}.
 
 -spec get_party_client(context()) -> party_client().
 get_party_client(#{party_client := PartyClient}) ->

@@ -112,7 +112,6 @@
 -export([get_history/4]).
 -export([get_history/5]).
 -export([notify/3]).
--export([remove/2]).
 -export([history_range/3]).
 
 %% Progressor processor
@@ -126,7 +125,6 @@
 %% Event-sourcing helpers (replaces ff_machine)
 
 -export([collapse/2]).
--export([emit_event/1]).
 -export([emit_events/1]).
 -export([timestamp/0]).
 
@@ -262,14 +260,6 @@ notify(NS, ID, Args) ->
         {error, _} = Error -> Error
     end.
 
--spec remove(namespace(), id()) ->
-    ok | {error, notfound | failed | processor_error() | term()}.
-remove(NS, ID) ->
-    case call(NS, ID, remove) of
-        {ok, _} -> ok;
-        {error, _} = Error -> Error
-    end.
-
 -spec history_range(undefined | event_id(), undefined | non_neg_integer(), forward | backward) ->
     history_range().
 history_range(Offset, Limit, Direction) ->
@@ -331,10 +321,6 @@ collapse(Handler, #{history := History, aux_state := AuxState}) ->
         initial_model(Handler, AuxState),
         History
     ).
-
--spec emit_event(term()) -> [{ev, timestamp(), term()}].
-emit_event(Event) ->
-    emit_events([Event]).
 
 -spec emit_events([term()]) -> [{ev, timestamp(), term()}].
 emit_events(Events) ->
