@@ -53,10 +53,10 @@ create(NS, CreateFun, Params, Ctx) ->
 
 -spec get(prg_machine:namespace(), prg_machine:id(), event_range(), module(), term()) ->
     {ok, map()} | {error, term()}.
-get(NS, ID, {After, Limit}, Domain, NotFoundError) ->
+get(NS, ID, {After, Limit}, Handler, NotFoundError) ->
     case prg_machine:get(NS, ID, prg_machine:history_range(After, Limit, forward)) of
         {ok, Machine} ->
-            {ok, machine_to_st(Domain, Machine)};
+            {ok, machine_to_st(Handler, Machine)};
         {error, notfound} ->
             {error, NotFoundError};
         {error, {exception, Class, Reason}} ->
@@ -105,9 +105,9 @@ init_result(Events, Ctx, Action) ->
     (init_result(Events, Ctx))#{action => Action}.
 
 -spec machine_to_st(module(), prg_machine:machine()) -> map().
-machine_to_st(Domain, #{aux_state := AuxState} = Machine) ->
+machine_to_st(Handler, #{aux_state := AuxState} = Machine) ->
     #{
-        model => prg_machine:collapse(Domain, Machine),
+        model => prg_machine:collapse(Handler, Machine),
         ctx => ctx(AuxState)
     }.
 
@@ -120,8 +120,8 @@ to_prg_result({Action, Events}) ->
 
 -spec process_repair(module(), prg_machine:machine(), ff_repair:scenario()) ->
     prg_machine:result() | {error, term()}.
-process_repair(Domain, Machine, Scenario) ->
-    case ff_repair:apply_scenario(Domain, to_repair_machine(Machine), Scenario) of
+process_repair(Handler, Machine, Scenario) ->
+    case ff_repair:apply_scenario(Handler, to_repair_machine(Machine), Scenario) of
         {ok, {_Response, Result}} ->
             from_repair_result(Result, Machine);
         {error, Reason} ->
@@ -130,8 +130,8 @@ process_repair(Domain, Machine, Scenario) ->
 
 -spec process_repair(module(), prg_machine:machine(), ff_repair:scenario(), ff_repair:processors()) ->
     prg_machine:result() | {error, term()}.
-process_repair(Domain, Machine, Scenario, ScenarioProcessors) ->
-    case ff_repair:apply_scenario(Domain, to_repair_machine(Machine), Scenario, ScenarioProcessors) of
+process_repair(Handler, Machine, Scenario, ScenarioProcessors) ->
+    case ff_repair:apply_scenario(Handler, to_repair_machine(Machine), Scenario, ScenarioProcessors) of
         {ok, {_Response, Result}} ->
             from_repair_result(Result, Machine);
         {error, Reason} ->

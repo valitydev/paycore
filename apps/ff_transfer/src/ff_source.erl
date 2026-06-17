@@ -192,9 +192,12 @@ is_accessible(Source) ->
     ff_account:is_accessible(account(Source)).
 
 -spec apply_event(event(), ff_maybe:'maybe'(source_state())) -> source_state().
-apply_event({created, Source}, undefined) ->
+apply_event(Ev, State) ->
+    apply_event_(Ev, State).
+
+apply_event_({created, Source}, undefined) ->
     Source;
-apply_event({account, Ev}, #{account := Account} = Source) ->
+apply_event_({account, Ev}, #{account := Account} = Source) ->
     Source#{account => ff_account:apply_event(Ev, Account)};
-apply_event({account, Ev}, Source) ->
-    apply_event({account, Ev}, Source#{account => undefined}).
+apply_event_({account, Ev}, Source) ->
+    apply_event_({account, Ev}, Source#{account => undefined}).

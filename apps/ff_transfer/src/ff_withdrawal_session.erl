@@ -177,21 +177,24 @@ create(ID, Data, Params) ->
     {ok, [{created, Session}]}.
 
 -spec apply_event(event(), undefined | session_state()) -> session_state().
-apply_event({created, Session}, undefined) ->
+apply_event(Ev, State) ->
+    apply_event_(Ev, State).
+
+apply_event_({created, Session}, undefined) ->
     Session;
-apply_event({next_state, AdapterState}, Session) ->
+apply_event_({next_state, AdapterState}, Session) ->
     Session#{adapter_state => AdapterState};
-apply_event({transaction_bound, TransactionInfo}, Session) ->
+apply_event_({transaction_bound, TransactionInfo}, Session) ->
     Session#{transaction_info => TransactionInfo};
-apply_event({finished, success = Result}, Session) ->
+apply_event_({finished, success = Result}, Session) ->
     Session#{status => {finished, success}, result => Result};
-apply_event({finished, {success, TransactionInfo} = Result}, Session) ->
+apply_event_({finished, {success, TransactionInfo} = Result}, Session) ->
     %% for backward compatibility with events stored in DB - take TransactionInfo here.
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
     Session#{status => {finished, success}, result => Result, transaction_info => TransactionInfo};
-apply_event({finished, {failed, _} = Result} = Status, Session) ->
+apply_event_({finished, {failed, _} = Result} = Status, Session) ->
     Session#{status => Status, result => Result};
-apply_event({callback, _Ev} = WrappedEvent, Session) ->
+apply_event_({callback, _Ev} = WrappedEvent, Session) ->
     Callbacks0 = callbacks_index(Session),
     Callbacks1 = ff_withdrawal_callback_utils:apply_event(WrappedEvent, Callbacks0),
     set_callbacks_index(Callbacks1, Session).

@@ -56,10 +56,12 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 -type machine() :: prg_machine:machine().
 -type prg_result() :: prg_machine:result().
@@ -84,7 +86,7 @@ get(ID) ->
     {ok, st()}
     | {error, notfound}.
 get(ID, {After, Limit}) ->
-    ff_machine_lib:get(?NS, ID, {After, Limit}, ff_destination, notfound).
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, notfound).
 
 -spec events(id(), event_range()) ->
     {ok, events()}
@@ -122,7 +124,20 @@ process_call(CallArgs, _Machine) ->
 
 -spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
 process_repair(Scenario, Machine) ->
-    ff_machine_lib:process_repair(ff_destination, Machine, Scenario).
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
+
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
+    #{}.
+
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_destination:apply_event(Body, Model).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->

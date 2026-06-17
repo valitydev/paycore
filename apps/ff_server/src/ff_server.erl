@@ -98,7 +98,7 @@ init([]) ->
         )
     ),
     PartyClientSpec = party_client:child_spec(party_client, PartyClient),
-    PrgMachineSpec = prg_machine:get_child_spec([
+    PrgMachineSpec = prg_machine_registry:get_child_spec([
         ff_deposit_machine,
         ff_source_machine,
         ff_destination_machine,

@@ -54,6 +54,7 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
@@ -316,6 +317,10 @@ init(Invoice, _Machine) ->
 process_repair(Args, Machine) ->
     St = prg_machine:collapse(?MODULE, Machine),
     to_prg_result(handle_repair(Args, St)).
+
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
+    #{}.
 
 handle_repair({changes, Changes, RepairAction, Params}, St) ->
     Result =

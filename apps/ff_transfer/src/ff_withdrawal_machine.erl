@@ -90,6 +90,7 @@
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 %% Internal types
 
@@ -117,7 +118,7 @@ get(ID) ->
     {ok, st()}
     | {error, unknown_withdrawal_error()}.
 get(ID, {After, Limit}) ->
-    ff_machine_lib:get(?NS, ID, {After, Limit}, ff_withdrawal, {unknown_withdrawal, ID}).
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, {unknown_withdrawal, ID}).
 
 -spec events(id(), event_range()) ->
     {ok, [event()]}
@@ -167,13 +168,13 @@ init({Events, Ctx}, _Machine) ->
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
-    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    Withdrawal = prg_machine:collapse(?MODULE, Machine),
     ff_machine_lib:to_prg_result(ff_withdrawal:process_transfer(Withdrawal)).
 
 -spec process_call({start_adjustment, adjustment_params()}, machine()) ->
     {ok | {error, start_adjustment_error()}, prg_result()}.
 process_call({start_adjustment, Params}, Machine) ->
-    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    Withdrawal = prg_machine:collapse(?MODULE, Machine),
     case ff_withdrawal:start_adjustment(Params, Withdrawal) of
         {ok, Result} ->
             {ok, ff_machine_lib:to_prg_result(Result)};
@@ -185,17 +186,26 @@ process_call(CallArgs, _Machine) ->
 
 -spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
 process_repair(Scenario, Machine) ->
-    ff_machine_lib:process_repair(ff_withdrawal, Machine, Scenario).
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
 
 -spec process_notification(notify_args(), machine()) -> prg_result().
 process_notification({session_finished, SessionID, SessionResult}, Machine) ->
-    Withdrawal = prg_machine:collapse(ff_withdrawal, Machine),
+    Withdrawal = prg_machine:collapse(?MODULE, Machine),
     case ff_withdrawal:finalize_session(SessionID, SessionResult, Withdrawal) of
         {ok, Result} ->
             ff_machine_lib:to_prg_result(Result);
         {error, Reason} ->
             erlang:error({unable_to_finalize_session, Reason})
     end.
+
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_withdrawal:apply_event(Body, Model).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->

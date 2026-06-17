@@ -47,14 +47,10 @@
     auxst => term()
 }.
 
--type env_enter_fun() :: fun(() -> ok) | fun((woody_context:ctx()) -> ok).
-
 -type context_binding() :: op_context:binding().
 
 -type process_options() :: #{
     ns := namespace(),
-    env_enter => env_enter_fun(),
-    env_leave => fun(() -> ok),
     context_binding => context_binding(),
     default_handling_timeout => timeout()
 }.
@@ -102,17 +98,7 @@
 
 -callback unmarshal_aux_state(binary()) -> term().
 
-%% Optional: collapse passes event_id and timestamp (HG invoice). Default: apply_event/2.
 -callback apply_event(event_id(), timestamp(), event_body(), term()) -> term().
-
--optional_callbacks([
-    process_notification/2,
-    marshal_event_body/1,
-    unmarshal_event_body/1,
-    marshal_aux_state/1,
-    unmarshal_aux_state/1,
-    apply_event/4
-]).
 
 %% Client API
 
@@ -135,9 +121,7 @@
 
 %% Registry (namespace -> handler module)
 
--export([get_child_spec/1]).
 -export([handler_namespace/1]).
--export([unmarshal_event_body/2]).
 
 %% Event-sourcing helpers (replaces ff_machine)
 
@@ -146,7 +130,15 @@
 -export([emit_events/1]).
 -export([timestamp/0]).
 
+-export([unmarshal_event_body/2]).
+
 %%
+
+-spec handler_namespace(module()) -> namespace().
+handler_namespace(Handler) ->
+    Handler:namespace().
+
+%% Client API
 
 -spec start(namespace(), id(), args()) -> {ok, ok} | {error, exists | term()}.
 start(NS, ID, Args) ->
@@ -220,12 +212,16 @@ repair(NS, ID, Args) ->
             {error, {repair, {failed, decode_term(Reason)}}}
     end.
 
+-spec get(namespace(), id()) -> {ok, machine()} | {error, get_error()}.
+get(NS, ID) ->
+    get(NS, ID, #{direction => forward}).
+
 -spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, get_error()}.
 get(NS, ID, Range) ->
     Req = request(NS, ID, undefined, Range),
     case progressor:get(Req) of
         {ok, Process} ->
-            case get_handler_module(NS) of
+            case prg_machine_registry:lookup(NS) of
                 {ok, Handler} ->
                     {ok, unmarshal_machine(Handler, NS, Process)};
                 {error, _} = Error ->
@@ -238,10 +234,6 @@ get(NS, ID, Range) ->
         {error, {exception, Class, Reason, _Stacktrace}} ->
             {error, {exception, Class, Reason}}
     end.
-
--spec get(namespace(), id()) -> {ok, machine()} | {error, get_error()}.
-get(NS, ID) ->
-    get(NS, ID, #{direction => forward}).
 
 -spec get_history(namespace(), id()) -> {ok, history()} | {error, get_error()}.
 get_history(NS, ID) ->
@@ -289,21 +281,15 @@ history_range(Offset, Limit, Direction) ->
 -spec process({init | call | repair | notify | timeout, binary(), map()}, process_options(), binary()) ->
     {ok, map()} | {error, term()}.
 process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
-    Enter = resolve_env_enter(Opts),
-    Leave = resolve_env_leave(Opts),
     try
-        case get_handler_module(NS) of
+        case prg_machine_registry:lookup(NS) of
             {error, _} = Error ->
                 Error;
             {ok, Handler} ->
                 {WoodyCtx0, OtelCtx} = decode_rpc_context(BinCtx),
                 ok = woody_rpc_helper:attach_otel_context(OtelCtx),
                 WoodyCtx = ensure_deadline_set(WoodyCtx0, Opts),
-                ok = run_env_enter(Enter, WoodyCtx),
-                %% Enter succeeded: from here Leave must run exactly once. Errors
-                %% raised before this point fall through to the outer catch and are
-                %% returned as {error, _} without being masked by a Leave exception.
-                run_with_env_leave(Leave, fun() ->
+                run_scoped(Opts, WoodyCtx, fun() ->
                     LastEventID = maps:get(last_event_id, Process),
                     Machine = unmarshal_machine(Handler, NS, Process),
                     Result = dispatch(Handler, CallType, BinArgs, Machine),
@@ -334,17 +320,7 @@ ensure_deadline_set(WoodyCtx, Opts) ->
             WoodyCtx
     end.
 
-%% Registry
-
--spec get_child_spec([module()]) -> supervisor:child_spec().
-get_child_spec(Handlers) ->
-    prg_machine_registry:get_child_spec(Handlers).
-
--spec handler_namespace(module()) -> namespace().
-handler_namespace(Handler) ->
-    Handler:namespace().
-
-%% Event-sourcing (replaces ff_machine collapse/emit)
+%% Event-sourcing
 
 -spec collapse(module(), machine()) -> term().
 collapse(Handler, #{history := History, aux_state := AuxState}) ->
@@ -380,11 +356,11 @@ dispatch(Handler, timeout, _BinArgs, Machine) ->
     Handler:process_signal(timeout, Machine);
 dispatch(Handler, notify, BinArgs, Machine) ->
     Args = decode_term(BinArgs),
-    dispatch_notification(Handler, Args, Machine);
+    Handler:process_notification(Args, Machine);
 dispatch(Handler, call, BinArgs, Machine) ->
     case decode_term(BinArgs) of
         {notify, Args} ->
-            dispatch_notification(Handler, Args, Machine);
+            Handler:process_notification(Args, Machine);
         remove ->
             #{events => [], action => remove, auxst => maps:get(aux_state, Machine)};
         Call ->
@@ -397,14 +373,6 @@ dispatch(Handler, repair, BinArgs, Machine) ->
             {error, Reason};
         Result when is_map(Result) ->
             Result
-    end.
-
-dispatch_notification(Handler, Args, Machine) ->
-    case erlang:function_exported(Handler, process_notification, 2) of
-        true ->
-            Handler:process_notification(Args, Machine);
-        false ->
-            #{}
     end.
 
 marshal_process_result(Handler, LastEventID, {Response, Result}) when is_map(Result) ->
@@ -474,39 +442,19 @@ marshal_new_events(Handler, LastEventID, Bodies) ->
     ).
 
 marshal_event_body(Handler, Body) ->
-    case erlang:function_exported(Handler, marshal_event_body, 1) of
-        true ->
-            Handler:marshal_event_body(Body);
-        false ->
-            {undefined, term_to_binary(Body)}
-    end.
+    Handler:marshal_event_body(Body).
 
 -spec unmarshal_event_body(module(), binary()) -> event_body().
 unmarshal_event_body(Handler, Payload) ->
-    case erlang:function_exported(Handler, unmarshal_event_body, 1) of
-        true ->
-            Handler:unmarshal_event_body(Payload);
-        false ->
-            binary_to_term(Payload)
-    end.
+    Handler:unmarshal_event_body(Payload).
 
 marshal_aux_state(Handler, AuxSt) ->
-    case erlang:function_exported(Handler, marshal_aux_state, 1) of
-        true ->
-            Handler:marshal_aux_state(AuxSt);
-        false ->
-            term_to_binary(AuxSt)
-    end.
+    Handler:marshal_aux_state(AuxSt).
 
 unmarshal_aux_state(_Handler, undefined) ->
     undefined;
 unmarshal_aux_state(Handler, Bin) when is_binary(Bin) ->
-    case erlang:function_exported(Handler, unmarshal_aux_state, 1) of
-        true ->
-            Handler:unmarshal_aux_state(Bin);
-        false ->
-            binary_to_term(Bin)
-    end.
+    Handler:unmarshal_aux_state(Bin).
 
 %% Write both legacy keys: old HG reader expects <<"format_version">>,
 %% old FF reader expects <<"format">>. Keeping both keeps rollback safe for
@@ -528,25 +476,12 @@ event_timestamp_to_datetime(Ts) when is_integer(Ts) ->
     {calendar:system_time_to_universal_time(Seconds, second), Micro}.
 
 dispatch_apply_event(Handler, EventID, Ts, Body, Model) ->
-    case erlang:function_exported(Handler, apply_event, 4) of
-        true ->
-            Handler:apply_event(EventID, Ts, Body, Model);
-        false ->
-            case erlang:function_exported(Handler, apply_event, 2) of
-                true ->
-                    Handler:apply_event(Body, Model);
-                false ->
-                    erlang:error({apply_event_not_defined, Handler})
-            end
-    end.
+    Handler:apply_event(EventID, Ts, Body, Model).
 
 initial_model(_Handler, AuxState) when is_map(AuxState) ->
     maps:get(model, AuxState, undefined);
 initial_model(_Handler, _AuxState) ->
     undefined.
-
-get_handler_module(NS) ->
-    prg_machine_registry:lookup(NS).
 
 %% RPC / terms
 
@@ -568,51 +503,22 @@ decode_rpc_context(<<>>) ->
 decode_rpc_context(Bin) ->
     woody_rpc_helper:decode_rpc_context(decode_term(Bin)).
 
-resolve_env_enter(Opts) ->
-    case maps:is_key(env_enter, Opts) of
-        true ->
-            maps:get(env_enter, Opts);
-        false ->
-            case maps:get(context_binding, Opts, undefined) of
-                Binding when is_map(Binding) ->
-                    fun(WoodyCtx) -> op_context:env_enter(WoodyCtx, Binding) end;
-                _ ->
-                    fun(_) -> ok end
-            end
+run_scoped(Opts, WoodyCtx, Fun) when is_function(Fun, 0) ->
+    case maps:get(context_binding, Opts, undefined) of
+        Binding when is_map(Binding) ->
+            ok = op_context:env_enter(WoodyCtx, Binding),
+            try
+                Fun()
+            after
+                safe_env_leave(Binding)
+            end;
+        _ ->
+            Fun()
     end.
 
-resolve_env_leave(Opts) ->
-    case maps:is_key(env_leave, Opts) of
-        true ->
-            maps:get(env_leave, Opts);
-        false ->
-            case maps:get(context_binding, Opts, undefined) of
-                Binding when is_map(Binding) ->
-                    fun() -> op_context:env_leave(Binding) end;
-                _ ->
-                    fun() -> ok end
-            end
-    end.
-
-run_env_enter(Enter, WoodyCtx) when is_function(Enter, 1) ->
-    Enter(WoodyCtx);
-run_env_enter(Enter, _WoodyCtx) when is_function(Enter, 0) ->
-    Enter().
-
-run_with_env_leave(Leave, Fun) when is_function(Leave, 0), is_function(Fun, 0) ->
-    try Fun() of
-        Result ->
-            safe_env_leave(Leave),
-            Result
-    catch
-        Class:Reason:Stacktrace ->
-            safe_env_leave(Leave),
-            erlang:raise(Class, Reason, Stacktrace)
-    end.
-
-safe_env_leave(Leave) ->
+safe_env_leave(Binding) ->
     try
-        Leave()
+        op_context:env_leave(Binding)
     catch
         Class:Reason:Stacktrace ->
             logger:error(
@@ -662,16 +568,16 @@ range_from_process(_) ->
 
 -spec test() -> _.
 
--spec noop_when_hooks_absent_test_() -> _.
-noop_when_hooks_absent_test_() ->
+-spec process_without_context_binding_test_() -> _.
+process_without_context_binding_test_() ->
     {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
-        ?_test(noop_when_hooks_absent())
+        ?_test(process_without_context_binding())
     ]}.
 
--spec explicit_fun_overrides_context_binding_test_() -> _.
-explicit_fun_overrides_context_binding_test_() ->
+-spec context_binding_scopes_process_test_() -> _.
+context_binding_scopes_process_test_() ->
     {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
-        ?_test(explicit_fun_overrides_context_binding())
+        ?_test(context_binding_scopes_process())
     ]}.
 
 -spec aux_state_runtime_test_() -> _.
@@ -680,7 +586,7 @@ aux_state_runtime_test_() ->
         ?_test(marshal_intent_omits_aux_state_without_auxst()),
         ?_test(collapse_survives_non_map_aux_state()),
         ?_test(business_exception_then_signal_does_not_corrupt_aux_state()),
-        ?_test(notify_without_handler_omits_aux_state())
+        ?_test(notify_noop_omits_aux_state())
     ]}.
 
 -spec registry_runtime_test_() -> _.
@@ -696,33 +602,18 @@ process_exception_test_() ->
         ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
--spec noop_when_hooks_absent() -> _.
-noop_when_hooks_absent() ->
+-spec process_without_context_binding() -> _.
+process_without_context_binding() ->
     ok = ensure_woody_available(),
-    ok = prg_machine_env_mock_context:reset(),
-    _ = run_env_hook_process(#{ns => ?TEST_NS}),
-    ?assertEqual([], prg_machine_env_mock_context:events()).
+    ?assertMatch({ok, _}, run_env_hook_process(#{ns => ?TEST_NS})).
 
--spec explicit_fun_overrides_context_binding() -> _.
-explicit_fun_overrides_context_binding() ->
+-spec context_binding_scopes_process() -> _.
+context_binding_scopes_process() ->
     ok = ensure_woody_available(),
     ok = prg_machine_env_mock_context:reset(),
-    Enter = fun(_) ->
-        prg_machine_env_mock_context:record(explicit_enter),
-        ok
-    end,
-    Leave = fun() ->
-        prg_machine_env_mock_context:record(explicit_leave),
-        ok
-    end,
-    Opts = #{
-        ns => ?TEST_NS,
-        env_enter => Enter,
-        env_leave => Leave,
-        context_binding => ?TEST_BINDING
-    },
-    _ = run_env_hook_process(Opts),
-    ?assertEqual([explicit_enter, explicit_leave], prg_machine_env_mock_context:events()).
+    Opts = #{ns => ?TEST_NS, context_binding => ?TEST_BINDING},
+    ?assertMatch({ok, _}, run_env_hook_process(Opts)),
+    ?assertEqual([context_bound], prg_machine_env_mock_context:events()).
 
 -spec setup_env_hook_test() -> ok.
 setup_env_hook_test() ->
@@ -835,8 +726,8 @@ business_exception_then_signal_does_not_corrupt_aux_state() ->
     Rechecked = binary_to_term(maps:get(aux_state, RecheckIntent), [safe]),
     ?assertEqual(#{model => initialized}, Rechecked).
 
--spec notify_without_handler_omits_aux_state() -> _.
-notify_without_handler_omits_aux_state() ->
+-spec notify_noop_omits_aux_state() -> _.
+notify_noop_omits_aux_state() ->
     Opts = #{ns => ?AUX_STATE_TEST_NS},
     AuxBin = prg_machine_aux_state_test_handler:marshal_aux_state(#{model => initialized}),
     Process = #{

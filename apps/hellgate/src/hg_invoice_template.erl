@@ -24,6 +24,7 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
@@ -259,6 +260,10 @@ create_invoice_template(ID, P) ->
 -spec process_repair(prg_machine:args(), machine()) -> no_return().
 process_repair(_Args, _Machine) ->
     erlang:error({not_implemented, repair}).
+
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
+    #{}.
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, _Machine) ->

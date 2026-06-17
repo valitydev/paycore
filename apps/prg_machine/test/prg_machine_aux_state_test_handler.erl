@@ -10,8 +10,12 @@
     process_signal/2,
     process_call/2,
     process_repair/2,
+    process_notification/2,
+    marshal_event_body/1,
+    unmarshal_event_body/1,
     marshal_aux_state/1,
-    unmarshal_aux_state/1
+    unmarshal_aux_state/1,
+    apply_event/4
 ]).
 
 -define(NS, aux_state_test_ns).
@@ -47,6 +51,18 @@ process_call(recheck, Machine) ->
 process_repair(_Args, _Machine) ->
     #{events => [], action => idle}.
 
+-spec process_notification(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
+process_notification(_Args, _Machine) ->
+    #{}.
+
+-spec marshal_event_body(prg_machine:event_body()) -> {undefined, binary()}.
+marshal_event_body(Body) ->
+    {undefined, term_to_binary(Body)}.
+
+-spec unmarshal_event_body(binary()) -> prg_machine:event_body().
+unmarshal_event_body(Payload) ->
+    binary_to_term(Payload, [safe]).
+
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(undefined) ->
     %% Mimics hg_invoice: marshaling undefined yields a non-empty corrupting binary.
@@ -59,3 +75,12 @@ unmarshal_aux_state(<<>>) ->
     #{};
 unmarshal_aux_state(Bin) when is_binary(Bin) ->
     binary_to_term(Bin, [safe]).
+
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, _Body, Model) ->
+    Model.

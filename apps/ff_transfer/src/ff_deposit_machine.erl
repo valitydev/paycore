@@ -67,10 +67,12 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 %% Internal types
 
@@ -98,7 +100,7 @@ get(ID) ->
     {ok, st()}
     | {error, unknown_deposit_error()}.
 get(ID, {After, Limit}) ->
-    ff_machine_lib:get(?NS, ID, {After, Limit}, ff_deposit, {unknown_deposit, ID}).
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, {unknown_deposit, ID}).
 
 -spec events(id(), event_range()) ->
     {ok, [event()]}
@@ -137,7 +139,7 @@ init({Events, Ctx}, _Machine) ->
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
-    Deposit = prg_machine:collapse(ff_deposit, Machine),
+    Deposit = prg_machine:collapse(?MODULE, Machine),
     ff_machine_lib:to_prg_result(ff_deposit:process_transfer(Deposit)).
 
 -spec process_call(term(), machine()) -> no_return().
@@ -146,7 +148,20 @@ process_call(CallArgs, _Machine) ->
 
 -spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
 process_repair(Scenario, Machine) ->
-    ff_machine_lib:process_repair(ff_deposit, Machine, Scenario).
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
+
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
+    #{}.
+
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_deposit:apply_event(Body, Model).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->

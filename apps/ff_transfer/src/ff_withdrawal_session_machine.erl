@@ -28,10 +28,12 @@
 -export([process_signal/2]).
 -export([process_call/2]).
 -export([process_repair/2]).
+-export([process_notification/2]).
 -export([marshal_event_body/1]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 %%
 %% Types
@@ -108,7 +110,7 @@ get(ID) ->
     {ok, st()}
     | {error, notfound}.
 get(ID, {After, Limit}) ->
-    ff_machine_lib:get(?NS, ID, {After, Limit}, ff_withdrawal_session, notfound).
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, notfound).
 
 -spec events(id(), event_range()) ->
     {ok, [event()]}
@@ -144,13 +146,13 @@ init(Events, _Machine) ->
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(timeout, Machine) ->
-    Session = prg_machine:collapse(ff_withdrawal_session, Machine),
+    Session = prg_machine:collapse(?MODULE, Machine),
     ff_machine_lib:to_prg_result(ff_withdrawal_session:process_session(Session)).
 
 -spec process_call({process_callback, callback_params()}, machine()) ->
     {{ok, process_callback_response()} | {error, process_callback_error()}, prg_result()}.
 process_call({process_callback, Params}, Machine) ->
-    Session = prg_machine:collapse(ff_withdrawal_session, Machine),
+    Session = prg_machine:collapse(?MODULE, Machine),
     case ff_withdrawal_session:process_callback(Params, Session) of
         {ok, {Response, Result}} ->
             {{ok, Response}, ff_machine_lib:to_prg_result(Result)};
@@ -164,12 +166,25 @@ process_call(CallArgs, _Machine) ->
 process_repair(Scenario, Machine) ->
     ScenarioProcessors = #{
         set_session_result => fun(Args, RMachine) ->
-            Session = prg_machine:collapse(ff_withdrawal_session, ff_repair:to_prg_machine(RMachine)),
+            Session = prg_machine:collapse(?MODULE, ff_repair:to_prg_machine(RMachine)),
             {Action, Events} = ff_withdrawal_session:set_session_result(Args, Session),
             {ok, {ok, #{action => Action, events => Events}}}
         end
     },
-    ff_machine_lib:process_repair(ff_withdrawal_session, Machine, Scenario, ScenarioProcessors).
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario, ScenarioProcessors).
+
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
+    #{}.
+
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_withdrawal_session:apply_event(Body, Model).
 
 -spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
 marshal_event_body(Body) ->

@@ -48,7 +48,7 @@ init([]) ->
                 %% for debugging only
                 %% hg_profiler:get_child_spec(),
                 party_client:child_spec(party_client, PartyClient),
-                prg_machine:get_child_spec([hg_invoice, hg_invoice_template]),
+                prg_machine_registry:get_child_spec([hg_invoice, hg_invoice_template]),
                 get_api_child_spec(Opts)
             ]
         }}.
