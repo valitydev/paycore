@@ -5,8 +5,6 @@
 
 -include_lib("progressor/include/progressor.hrl").
 
--define(TABLE, prg_machine_dispatch).
-
 %% Types
 
 -type namespace() :: namespace_id().
@@ -660,6 +658,7 @@ range_from_process(_) ->
     registry_key => ?TEST_REGISTRY_KEY,
     cleanup_mode => lenient
 }).
+-define(TABLE, prg_machine_dispatch).
 
 -spec test() -> _.
 

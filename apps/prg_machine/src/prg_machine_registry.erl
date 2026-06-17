@@ -37,16 +37,11 @@ start_link(Handlers) ->
 
 -spec lookup(prg_machine:namespace()) -> {ok, module()} | {error, {unknown_namespace, prg_machine:namespace()}}.
 lookup(NS) ->
-    case ets:info(?TABLE) of
-        undefined ->
-            {error, {unknown_namespace, NS}};
-        _ ->
-            case ets:lookup(?TABLE, NS) of
-                [{NS, Handler}] ->
-                    {ok, Handler};
-                [] ->
-                    {error, {unknown_namespace, NS}}
-            end
+    case ets:lookup(?TABLE, NS) of
+        [{NS, Handler}] ->
+            {ok, Handler};
+        [] ->
+            {error, {unknown_namespace, NS}}
     end.
 
 -spec ensure_table() -> ok.
