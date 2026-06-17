@@ -188,7 +188,7 @@ marshal_event_body(Domain, Format, Body) ->
 -spec unmarshal_event_body(ff_machine_codec:domain(), binary()) ->
     prg_machine:event_body().
 unmarshal_event_body(Domain, Payload) ->
-    Timestamped = ff_machine_codec:unmarshal_event(Domain, 1, Payload),
+    Timestamped = ff_machine_codec:unmarshal_event(Domain, Payload),
     event_body_from_timestamped(Timestamped).
 
 -spec marshal_aux_state(term()) -> binary().

@@ -184,7 +184,6 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 
 ### Прочее (низкий приоритет)
 
-- Golden-fixtures со стейджа для legacy payload/aux_state
 - Registry без ETS `heir` — краткое окно при рестарте owner-процесса
 - Фиктивная обёртка `{ev, Ts, Body}` в event payload
 - Trace: сейчас HTTP JSON (`ff_machine_trace`); Thrift — `docs/trace-api-thrift.md`

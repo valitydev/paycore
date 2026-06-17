@@ -1,7 +1,7 @@
 -module(ff_machine_codec).
 
 -export([marshal_event/3]).
--export([unmarshal_event/3]).
+-export([unmarshal_event/2]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
 -export([payload_to_binary/1]).
@@ -51,44 +51,42 @@ marshal_event(withdrawal_session, 1, Timestamped) ->
 marshal_event(Domain, Format, _Timestamped) ->
     erlang:error({unknown_event_format, Domain, Format}).
 
--spec unmarshal_event(domain(), format_version(), binary()) -> timestamped_event().
-unmarshal_event(deposit, 1, Payload) ->
+-spec unmarshal_event(domain(), binary()) -> timestamped_event().
+unmarshal_event(deposit, Payload) ->
     unmarshal_thrift_event(
         Payload,
         fun(T) -> ff_deposit_codec:unmarshal(timestamped_change, T) end,
         fistful_deposit_thrift,
         'TimestampedChange'
     );
-unmarshal_event(source, 1, Payload) ->
+unmarshal_event(source, Payload) ->
     unmarshal_thrift_event(
         Payload,
         fun(T) -> ff_source_codec:unmarshal(timestamped_change, T) end,
         fistful_source_thrift,
         'TimestampedChange'
     );
-unmarshal_event(destination, 1, Payload) ->
+unmarshal_event(destination, Payload) ->
     unmarshal_thrift_event(
         Payload,
         fun(T) -> ff_destination_codec:unmarshal(timestamped_change, T) end,
         fistful_destination_thrift,
         'TimestampedChange'
     );
-unmarshal_event(withdrawal, 1, Payload) ->
+unmarshal_event(withdrawal, Payload) ->
     unmarshal_thrift_event(
         Payload,
         fun(T) -> ff_withdrawal_codec:unmarshal(timestamped_change, T) end,
         fistful_wthd_thrift,
         'TimestampedChange'
     );
-unmarshal_event(withdrawal_session, 1, Payload) ->
+unmarshal_event(withdrawal_session, Payload) ->
     unmarshal_thrift_event(
         Payload,
         fun(T) -> ff_withdrawal_session_codec:unmarshal(timestamped_change, T) end,
         fistful_wthd_session_thrift,
         'TimestampedChange'
-    );
-unmarshal_event(Domain, Format, _Payload) ->
-    erlang:error({unknown_event_format, Domain, Format}).
+    ).
 
 %% aux_state: legacy machinery_prg_backend wrote plain term_to_binary(AuxSt).
 -spec marshal_aux_state(term()) -> binary().

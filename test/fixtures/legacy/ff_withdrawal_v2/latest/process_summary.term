@@ -1,4 +1,0 @@
-#{extra => #{domain => withdrawal},
-  status => <<"running">>,namespace => 'ff/withdrawal_v2',
-  process_id => <<"4fb902cf-e5e0-400e-871d-6587492acd01">>,last_event_id => 3,
-  history_len => 3}.

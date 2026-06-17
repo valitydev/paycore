@@ -1,4 +1,0 @@
-#{extra => #{domain => deposit},
-  status => <<"running">>,namespace => 'ff/deposit_v1',
-  process_id => <<"4yX9AB6Zel5jIe7L3ijkQj6y2SH">>,last_event_id => 2,
-  history_len => 2}.
