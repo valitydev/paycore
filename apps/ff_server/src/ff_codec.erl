@@ -369,10 +369,7 @@ unmarshal(complex_action, #repairer_ComplexAction{
     timer = TimerAction,
     remove = RemoveAction
 }) ->
-    prg_action:from_timer_remove(
-        unmarshal_repairer_timer_field(TimerAction),
-        unmarshal_repairer_remove_field(RemoveAction)
-    );
+    unmarshal_repairer_complex_action(TimerAction, RemoveAction);
 unmarshal(timer, {timeout, Timeout}) ->
     {timeout, unmarshal(integer, Timeout)};
 unmarshal(timer, {deadline, Deadline}) ->
@@ -570,17 +567,14 @@ unmarshal(range, #'fistful_base_EventRange'{
 unmarshal(bool, V) when is_boolean(V) ->
     V.
 
-unmarshal_repairer_timer_field(undefined) ->
-    undefined;
-unmarshal_repairer_timer_field({set_timer, #repairer_SetTimerAction{timer = Timer}}) ->
-    {set_timer, unmarshal(timer, Timer)};
-unmarshal_repairer_timer_field({unset_timer, _}) ->
-    unset_timer.
-
-unmarshal_repairer_remove_field(undefined) ->
-    undefined;
-unmarshal_repairer_remove_field(#repairer_RemoveAction{}) ->
-    remove.
+unmarshal_repairer_complex_action(_, #repairer_RemoveAction{}) ->
+    remove;
+unmarshal_repairer_complex_action(undefined, undefined) ->
+    idle;
+unmarshal_repairer_complex_action({set_timer, #repairer_SetTimerAction{timer = Timer}}, undefined) ->
+    prg_action:schedule_timer(unmarshal(timer, Timer));
+unmarshal_repairer_complex_action({unset_timer, _}, undefined) ->
+    suspend.
 
 maybe_unmarshal(_Type, undefined) ->
     undefined;
