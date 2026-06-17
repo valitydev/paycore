@@ -2,7 +2,7 @@
 
 Единый runtime поверх progressor для HG и FF. Контракт `action()` в progressor: `progressor/docs/step-effect-migration.md`.
 
-*Обновлено: 2026-06-16. CI (compile, dialyzer, CT + compose) — см. текущий PR.*
+*Обновлено: 2026-06-17.*
 
 ---
 
@@ -10,10 +10,10 @@
 
 ```
 woody handler (hg_*_handler, ff_*_handler)
-  → prg_machine:start | call | get | repair | notify | remove | trace
+  → prg_machine:start | call | get | repair | notify | remove
     → progressor
       → prg_machine:process/3
-        → domain module (-behaviour(prg_machine))
+        → domain handler (-behaviour(prg_machine))
 ```
 
 ```mermaid
@@ -21,7 +21,7 @@ sequenceDiagram
     participant WH as woody handler
     participant PM as prg_machine
     participant PR as progressor
-    participant DM as domain
+    participant DM as domain handler
 
     WH->>PM: call(NS, ID, Args)
     PM->>PR: progressor:call
@@ -32,9 +32,11 @@ sequenceDiagram
     PR-->>WH: decode_term
 ```
 
-**Убрано из prod:** `hg_machine`, `ff_machine`, `hg_progressor_handler`, `machinery_prg_backend` в `config/sys.config`, `progressor_action`, legacy map в intent.
+**Убрано из prod:** `hg_machine`, `ff_machine`, `hg_progressor_handler`, `machinery_prg_backend` в `config/sys.config`, `progressor_action`, legacy map в intent, отдельные модули `prg_machine_client` / `prg_machine_processor` / `prg_machine_events` / `prg_machine_env` / `prg_machine_codec` (логика сведена в `prg_machine.erl`).
 
-**Вне scope:** Trace на Thrift → `docs/trace-api-thrift.md`. `{machinery, …}` в `rebar.config` — только docker-sidecar тесты (`test/bender`, `test/party-management`).
+**Trace (FF only):** HTTP JSON через `ff_machine_handler` → `ff_machine_trace` (не client API `prg_machine`). Thrift — `docs/trace-api-thrift.md`.
+
+**Вне scope:** `{machinery, …}` в `rebar.config` — только docker-sidecar тесты (`test/bender`, `test/party-management`).
 
 ---
 
@@ -42,21 +44,34 @@ sequenceDiagram
 
 | Модуль | Роль |
 |--------|------|
-| `prg_machine` | публичный фасад: behaviour, client API, `process/3`, `collapse` / `emit_events` |
-| `prg_machine_client` | progressor client API: `start` / `call` / `get` / `repair` / history |
-| `prg_machine_processor` | progressor `process/3`: dispatch доменного callback и сбор intent |
-| `prg_machine_events` | event fold, event payload/metadata, aux_state codec defaults |
-| `prg_machine_env` | woody/otel context, deadline, `env_enter` / `env_leave` |
-| `prg_machine_codec` | term envelope и legacy double-envelope decode |
-| `prg_machine_registry` | ETS `{Namespace, Handler}` под простым owner-процессом |
-| `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()` |
-| `ff_machine_lib` | общие FF-хелперы: repair/history/timestamp для `*_machine` |
+| `prg_machine` | behaviour, client API (`start` / `call` / `get` / `repair` / `notify` / `remove`), `process/3`, `collapse` / `emit_events`, term codec, event marshal, env scoping |
+| `prg_machine_registry` | ETS `{Namespace, Handler}`; owner-процесс + `get_child_spec/1` |
+| `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()`; MG/damsel repair на границе |
+| `ff_machine_lib` | общие FF-хелперы: create/get/repair/history, `to_prg_result`, event/aux_state codec |
 
-**`process/3`:** `env_enter` → `unmarshal_machine` → `dispatch` → `marshal_process_result` → `env_leave` (Leave только после успешного Enter). Исключение в домене → `{error, {exception, Class, Reason}}` + log (stacktrace только в логах, не на проводе).
+Связанные модули вне приложения: `op_context` (woody/party context, `env_enter` / `env_leave`, `current_woody_context/0`), `ff_machine_codec` (FF event/aux_state marshal, legacy sniff).
 
-**Контекст RPC:** `op_context:current_woody_context/0` (hg-binding → ff-binding → fresh ctx + warning). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
+### `process/3`
 
-**События:** timestamp в microsecond (`timestamp_us()`); metadata пишет оба ключа `<<"format_version">>` и `<<"format">>`. FF payload — legacy `term_to_binary({bin, ThriftBin})`; HG payload — `term_to_binary(msgpack)`.
+```
+registry lookup
+  → decode_rpc_context + attach otel
+  → ensure_deadline_set (default 30s, `default_handling_timeout` в opts)
+  → run_scoped: op_context:env_enter / env_leave (если `context_binding` в opts)
+  → unmarshal_machine
+  → dispatch (init | call | repair | notify | timeout)
+  → marshal_process_result
+```
+
+- Неизвестный namespace → `{error, {unknown_namespace, NS}}`.
+- Исключение в домене → `{error, {exception, Class, Reason}}` + log (stacktrace только в логах).
+- `env_leave` в `after`, ошибки leave логируются, не маскируют результат dispatch.
+
+**Контекст RPC:** `op_context:current_woody_context/0` — hellgate-binding, затем fistful-binding, иначе fresh ctx + warning (заменяет старый `woody_context_loader` app-env hook). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
+
+**События:** timestamp пишется в progressor как microsecond integer; при чтении — machinery-формат `{calendar:datetime(), Micro}`. Metadata пишет оба ключа `<<"format_version">>` и `<<"format">>`. FF payload — legacy `term_to_binary({bin, ThriftBin})`; HG payload — `term_to_binary(msgpack)`.
+
+**aux_state:** домен возвращает ключ `auxst`; в intent progressor пишется `aux_state` **только** при явном `auxst` в result map. Пропуск ключа сохраняет существующий aux_state в storage (важно после business-exception и noop notify).
 
 ---
 
@@ -100,19 +115,21 @@ idle | suspend | timeout | remove
 
 `prg_action:from_mg/1`, `from_repair/1` — MG/damsel repair на границе (HG/FF handler → wire). `prg_action:marshal_timer/1` принимает `{deadline, {calendar:datetime(), Micro}}` (machinery-формат из `ff_codec:unmarshal(timer, ...)`).
 
-FF доменный `continue` / `sleep` / `{setup_timer, T}` → wire через `map_action/1` в каждом модуле.
+FF домен возвращает `prg_action:t()` напрямую; `*_machine` оборачивает через `ff_machine_lib:to_prg_result/1`.
 
 ### Prod namespaces (7)
 
-| NS | Модуль | Registry |
-|----|--------|----------|
-| `invoice` | `hg_invoice` | `hellgate.erl` |
-| `invoice_template` | `hg_invoice_template` | `hellgate.erl` |
-| `ff/deposit_v1` | `ff_deposit` | `ff_server.erl` |
-| `ff/source_v1` | `ff_source` | `ff_server.erl` |
-| `ff/destination_v2` | `ff_destination` | `ff_server.erl` |
-| `ff/withdrawal_v2` | `ff_withdrawal` | `ff_server.erl` |
-| `ff/withdrawal/session_v2` | `ff_withdrawal_session` | `ff_server.erl` |
+| NS | Handler (registry) | Доменная логика | Registry |
+|----|--------------------|-----------------|----------|
+| `invoice` | `hg_invoice` | `hg_invoice` | `hellgate.erl` |
+| `invoice_template` | `hg_invoice_template` | `hg_invoice_template` | `hellgate.erl` |
+| `ff/deposit_v1` | `ff_deposit_machine` | `ff_deposit` | `ff_server.erl` |
+| `ff/source_v1` | `ff_source_machine` | `ff_source` | `ff_server.erl` |
+| `ff/destination_v2` | `ff_destination_machine` | `ff_destination` | `ff_server.erl` |
+| `ff/withdrawal_v2` | `ff_withdrawal_machine` | `ff_withdrawal` | `ff_server.erl` |
+| `ff/withdrawal/session_v2` | `ff_withdrawal_session_machine` | `ff_withdrawal_session` | `ff_server.erl` |
+
+HG регистрирует доменные модули напрямую. FF — тонкие `*_machine` (behaviour + codec + делегирование в домен).
 
 Orphan NS (`ff/identity`, `ff/wallet_v2`, HG `customer`, `recurrent_paytools`) убраны из config.
 
@@ -147,11 +164,13 @@ processor => #{
 |------------|------------------|
 | `<<"process not found">>` / `<<"process is init">>` | `{error, notfound}` |
 | `<<"process is error">>` | `{error, failed}` |
-| `{exception, Class, Reason}` (3-tuple) | **pass-through** `{error, {exception, Class, Reason}}` |
+| `{exception, Class, Reason}` (3- или 4-tuple) | **pass-through** `{error, {exception, Class, Reason}}` (stacktrace срезается) |
 | прочие guard (`<<"process is waiting">>`, …) | **pass-through** `{error, Reason}` |
 | `<<"process already exists">>` (`start`) | `{error, exists}` |
 
-`repair`: + `{error, working}` для `<<"process is running">>`; `{error, {repair, {failed, Reason}}}` → `{error, {failed, Reason}}` в `ff_*_machine` / `erlang:error(Reason)` в woody repair handler.
+`get`: + `{error, {unknown_namespace, NS}}` при отсутствии handler в registry.
+
+`repair`: + `{error, working}` для `<<"process is running">>`; прочие term-reasons → `{error, {repair, {failed, Reason}}}`.
 
 **Антипаттерн:** catch-all `{error, _} -> {error, failed}` — ломает HG CT (waiting/running превращаются в `failed`).
 
@@ -167,7 +186,14 @@ meck:expect(prg_machine, process, fun process/3).
 %% внутри: 'prg_machine_meck_original':process(Call, Opts, BinCtx).
 ```
 
-Processor crash в тестах: `{error, {exception, _, _}}`, не атом `failed`.
+Хелпер: `ff_ct_machine` (timeout hooks + passthrough). Processor crash в тестах: `{error, {exception, _, _}}`, не атом `failed`.
+
+### Runtime eunit в `prg_machine.erl`
+
+- `context_binding` scopes `env_enter`/`env_leave`
+- aux_state omit при noop notify / business exception
+- `{unknown_namespace, NS}` на lookup и process
+- exception conform progressor wire format
 
 ---
 
@@ -193,10 +219,10 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 
 ## 6. Новый namespace
 
-1. `sys.config` — `client => prg_machine`
-2. `-behaviour(prg_machine)` + callbacks
-3. `apply_event/4` для `collapse/2`
-4. `*_machine.erl` — только `prg_machine:*`
+1. `sys.config` — `client => prg_machine`, `context_binding`
+2. `-behaviour(prg_machine)` + callbacks (`apply_event/4` для `collapse/2`)
+3. HG: доменный модуль в `prg_machine_registry:get_child_spec/1`. FF: тонкий `*_machine` + домен
+4. Клиентский слой — только `prg_machine:*` (или `ff_machine_lib` для FF)
 5. Handler в `get_child_spec` (`hellgate.erl` / `ff_server.erl`)
 6. CT suite
 
@@ -210,6 +236,7 @@ rg '#{set_timer' apps/ --glob '*.erl'                        # 0
 rg 'machinery_prg_backend|ff_machine:' apps/fistful apps/ff_transfer apps/ff_server --glob '*.erl'  # 0
 rg "client => machinery_prg_backend" config/sys.config      # 0
 rg 'woody_context_loader' apps/hellgate apps/ff_server      # 0
+rg 'prg_machine_client|prg_machine_processor|prg_machine_env' apps/  # 0
 ```
 
 ---
@@ -218,13 +245,17 @@ rg 'woody_context_loader' apps/hellgate apps/ff_server      # 0
 
 | Путь | Зачем |
 |------|-------|
-| `apps/prg_machine/src/prg_machine.erl` | behaviour, errors, marshal_intent |
+| `apps/prg_machine/src/prg_machine.erl` | behaviour, client API, `process/3`, marshal_intent, eunit |
+| `apps/prg_machine/src/prg_machine_registry.erl` | namespace → handler |
 | `apps/prg_machine/src/prg_action.erl` | timer → wire |
-| `apps/ff_transfer/src/ff_machine_lib.erl` | FF repair/history helpers |
+| `apps/op_context/src/op_context.erl` | woody/party context, env scoping |
+| `apps/ff_transfer/src/ff_machine_lib.erl` | FF repair/history/helpers |
 | `apps/ff_transfer/src/ff_machine_codec.erl` | FF event/aux_state marshal, legacy sniff |
 | `apps/hellgate/src/hg_invoice.erl` | HG behaviour, repair, `to_prg_result` |
-| `apps/ff_transfer/src/ff_deposit.erl` | FF behaviour |
+| `apps/ff_transfer/src/ff_deposit_machine.erl` | FF thin handler (образец) |
 | `apps/hellgate/src/hg_invoicing_machine_client.erl` | Thrift → prg_machine |
+| `apps/ff_server/src/ff_machine_handler.erl` | HTTP trace routes |
+| `apps/ff_transfer/src/ff_machine_trace.erl` | progressor trace → JSON |
 | `apps/fistful/src/ff_repair.erl` | repair scenarios |
 | `apps/ff_server/src/ff_codec.erl` | repair thrift unmarshal |
 | `apps/ff_transfer/test/ff_ct_machine.erl` | meck hooks |
