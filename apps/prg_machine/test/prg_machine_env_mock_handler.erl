@@ -21,10 +21,11 @@ namespace() ->
     env_test_ns.
 
 -spec init(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
-init(_Args, _Machine) ->
+init(_Args, #{namespace := NS}) ->
+    Scope = op_context:scope_for_namespace(NS),
     try
-        _ = op_context:load({p, l, prg_machine_env_test_context}),
-        prg_machine_env_mock_context:record(context_bound)
+        _ = op_context:load(op_context:key(Scope)),
+        prg_machine_env_mock_context:record({context_bound, Scope})
     catch
         _:_ ->
             ok

@@ -47,11 +47,8 @@
     auxst => term()
 }.
 
--type context_binding() :: op_context:binding().
-
 -type process_options() :: #{
     ns := namespace(),
-    context_binding => context_binding(),
     default_handling_timeout => timeout()
 }.
 
@@ -489,17 +486,13 @@ decode_rpc_context(<<>>) ->
 decode_rpc_context(Bin) ->
     woody_rpc_helper:decode_rpc_context(decode_term(Bin)).
 
-run_scoped(Opts, WoodyCtx, Fun) when is_function(Fun, 0) ->
-    case maps:get(context_binding, Opts, undefined) of
-        Binding when is_map(Binding) ->
-            ok = op_context:env_enter(WoodyCtx, Binding),
-            try
-                Fun()
-            after
-                safe_env_leave(Binding)
-            end;
-        _ ->
-            Fun()
+run_scoped(#{ns := NS}, WoodyCtx, Fun) when is_function(Fun, 0) ->
+    Binding = op_context:binding_for_namespace(NS),
+    ok = op_context:env_enter(WoodyCtx, Binding),
+    try
+        Fun()
+    after
+        safe_env_leave(Binding)
     end.
 
 safe_env_leave(Binding) ->
@@ -545,25 +538,16 @@ range_from_process(_) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -define(TEST_NS, env_test_ns).
--define(TEST_REGISTRY_KEY, {p, l, prg_machine_env_test_context}).
--define(TEST_BINDING, #{
-    registry_key => ?TEST_REGISTRY_KEY,
-    cleanup_mode => lenient
-}).
+-define(TEST_FF_NS, 'ff/env_test_ns').
 -define(TABLE, prg_machine_dispatch).
 
 -spec test() -> _.
 
--spec process_without_context_binding_test_() -> _.
-process_without_context_binding_test_() ->
-    {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
-        ?_test(process_without_context_binding())
-    ]}.
-
 -spec context_binding_scopes_process_test_() -> _.
 context_binding_scopes_process_test_() ->
     {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
-        ?_test(context_binding_scopes_process())
+        ?_test(context_binding_scopes_process(hellgate)),
+        ?_test(context_binding_scopes_process(fistful))
     ]}.
 
 -spec aux_state_runtime_test_() -> _.
@@ -588,18 +572,17 @@ process_exception_test_() ->
         ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
--spec process_without_context_binding() -> _.
-process_without_context_binding() ->
-    ok = ensure_woody_available(),
-    ?assertMatch({ok, _}, run_env_hook_process(#{ns => ?TEST_NS})).
-
--spec context_binding_scopes_process() -> _.
-context_binding_scopes_process() ->
+-spec context_binding_scopes_process(hellgate | fistful) -> _.
+context_binding_scopes_process(Scope) ->
     ok = ensure_woody_available(),
     ok = prg_machine_env_mock_context:reset(),
-    Opts = #{ns => ?TEST_NS, context_binding => ?TEST_BINDING},
-    ?assertMatch({ok, _}, run_env_hook_process(Opts)),
-    ?assertEqual([context_bound], prg_machine_env_mock_context:events()).
+    NS =
+        case Scope of
+            hellgate -> ?TEST_NS;
+            fistful -> ?TEST_FF_NS
+        end,
+    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS})),
+    ?assertEqual([{context_bound, Scope}], prg_machine_env_mock_context:events()).
 
 -spec setup_env_hook_test() -> ok.
 setup_env_hook_test() ->
@@ -613,14 +596,19 @@ setup_env_hook_test() ->
     {ok, _} = application:ensure_all_started(opentelemetry),
     {ok, _} = application:ensure_all_started(op_context),
     _ = ensure_env_hook_dispatch_table(),
-    true = ets:insert(?TABLE, {?TEST_NS, prg_machine_env_mock_handler}),
+    true = ets:insert(?TABLE, [
+        {?TEST_NS, prg_machine_env_mock_handler},
+        {?TEST_FF_NS, prg_machine_env_mock_handler}
+    ]),
     ok = prg_machine_env_mock_context:reset(),
     ok.
 
 -spec cleanup_env_hook_test(_) -> ok.
 cleanup_env_hook_test(_) ->
     _ = ets:delete(?TABLE, ?TEST_NS),
-    op_context:cleanup(?TEST_REGISTRY_KEY, lenient),
+    _ = ets:delete(?TABLE, ?TEST_FF_NS),
+    ok = op_context:cleanup(op_context:key(hellgate), lenient),
+    ok = op_context:cleanup(fistful),
     ok.
 
 -spec ensure_woody_available() -> ok.

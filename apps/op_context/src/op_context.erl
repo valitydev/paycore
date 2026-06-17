@@ -9,6 +9,8 @@
 
 -export([key/1]).
 -export([binding/1]).
+-export([scope_for_namespace/1]).
+-export([binding_for_namespace/1]).
 
 -export([get_woody_context/1]).
 -export([get_party_client_context/1]).
@@ -110,6 +112,20 @@ binding(Scope) ->
         registry_key => key(Scope),
         cleanup_mode => cleanup_mode(Scope)
     }.
+
+%% prg_machine namespace → scope; single source for worker env scoping.
+-spec scope_for_namespace(atom()) -> scope().
+scope_for_namespace(NS) ->
+    case atom_to_binary(NS, utf8) of
+        <<"ff/", _/binary>> ->
+            fistful;
+        _ ->
+            hellgate
+    end.
+
+-spec binding_for_namespace(atom()) -> binding().
+binding_for_namespace(NS) ->
+    binding(scope_for_namespace(NS)).
 
 -spec env_enter(woody_context(), binding()) -> ok.
 env_enter(WoodyCtx, #{registry_key := RegistryKey}) ->
