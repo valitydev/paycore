@@ -48,7 +48,7 @@ sequenceDiagram
 |--------|------|
 | `prg_machine` | behaviour, client API (`start` / `call` / `get` / `repair` / `notify` / `remove`), `process/3`, `collapse` / `emit_events`, term codec, event marshal, env scoping |
 | `prg_machine_registry` | ETS `{Namespace, Handler}`; owner-процесс + `get_child_spec/1` |
-| `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()`; damsel repair на границе HG |
+| `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()`; scheduling helpers |
 | `ff_machine_lib` | общие FF-хелперы: create/get/repair/history, `to_prg_result`, event/aux_state codec |
 
 Связанные модули вне приложения: `op_context` (woody/party context, `env_enter` / `env_leave`, `current_woody_context/0`), `ff_machine_codec` (FF event/aux_state marshal, legacy sniff).
@@ -115,7 +115,7 @@ idle | suspend | timeout | remove
 | `remove()` | `remove` |
 | `set_timeout(N, _)` / deadline | `prg_action:schedule_timer/1`, `schedule_deadline/1` |
 
-`prg_action:from_repair/1` — damsel repair на границе HG → wire. FF repairer `#repairer_ComplexAction{}` → wire в `ff_codec:repairer_complex_action_to_wire/2`. `prg_action:marshal_timer/1` принимает `{deadline, {calendar:datetime(), Micro}}` (machinery-формат из `ff_codec:unmarshal(timer, ...)`).
+`hg_invoice:construct_repair_action/1` — damsel `#repair_ComplexAction{}` → wire в HG repair. FF repairer `#repairer_ComplexAction{}` → wire в `ff_codec:unmarshal_repairer_complex_action/2`. `prg_action:marshal_timer/1` принимает `{deadline, {calendar:datetime(), Micro}}` (machinery-формат из `ff_codec:unmarshal(timer, ...)`).
 
 FF домен возвращает `prg_action:t()` напрямую; `*_machine` оборачивает через `ff_machine_lib:to_prg_result/1`.
 

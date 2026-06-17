@@ -1,12 +1,10 @@
 -module(prg_action).
 
-%%% Wire `action()` helpers and damsel repair → wire conversion at HG API boundaries.
+%%% Wire `action()` scheduling helpers for domain handlers.
 
 -include_lib("progressor/include/progressor.hrl").
--include_lib("damsel/include/dmsl_repair_thrift.hrl").
 
 -export([marshal_timer/1, schedule_timer/1, schedule_deadline/1]).
--export([from_repair/1]).
 
 -export_type([t/0, timer/0, seconds/0]).
 
@@ -14,9 +12,6 @@
 -type datetime() :: calendar:datetime() | {calendar:datetime(), non_neg_integer()} | binary().
 -type timer() :: {timeout, seconds()} | {deadline, datetime()}.
 -type t() :: action().
-
--type timer_field() :: undefined | {set_timer, timer()} | unset_timer.
--type remove_field() :: undefined | remove.
 
 -spec schedule_timer(timer()) -> t().
 schedule_timer({timeout, 0}) ->
@@ -41,40 +36,6 @@ marshal_timer({deadline, Bin}) when is_binary(Bin) ->
     calendar:rfc3339_to_system_time(unicode:characters_to_list(Bin), [{unit, microsecond}]);
 marshal_timer(Other) ->
     error({invalid_timer, Other}).
-
-%% damsel repair → wire (remove beats timer)
-
--spec from_repair(undefined | dmsl_repair_thrift:'ComplexAction'() | t()) -> t().
-from_repair(undefined) ->
-    idle;
-from_repair(#repair_ComplexAction{timer = Timer, remove = Remove}) ->
-    from_timer_remove(repair_timer_field(Timer), repair_remove_field(Remove));
-from_repair(Wire) when Wire =:= idle; Wire =:= suspend; Wire =:= timeout; Wire =:= remove ->
-    Wire;
-from_repair({schedule, _} = Wire) ->
-    Wire.
-
--spec from_timer_remove(timer_field(), remove_field()) -> t().
-from_timer_remove(_, remove) ->
-    remove;
-from_timer_remove(undefined, undefined) ->
-    idle;
-from_timer_remove({set_timer, Timer}, undefined) ->
-    schedule_timer(Timer);
-from_timer_remove(unset_timer, undefined) ->
-    suspend.
-
-repair_timer_field(undefined) ->
-    undefined;
-repair_timer_field({set_timer, #repair_SetTimerAction{timer = Timer}}) ->
-    {set_timer, Timer};
-repair_timer_field({unset_timer, _}) ->
-    unset_timer.
-
-repair_remove_field(undefined) ->
-    undefined;
-repair_remove_field(#repair_RemoveAction{}) ->
-    remove.
 
 %%
 

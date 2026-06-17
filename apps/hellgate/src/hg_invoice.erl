@@ -330,7 +330,7 @@ handle_repair({changes, Changes, RepairAction, Params}, St) ->
             [] ->
                 #{}
         end,
-    Action = prg_action:from_repair(RepairAction),
+    Action = construct_repair_action(RepairAction),
     Result#{
         state => St,
         action => Action,
@@ -348,6 +348,24 @@ handle_repair({scenario, Scenario}, #st{activity = {payment, PaymentID}} = St) -
         {Scenario, Activity} ->
             try_to_get_repair_state(Scenario, St)
     end.
+
+construct_repair_action(undefined) ->
+    idle;
+construct_repair_action(#repair_ComplexAction{} = CA) ->
+    lists:foldl(
+        fun merge_repair_action/2,
+        idle,
+        [{timer, CA#repair_ComplexAction.timer}, {remove, CA#repair_ComplexAction.remove}]
+    ).
+
+merge_repair_action({remove, #repair_RemoveAction{}}, _Action) ->
+    remove;
+merge_repair_action({timer, {set_timer, #repair_SetTimerAction{timer = Timer}}}, _Action) ->
+    prg_action:schedule_timer(Timer);
+merge_repair_action({timer, {unset_timer, #repair_UnsetTimerAction{}}}, _Action) ->
+    suspend;
+merge_repair_action({_, undefined}, Action) ->
+    Action.
 
 -spec process_signal(prg_machine:signal(), machine()) -> prg_result().
 process_signal(Signal, Machine) ->
