@@ -20,7 +20,7 @@
 -export([history_to_events/1]).
 -export([codec_timestamp/1]).
 -export([marshal_event_body/3]).
--export([unmarshal_event_body/4]).
+-export([unmarshal_event_body/2]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
 
@@ -185,13 +185,11 @@ marshal_event_body(Domain, Format, Body) ->
     Encoded = ff_machine_codec:marshal_event(Domain, Format, Timestamped),
     {Format, ff_machine_codec:payload_to_binary(Encoded)}.
 
--spec unmarshal_event_body(ff_machine_codec:domain(), pos_integer(), pos_integer(), binary()) ->
+-spec unmarshal_event_body(ff_machine_codec:domain(), binary()) ->
     prg_machine:event_body().
-unmarshal_event_body(Domain, Format, Format, Payload) ->
-    Timestamped = ff_machine_codec:unmarshal_event(Domain, Format, Payload),
-    event_body_from_timestamped(Timestamped);
-unmarshal_event_body(_Domain, _ExpectedFormat, Format, _Payload) ->
-    erlang:error({unknown_event_format, Format}).
+unmarshal_event_body(Domain, Payload) ->
+    Timestamped = ff_machine_codec:unmarshal_event(Domain, 1, Payload),
+    event_body_from_timestamped(Timestamped).
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->

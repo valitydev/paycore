@@ -117,7 +117,6 @@
 %% Event source
 
 -export([apply_event/2]).
--export([apply_event/4]).
 
 %% Pipeline
 
@@ -306,11 +305,6 @@ is_finished(#{status := pending}) ->
 -spec apply_event(event(), deposit_state() | undefined) -> deposit_state().
 apply_event(Ev, T0) ->
     apply_event_(Ev, T0).
-
--spec apply_event(prg_machine:event_id(), prg_machine:timestamp(), event(), deposit_state() | undefined) ->
-    deposit_state().
-apply_event(_EventID, _Timestamp, Ev, T) ->
-    apply_event(Ev, T).
 
 -spec apply_event_(event(), deposit_state() | undefined) -> deposit_state().
 apply_event_({created, T}, undefined) ->

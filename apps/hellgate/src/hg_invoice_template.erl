@@ -25,7 +25,7 @@
 -export([process_call/2]).
 -export([process_repair/2]).
 -export([marshal_event_body/1]).
--export([unmarshal_event_body/2]).
+-export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
 -export([apply_event/4]).
@@ -349,11 +349,9 @@ marshal_event_body(Changes) when is_list(Changes) ->
     Msgp = mg_msgpack_marshalling:marshal(Data),
     {?EVENT_FORMAT_VERSION, msgpack_payload_to_binary(Msgp)}.
 
--spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
-unmarshal_event_body(?EVENT_FORMAT_VERSION, Payload) ->
-    decode_event_body(Payload);
-unmarshal_event_body(Format, _Payload) ->
-    erlang:error({unknown_event_format, Format}).
+-spec unmarshal_event_body(binary()) -> prg_machine:event_body().
+unmarshal_event_body(Payload) ->
+    decode_event_body(Payload).
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->

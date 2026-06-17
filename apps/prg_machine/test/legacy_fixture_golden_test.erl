@@ -90,7 +90,7 @@ legacy_hg_invoice_event_test() ->
     InvoiceID = trim_binary(legacy_fixture_lib:read_bin(Dir, "process_id.txt")),
     ?assertEqual(#{<<"format_version">> => 1}, Meta),
     ?assertNot(maps:is_key(<<"format">>, Meta)),
-    Changes = hg_invoice:unmarshal_event_body(1, Payload),
+    Changes = hg_invoice:unmarshal_event_body(Payload),
     ?assertMatch([{invoice_created, _}], Changes),
     [{invoice_created, {payproc_InvoiceCreated, Invoice}}] = Changes,
     ?assertEqual(InvoiceID, Invoice#domain_Invoice.id).
@@ -124,7 +124,7 @@ legacy_hg_call_args_test() ->
 legacy_hg_event_rollback_test() ->
     Dir = legacy_fixture_lib:hg_invoice_dir(),
     LegacyPayload = legacy_fixture_lib:read_event_payload(Dir, 1),
-    Changes = hg_invoice:unmarshal_event_body(1, LegacyPayload),
+    Changes = hg_invoice:unmarshal_event_body(LegacyPayload),
     {Format, NewPayload} = hg_invoice:marshal_event_body(Changes),
     ?assertEqual(1, Format),
     ?assertEqual(LegacyPayload, NewPayload).

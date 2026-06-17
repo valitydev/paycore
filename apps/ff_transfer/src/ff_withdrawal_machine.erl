@@ -87,7 +87,7 @@
 -export([process_repair/2]).
 -export([process_notification/2]).
 -export([marshal_event_body/1]).
--export([unmarshal_event_body/2]).
+-export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
 
@@ -201,9 +201,9 @@ process_notification({session_finished, SessionID, SessionResult}, Machine) ->
 marshal_event_body(Body) ->
     ff_machine_lib:marshal_event_body(withdrawal, ?EVENT_FORMAT_VERSION, Body).
 
--spec unmarshal_event_body(pos_integer(), binary()) -> prg_machine:event_body().
-unmarshal_event_body(Format, Payload) ->
-    ff_machine_lib:unmarshal_event_body(withdrawal, ?EVENT_FORMAT_VERSION, Format, Payload).
+-spec unmarshal_event_body(binary()) -> prg_machine:event_body().
+unmarshal_event_body(Payload) ->
+    ff_machine_lib:unmarshal_event_body(withdrawal, Payload).
 
 -spec marshal_aux_state(term()) -> binary().
 marshal_aux_state(AuxSt) ->

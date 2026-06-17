@@ -2,7 +2,7 @@
 
 Единый runtime поверх progressor для HG и FF. Контракт `action()` в progressor: `progressor/docs/step-effect-migration.md`.
 
-*Обновлено: 2026-06-16. CI (compile, dialyzer, CT + compose) — см. текущий PR.*
+*Обновлено: 2026-06-13. CI (compile, dialyzer, CT + compose) — green локально.*
 
 ---
 
@@ -42,13 +42,8 @@ sequenceDiagram
 
 | Модуль | Роль |
 |--------|------|
-| `prg_machine` | публичный фасад: behaviour, client API, `process/3`, `collapse` / `emit_events` |
-| `prg_machine_client` | progressor client API: `start` / `call` / `get` / `repair` / history |
-| `prg_machine_processor` | progressor `process/3`: dispatch доменного callback и сбор intent |
-| `prg_machine_events` | event fold, event payload/metadata, aux_state codec defaults |
-| `prg_machine_env` | woody/otel context, deadline, `env_enter` / `env_leave` |
-| `prg_machine_codec` | term envelope и legacy double-envelope decode |
-| `prg_machine_registry` | ETS `{Namespace, Handler}` под простым owner-процессом |
+| `prg_machine` | behaviour, client API, `process/3`, `collapse` / `emit_events` |
+| `prg_machine_registry` | ETS `{Namespace, Handler}`; `{unknown_namespace, NS}` |
 | `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()` |
 | `ff_machine_lib` | общие FF-хелперы: repair/history/timestamp для `*_machine` |
 
@@ -65,14 +60,6 @@ sequenceDiagram
 ### Callbacks
 
 `namespace/0`, `init/2`, `process_signal/2`, `process_call/2`, `process_repair/2`, marshal/unmarshal event + aux_state. Опционально: `process_notification/2`.
-
-`collapse/2` вызывает только канонический `apply_event/4`:
-
-```erlang
-apply_event(EventID, Timestamp, EventBody, Model)
-```
-
-Legacy-формы fold'а адаптируются в доменном модуле. Runtime больше не выбирает между `apply_event/2` и `apply_event/4`.
 
 ### `result()`
 
@@ -180,15 +167,15 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 
 ### HG invoice — двойной collapse
 
-Реплей: `prg_machine:collapse` (lenient). После call/signal/repair: `to_prg_result/1` → один `validate_changes` + `log_changes` (как старый `handle_result`). Остаётся отдельный strict-фолд `collapse_changes` **мимо** `prg_machine:collapse/2` при валидации новых changes — цель: один фолд с параметром strict/lenient. Только HG invoice; FF адаптирует старый fold за `apply_event/4`.
+Реплей: `prg_machine:collapse` (lenient). После call/signal/repair: `to_prg_result/1` → один `validate_changes` + `log_changes` (как старый `handle_result`). Остаётся отдельный strict-фолд `collapse_changes` **мимо** `prg_machine:collapse/2` при валидации новых changes — цель: один фолд с параметром strict/lenient. Только HG invoice; FF на `apply_event/2`.
 
 ### Прочее (низкий приоритет)
 
-- Golden-fixtures со стейджа для legacy payload/aux_state
-- Registry без ETS `heir` — краткое окно при рестарте owner-процесса
+- Golden-fixtures со стейджа для legacy payload/aux_state (см. `docs/prg-machine-fix-plan.md` §1.6)
+- Registry без ETS `heir` — краткое окно при рестарте
 - Фиктивная обёртка `{ev, Ts, Body}` в event payload
 - Trace: сейчас HTTP JSON (`ff_machine_trace`); Thrift — `docs/trace-api-thrift.md`
-- Единый конверт HG+FF (format 2)
+- Единый конверт HG+FF (format 2) — этап 6 fix-plan
 
 ---
 
@@ -196,7 +183,7 @@ Processor crash в тестах: `{error, {exception, _, _}}`, не атом `fa
 
 1. `sys.config` — `client => prg_machine`
 2. `-behaviour(prg_machine)` + callbacks
-3. `apply_event/4` для `collapse/2`
+3. `apply_event/2` (FF) или `apply_event/4` (HG) для `collapse/2`
 4. `*_machine.erl` — только `prg_machine:*`
 5. Handler в `get_child_spec` (`hellgate.erl` / `ff_server.erl`)
 6. CT suite

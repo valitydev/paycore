@@ -249,7 +249,6 @@
 %% Event source
 
 -export([apply_event/2]).
--export([apply_event/4]).
 
 %% Pipeline
 
@@ -1822,15 +1821,6 @@ apply_event(Ev, T0) ->
     T1 = apply_event_(Ev, T0),
     T2 = save_adjustable_info(Ev, T1),
     T2.
-
--spec apply_event(
-    prg_machine:event_id(),
-    prg_machine:timestamp(),
-    event() | legacy_event(),
-    ff_maybe:'maybe'(withdrawal_state())
-) -> withdrawal_state().
-apply_event(_EventID, _Timestamp, Ev, T0) ->
-    apply_event(Ev, T0).
 
 -spec apply_event_(event(), ff_maybe:'maybe'(withdrawal_state())) -> withdrawal_state().
 apply_event_({created, T}, undefined) ->

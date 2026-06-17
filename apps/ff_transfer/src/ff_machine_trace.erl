@@ -44,11 +44,9 @@ unmarshal_trace_events(Events, Handler) ->
 
 unmarshal_trace_event(Event, Handler) ->
     Payload = maps:get(event_payload, Event),
-    Meta = maps:get(event_metadata, Event, #{}),
-    Format = maps:get(<<"format">>, Meta, maps:get(format, Meta, 1)),
     EventID = maps:get(event_id, Event),
     Ts = maps:get(event_timestamp, Event),
-    Body = prg_machine:unmarshal_event_body(Handler, Format, Payload),
+    Body = prg_machine:unmarshal_event_body(Handler, Payload),
     #{
         event_id => EventID,
         event_payload => json_compatible_value(Body),
