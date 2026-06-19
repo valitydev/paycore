@@ -76,6 +76,14 @@
     }
 ).
 
+-define(payment_currency_changed(SourceCurrency, DestinationCurrency, ExchangeRate),
+    {invoice_payment_currency_changed, #payproc_InvoicePaymentCurrencyChanged{
+        source_currency = SourceCurrency,
+        destination_currency = DestinationCurrency,
+        exchange_rate = ExchangeRate
+    }}
+).
+
 -define(cash_flow_changed(CashFlow),
     {invoice_payment_cash_flow_changed, #payproc_InvoicePaymentCashFlowChanged{
         cash_flow = CashFlow

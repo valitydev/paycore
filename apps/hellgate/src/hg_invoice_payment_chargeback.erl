@@ -420,6 +420,7 @@ build_chargeback_final_cash_flow(State, Opts) ->
     Body = get_body(State),
     Payment = get_opts_payment(Opts),
     Invoice = get_opts_invoice(Opts),
+    ExchangeContext = get_opts_exchange_context(Opts),
     Route = get_opts_route(Opts),
     Party = get_opts_party(Opts),
     PartyConfigRef = get_opts_party_config_ref(Opts),
@@ -430,8 +431,11 @@ build_chargeback_final_cash_flow(State, Opts) ->
     PaymentsTerms = hg_party:get_route_payment_terms(Route, VS, Revision),
     ProviderTerms = get_provider_chargeback_terms(PaymentsTerms, Payment),
     ServiceCashFlow = get_chargeback_service_cash_flow(ServiceTerms),
-    ProviderCashFlow = get_chargeback_provider_cash_flow(ProviderTerms),
-    ProviderFees = collect_chargeback_provider_fees(ProviderTerms),
+    ProviderCashFlow = maybe_convert_cashflow(
+        ExchangeContext,
+        get_chargeback_provider_cash_flow(ProviderTerms)
+    ),
+    ProviderFees = maybe_convert_fees(ExchangeContext, collect_chargeback_provider_fees(ProviderTerms)),
     PaymentInstitutionRef = Shop#domain_ShopConfig.payment_institution,
     PaymentInst = hg_payment_institution:compute_payment_institution(PaymentInstitutionRef, VS, Revision),
     Provider = get_route_provider(Route, Revision),
@@ -465,6 +469,21 @@ build_provider_cash_flow_context(State, Fees) ->
         _NotRejected ->
             maps:merge(ComputedFees, #{operation_amount => get_body(State)})
     end.
+
+maybe_convert_cashflow(undefined, CashFlow) ->
+    CashFlow;
+maybe_convert_cashflow(ExchangeContext, CashFlow) ->
+    hg_cashflow_utils:convert_cashflow(ExchangeContext, CashFlow).
+
+maybe_convert_fees(undefined, Fees) ->
+    Fees;
+maybe_convert_fees(ExchangeContext, Fees) ->
+    maps:map(
+        fun(_Const, Volume) ->
+            hg_cashflow_utils:convert_volume(ExchangeContext, Volume)
+        end,
+        Fees
+    ).
 
 get_chargeback_service_cash_flow(
     #domain_PaymentChargebackServiceTerms{fees = {value, V}}
@@ -732,6 +751,9 @@ get_opts_payment_state(#{payment_state := PaymentState}) ->
 
 get_opts_payment(#{payment_state := PaymentState}) ->
     hg_invoice_payment:get_payment(PaymentState).
+
+get_opts_exchange_context(#{payment_state := PaymentState}) ->
+    hg_invoice_payment:get_exchange_context(PaymentState).
 
 get_opts_route(#{payment_state := PaymentState}) ->
     hg_invoice_payment:get_route(PaymentState).

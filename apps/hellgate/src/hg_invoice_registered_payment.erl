@@ -81,6 +81,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
         timestamp => CreatedAt1,
         varset => VS,
         revision => Revision
+        % add exchange_context
     },
     FinalCashflow = hg_invoice_payment:calculate_cashflow(PaymentInstitution, CashflowContext, Opts),
 
@@ -93,6 +94,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
             RiskScoreEventList ++
             [
                 ?route_changed(Route),
+                %% TODO currency_changed
                 ?cash_flow_changed(FinalCashflow),
                 hg_session:wrap_event(?processed(), hg_session:create())
             ] ++

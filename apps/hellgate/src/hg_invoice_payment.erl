@@ -57,6 +57,7 @@
 -export([get_invoice/1]).
 -export([get_origin/1]).
 -export([get_risk_score/1]).
+-export([get_exchange_context/1]).
 
 -export([construct_payment_info/2]).
 -export([set_repair_scenario/2]).
@@ -129,6 +130,7 @@
 -export_type([change_opts/0]).
 -export_type([action/0]).
 -export_type([cashflow_context/0]).
+-export_type([exchange_context/0]).
 
 -type activity() ::
     payment_activity()
@@ -155,6 +157,7 @@
     | risk_scoring
     | routing
     | routing_failure
+    | exchange_context_building
     | cash_flow_building
     | processing_session
     | processing_accounter
@@ -232,7 +235,14 @@
     varset := hg_varset:varset(),
     revision := hg_domain:revision(),
     merchant_terms => dmsl_domain_thrift:'PaymentsServiceTerms'(),
-    allocation => hg_allocation:allocation() | undefined
+    allocation => hg_allocation:allocation() | undefined,
+    exchange_context => exchange_context() | undefined
+}.
+
+-type exchange_context() :: #{
+    source := dmsl_domain_thrift:'CurrencySymbolicCode'(),
+    destination := dmsl_domain_thrift:'CurrencySymbolicCode'(),
+    rate := dmsl_base_thrift:'Rational'()
 }.
 
 %%
@@ -272,6 +282,10 @@ get_candidate_routes(#st{candidate_routes = undefined}) ->
     [];
 get_candidate_routes(#st{candidate_routes = Routes}) ->
     Routes.
+
+-spec get_exchange_context(st()) -> exchange_context() | undefined.
+get_exchange_context(#st{exchange_context = ExchangeContext}) ->
+    ExchangeContext.
 
 -spec get_adjustments(st()) -> [adjustment()].
 get_adjustments(#st{adjustments = As}) ->
@@ -997,6 +1011,7 @@ partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocat
     Route = get_route(St),
     ProviderTerms = hg_party:get_route_payment_terms(Route, VS, Revision),
     ok = validate_provider_holds_terms(ProviderTerms),
+    ExchangeContext = get_exchange_context(St),
     Context = #{
         provision_terms => ProviderTerms,
         merchant_terms => MerchantTerms,
@@ -1005,7 +1020,8 @@ partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocat
         timestamp => Timestamp,
         varset => VS,
         revision => Revision,
-        allocation => Allocation
+        allocation => Allocation,
+        exchange_context => ExchangeContext
     },
     FinalCashflow = calculate_cashflow(Context, Opts),
     Changes = start_partial_capture(Reason, Cost, Cart, FinalCashflow, Allocation),
@@ -1406,6 +1422,7 @@ create_cash_flow_adjustment(Timestamp, Params, DomainRevision, St, Opts) ->
     {Payment1, AdditionalEvents} = maybe_inject_new_cost_amount(
         Payment, Params#payproc_InvoicePaymentAdjustmentParams.scenario
     ),
+    ExchangeContext = get_exchange_context(St),
     Context = #{
         provision_terms => get_provider_terminal_terms(Route, VS, NewRevision),
         route => Route,
@@ -1413,7 +1430,8 @@ create_cash_flow_adjustment(Timestamp, Params, DomainRevision, St, Opts) ->
         timestamp => Timestamp,
         varset => VS,
         revision => NewRevision,
-        allocation => Allocation
+        allocation => Allocation,
+        exchange_context => ExchangeContext
     },
     NewCashFlow =
         case Payment of
@@ -1558,6 +1576,7 @@ get_cash_flow_for_target_status({captured, Captured}, St0, Opts) ->
     St = St0#st{payment = Payment2},
     Revision = Payment2#domain_InvoicePayment.domain_revision,
     VS = collect_validation_varset(St, Opts),
+    ExchangeContext = get_exchange_context(St),
     Context = #{
         provision_terms => get_provider_terminal_terms(Route, VS, Revision),
         route => Route,
@@ -1565,7 +1584,8 @@ get_cash_flow_for_target_status({captured, Captured}, St0, Opts) ->
         timestamp => Timestamp,
         varset => VS,
         revision => Revision,
-        allocation => Allocation
+        allocation => Allocation,
+        exchange_context => ExchangeContext
     },
     calculate_cashflow(Context, Opts);
 get_cash_flow_for_target_status({cancelled, _}, _St, _Opts) ->
@@ -1769,6 +1789,8 @@ process_timeout({payment, risk_scoring}, Action, St) ->
     process_risk_score(Action, St);
 process_timeout({payment, routing}, Action, St) ->
     process_routing(Action, St);
+process_timeout({payment, exchange_context_building}, Action, St) ->
+    process_currency_exchange(Action, St);
 process_timeout({payment, cash_flow_building}, Action, St) ->
     process_cash_flow_building(Action, St);
 process_timeout({payment, Step}, _Action, St) when
@@ -1806,7 +1828,8 @@ process_refund(ID, #st{opts = Options0, payment = Payment, repair_scenario = Sce
     Options1 = Options0#{
         payment => Payment,
         payment_info => PaymentInfo,
-        repair_scenario => RepairScenario
+        repair_scenario => RepairScenario,
+        exchange_context => get_exchange_context(St)
     },
     Refund = try_get_refund_state(ID, St),
     {Step, {Events0, Action}} = hg_invoice_payment_refund:process(Options1, Refund),
@@ -2155,6 +2178,60 @@ mk_static_error([_ | _] = Codes) -> mk_static_error_(#payproc_error_GeneralFailu
 mk_static_error_(T, []) -> T;
 mk_static_error_(Sub, [Code | Codes]) -> mk_static_error_({Code, Sub}, Codes).
 
+-spec process_currency_exchange(action(), st()) -> machine_result().
+process_currency_exchange(Action, St) ->
+    Route = get_route(St),
+    Revision = get_payment_revision(St),
+    VS = get_varset(St, #{risk_score => get_risk_score(St)}),
+    case build_exchange_context(Route, VS, Revision, St) of
+        {ok, undefined} ->
+            %% no currency conversion required
+            %% go to cashflow building
+            process_cash_flow_building(Action, St#st{activity = {payment, cash_flow_building}});
+        {ok, #{
+            source := Src,
+            destination := Dst,
+            rate := Rate
+        }} ->
+            {next, {[?payment_currency_changed(Src, Dst, Rate)], hg_machine_action:set_timeout(0, Action)}};
+        {error, Reason} ->
+            FailureReason = genlib:format("Payment currency conversion error: ~p", [Reason]),
+            Failure = payproc_errors:construct(
+                'PaymentFailure',
+                {authorization_failed, {unknown, #payproc_error_GeneralFailure{}}},
+                FailureReason
+            ),
+            {next, {[?payment_rollback_started({failure, Failure})], hg_machine_action:set_timeout(0, Action)}}
+    end.
+
+%build_exchange_context(#{provider_ref := ProviderRef, terminal_ref := TerminalRef}, VS, Revision, St) ->
+build_exchange_context(Route, VS, Revision, St) ->
+    %Route = ?route(ProviderRef, TerminalRef),
+    #domain_Cash{
+        currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}
+    } = get_payment_cost(get_payment(St)),
+    #domain_PaymentsProvisionTerms{
+        currencies = {value, [#domain_CurrencyRef{symbolic_code = TerminalCurrency}]}
+    } = get_provider_terminal_terms(Route, VS, Revision),
+    case PaymentCurrency =:= TerminalCurrency of
+        true ->
+            {ok, undefined};
+        false ->
+            get_exchange_context(PaymentCurrency, TerminalCurrency)
+    end.
+
+get_exchange_context(SrcCurrency, DstCurrency) ->
+    case hg_exrates:get_exchange_rate(SrcCurrency, DstCurrency) of
+        {ok, #{p := P, q := Q}} ->
+            {ok, #{
+                source => SrcCurrency,
+                destination => DstCurrency,
+                rate => #base_Rational{p = P, q = Q}
+            }};
+        {error, _} = Error ->
+            Error
+    end.
+
 -spec process_cash_flow_building(action(), st()) -> machine_result().
 process_cash_flow_building(Action, St) ->
     Route = get_route(St),
@@ -2166,6 +2243,7 @@ process_cash_flow_building(Action, St) ->
     VS1 = collect_validation_varset(get_party_config_ref(Opts), get_shop_obj(Opts, Revision), Payment, VS0),
     ProviderTerms = get_provider_terminal_terms(Route, VS1, Revision),
     Allocation = get_allocation(St),
+    ExchangeContext = get_exchange_context(St),
     Context = #{
         provision_terms => ProviderTerms,
         route => Route,
@@ -2173,7 +2251,8 @@ process_cash_flow_building(Action, St) ->
         timestamp => Timestamp,
         varset => VS1,
         revision => Revision,
-        allocation => Allocation
+        allocation => Allocation,
+        exchange_context => ExchangeContext
     },
     FinalCashflow = calculate_cashflow(Context, Opts),
     _ = rollback_unused_payment_limits(St),
@@ -2264,7 +2343,12 @@ process_accounter_update(Action, #st{partial_cash_flow = FinalCashflow, capture_
 handle_callback({refund, ID}, Payload, _Session0, St) ->
     PaymentInfo = construct_payment_info(St, get_opts(St)),
     Refund = try_get_refund_state(ID, St),
-    {Resp, {Step, {Events0, Action}}} = hg_invoice_payment_refund:process_callback(Payload, PaymentInfo, Refund),
+    Options = #{
+        exchange_context => get_exchange_context(St)
+    },
+    {Resp, {Step, {Events0, Action}}} = hg_invoice_payment_refund:process_callback(
+        Payload, PaymentInfo, Refund, Options
+    ),
     Events1 = hg_invoice_payment_refund:wrap_events(Events0, Refund),
     {Resp, {Step, {Events1, Action}}};
 handle_callback(Activity, Payload, Session0, St) ->
@@ -2377,6 +2461,7 @@ process_result({payment, processing_accounter}, Action, #st{new_cash = Cost} = S
     MerchantTerms = get_merchant_payments_terms(Opts, Revision, Timestamp, VS),
     Route = get_route(St1),
     ProviderTerms = hg_party:get_route_payment_terms(Route, VS, Revision),
+    ExchangeContext = get_exchange_context(St1),
     Context = #{
         provision_terms => ProviderTerms,
         merchant_terms => MerchantTerms,
@@ -2384,7 +2469,8 @@ process_result({payment, processing_accounter}, Action, #st{new_cash = Cost} = S
         payment => Payment1,
         timestamp => Timestamp,
         varset => VS,
-        revision => Revision
+        revision => Revision,
+        exchange_context => ExchangeContext
     },
     FinalCashflow = calculate_cashflow(Context, Opts),
     %% Hold limits (only for chosen route) for new cashflow
@@ -2898,6 +2984,10 @@ commit_payment_cashflow(St) ->
         end
     ).
 
+rollback_payment_cashflow(#st{cash_flow = undefined}) ->
+    %% This case is required to handle the situation where cascading operations is required,
+    %% but an error occurred before the cashflow were calculated
+    hg_accounting:empty_log();
 rollback_payment_cashflow(St) ->
     Plan = get_cashflow_plan(St),
     do_try_with_ids(
@@ -2969,7 +3059,7 @@ construct_payment_info(St, Opts) ->
         St,
         #proxy_provider_PaymentInfo{
             shop = construct_proxy_shop(get_shop_obj(Opts, Revision)),
-            invoice = construct_proxy_invoice(get_invoice(Opts)),
+            invoice = construct_proxy_invoice(get_invoice(Opts), St),
             payment = construct_proxy_payment(Payment, get_trx(St), St)
         }
     ).
@@ -2978,12 +3068,14 @@ construct_payment_info(idle, _Target, _St, PaymentInfo) ->
     PaymentInfo;
 construct_payment_info(
     {payment, _Step},
-    Target = ?captured(),
-    _St,
+    _Target = ?captured(_, Cost),
+    St,
     PaymentInfo
 ) ->
+    ExchangeContext = get_exchange_context(St),
+    {ConvertedCost, _OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
     PaymentInfo#proxy_provider_PaymentInfo{
-        capture = construct_proxy_capture(Target)
+        capture = construct_proxy_capture(ConvertedCost)
     };
 construct_payment_info({payment, _Step}, _Target, _St, PaymentInfo) ->
     PaymentInfo;
@@ -3007,6 +3099,8 @@ construct_proxy_payment(
 ) ->
     ContactInfo = get_contact_info(Payer),
     PaymentTool = get_payer_payment_tool(Payer),
+    ExchangeContext = get_exchange_context(St),
+    {ConvertedCost, OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
     #proxy_provider_InvoicePayment{
         id = ID,
         created_at = CreatedAt,
@@ -3014,7 +3108,8 @@ construct_proxy_payment(
         payment_resource = construct_payment_resource(Payer, St),
         payment_service = hg_payment_tool:get_payment_service(PaymentTool, Revision),
         payer_session_info = PayerSessionInfo,
-        cost = construct_proxy_cash(Cost),
+        cost = construct_proxy_cash(ConvertedCost),
+        original_cost = construct_proxy_cash(OriginalCost),
         contact_info = ContactInfo,
         make_recurrent = MakeRecurrent,
         skip_recurrent = SkipRecurrent,
@@ -3057,14 +3152,18 @@ construct_proxy_invoice(
         due = Due,
         details = Details,
         cost = Cost
-    }
+    },
+    St
 ) ->
+    ExchangeContext = get_exchange_context(St),
+    {ConvertedCost, OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
     #proxy_provider_Invoice{
         id = InvoiceID,
         created_at = CreatedAt,
         due = Due,
         details = Details,
-        cost = construct_proxy_cash(Cost)
+        cost = construct_proxy_cash(ConvertedCost),
+        original_cost = construct_proxy_cash(OriginalCost)
     }.
 
 construct_proxy_shop(
@@ -3085,6 +3184,8 @@ construct_proxy_shop(
         location = Location
     }.
 
+construct_proxy_cash(undefined) ->
+    undefined;
 construct_proxy_cash(#domain_Cash{
     amount = Amount,
     currency = CurrencyRef
@@ -3094,10 +3195,27 @@ construct_proxy_cash(#domain_Cash{
         currency = hg_domain:get({currency, CurrencyRef})
     }.
 
-construct_proxy_capture(?captured(_, Cost)) ->
+construct_proxy_capture(Cost) ->
     #proxy_provider_InvoicePaymentCapture{
         cost = construct_proxy_cash(Cost)
     }.
+
+maybe_convert_cash(undefined, Cost) ->
+    {Cost, undefined};
+maybe_convert_cash(
+    #{source := PaymentCurrency} = ExchangeContext,
+    #domain_Cash{currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}} = OriginalCash
+) ->
+    ConvertedCash = hg_currency_converter:convert_cash(ExchangeContext, OriginalCash),
+    {ConvertedCash, OriginalCash}.
+
+maybe_reverse_convert_cash(undefined, Cost) ->
+    Cost;
+maybe_reverse_convert_cash(
+    #{destination := TerminalCurrency} = ExchangeContext,
+    #domain_Cash{currency = #domain_CurrencyRef{symbolic_code = TerminalCurrency}} = TerminalCash
+) ->
+    hg_currency_converter:reverse_convert_cash(ExchangeContext, TerminalCash).
 
 %%
 
@@ -3276,12 +3394,28 @@ merge_change(
         cash_flow = undefined,
         %% `trx` from previous session (if any) also must be considered obsolete.
         trx = undefined,
+        %% exchange_context from previous route must be considered obsolete
+        exchange_context = undefined,
         routes = [Route | Routes],
         candidate_routes = ordsets:to_list(Candidates),
-        activity = {payment, cash_flow_building},
+        activity = {payment, exchange_context_building},
         route_scores = hg_maybe:apply(fun(S) -> maps:merge(RouteScores, S) end, Scores, RouteScores),
         route_limits = hg_maybe:apply(fun(L) -> maps:merge(RouteLimits, L) end, Limits, RouteLimits),
         payment = Payment1
+    };
+merge_change(
+    Change = ?payment_currency_changed(SourceCurrency, DestinationCurrency, ExchangeRate),
+    #st{} = St,
+    Opts
+) ->
+    _ = validate_transition([{payment, routing}], Change, St, Opts),
+    St#st{
+        activity = {payment, cash_flow_building},
+        exchange_context = #{
+            source => SourceCurrency,
+            destination => DestinationCurrency,
+            rate => ExchangeRate
+        }
     };
 merge_change(Change = ?payment_capture_started(Data), #st{} = St, Opts) ->
     _ = validate_transition([{payment, S} || S <- [flow_waiting]], Change, St, Opts),
@@ -3295,6 +3429,7 @@ merge_change(Change = ?cash_flow_changed(CashFlow), #st{activity = Activity} = S
         [
             {payment, S}
          || S <- [
+                exchange_context_building,
                 cash_flow_building,
                 processing_capture,
                 processing_accounter
@@ -3310,7 +3445,10 @@ merge_change(Change = ?cash_flow_changed(CashFlow), #st{activity = Activity} = S
     case Activity of
         {payment, processing_accounter} ->
             St#st{new_cash = undefined, new_cash_flow = CashFlow};
-        {payment, cash_flow_building} ->
+        {payment, PaymentActivity} when
+            PaymentActivity =:= exchange_context_building;
+            PaymentActivity =:= cash_flow_building
+        ->
             St#st{
                 cash_flow = CashFlow,
                 activity = {payment, processing_session}
@@ -3336,12 +3474,15 @@ merge_change(Change = ?cash_changed(_OldCash, NewCash), #st{} = St, Opts) ->
         Opts
     ),
     Payment0 = get_payment(St),
-    Payment1 = Payment0#domain_InvoicePayment{changed_cost = NewCash},
-    St#st{new_cash = NewCash, new_cash_provided = true, payment = Payment1};
+    ExchangeContext = get_exchange_context(St),
+    ReConvertedNewCash = maybe_reverse_convert_cash(ExchangeContext, NewCash),
+    Payment1 = Payment0#domain_InvoicePayment{changed_cost = ReConvertedNewCash},
+    St#st{new_cash = ReConvertedNewCash, new_cash_provided = true, payment = Payment1};
 merge_change(Change = ?payment_rollback_started(Failure), St, Opts) ->
     _ = validate_transition(
         [
             {payment, shop_limit_finalizing},
+            {payment, exchange_context_building},
             {payment, cash_flow_building},
             {payment, processing_session}
         ],
@@ -3353,6 +3494,8 @@ merge_change(Change = ?payment_rollback_started(Failure), St, Opts) ->
         case St of
             #st{shop_limit_status = initialized} ->
                 {payment, shop_limit_failure};
+            #st{activity = {payment, exchange_context_building}} ->
+                {payment, processing_failure};
             #st{cash_flow = undefined} ->
                 {payment, routing_failure};
             _ ->

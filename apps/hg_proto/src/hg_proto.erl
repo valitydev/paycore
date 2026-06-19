@@ -45,7 +45,9 @@ get_service(party_config) ->
 get_service(customer_management) ->
     {dmsl_customer_thrift, 'CustomerManagement'};
 get_service(bank_card_storage) ->
-    {dmsl_customer_thrift, 'BankCardStorage'}.
+    {dmsl_customer_thrift, 'BankCardStorage'};
+get_service(rate_boss) ->
+    {exrates_service_thrift, 'ExchangeRateService'}.
 
 -spec get_service_spec(Name :: atom()) -> service_spec().
 get_service_spec(Name) ->

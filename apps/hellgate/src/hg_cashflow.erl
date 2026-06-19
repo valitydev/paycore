@@ -12,6 +12,8 @@
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export_type([final_cash_flow/0]).
+-export_type([cash_flow/0]).
+-export_type([cash_volume/0]).
 
 -type account() :: dmsl_domain_thrift:'CashFlowAccount'().
 -type account_id() :: dmsl_domain_thrift:'AccountID'().
