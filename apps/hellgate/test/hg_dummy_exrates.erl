@@ -18,14 +18,49 @@ get_service_spec() ->
 -spec handle_function(woody:func(), woody:args(), hg_woody_service_wrapper:handler_opts()) -> term() | no_return().
 handle_function(
     'GetExchangeRateData',
-    #service_GetCurrencyExchangeRateRequest{
-        currency_data = CurrencyData
-    },
+    {#service_GetCurrencyExchangeRateRequest{
+        currency_data =
+            #service_CurrencyData{
+                source_currency = <<"RUB">>,
+                destination_currency = <<"USD">>
+            } = CurrencyData
+    }},
     _
 ) ->
     Timestamp = calendar:system_time_to_rfc3339(erlang:system_time(second), [{offset, "Z"}]),
     #service_GetCurrencyExchangeRateResult{
         currency_data = CurrencyData,
-        exchange_rate = #base_Rational{p = 1, q = 1},
+        exchange_rate = #base_Rational{p = 80, q = 1},
         timestamp = unicode:characters_to_binary(Timestamp)
-    }.
+    };
+handle_function(
+    'GetExchangeRateData',
+    {#service_GetCurrencyExchangeRateRequest{
+        currency_data =
+            #service_CurrencyData{
+                source_currency = <<"RUB">>,
+                destination_currency = <<"EUR">>
+            }
+    }},
+    _
+) ->
+    throw({exception, #service_ExRateNotFound{}});
+handle_function(
+    'GetExchangeRateData',
+    {#service_GetCurrencyExchangeRateRequest{
+        currency_data =
+            #service_CurrencyData{
+                source_currency = <<"RUB">>,
+                destination_currency = <<"JPY">>
+            }
+    }},
+    _
+) ->
+    timer:sleep(5100),
+    {exception, #service_ExRateNotFound{}};
+handle_function(
+    'GetExchangeRateData',
+    _,
+    _
+) ->
+    erlang:error(internal_exchange_error).

@@ -165,6 +165,7 @@ start_app(hg_proto = AppName) ->
                     url => <<"http://limiter:8022/v1/limiter">>,
                     transport_opts => #{}
                 },
+                rate_boss => <<"http://127.0.0.1:32022/test/exrates/dummy">>,
                 customer_management => <<"http://cubasty:8022/v1/customer/management">>,
                 bank_card_storage => <<"http://cubasty:8022/v1/customer/bank_card">>
             }}
@@ -208,6 +209,7 @@ start_app(hellgate = AppName) ->
                     pre_aggregation_size => 2
                 }
             }},
+            {currency_exchange_enabled, true},
             {backend, progressor}
         ]),
         #{

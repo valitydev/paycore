@@ -136,11 +136,28 @@ maybe_convert_cashflow(ExchangeContext, ProviderCashflow) ->
 convert_cashflow(ExchangeContext, ProviderCashflow) ->
     lists:foldr(
         fun(#domain_CashFlowPosting{volume = CashVolume} = P, Acc) ->
-            [P#domain_CashFlowPosting{volume = convert_volume(ExchangeContext, CashVolume)} | Acc]
+            [
+                P#domain_CashFlowPosting{
+                    volume = convert_volume(ExchangeContext, CashVolume),
+                    exchange_context = construct_exchange_context(ExchangeContext)
+                }
+                | Acc
+            ]
         end,
         [],
         ProviderCashflow
     ).
+
+construct_exchange_context(#{
+    source := SourceCurrency,
+    destination := DestinationCurrency,
+    rate := ExchangeRate
+}) ->
+    #domain_ExchangeContext{
+        source_currency = SourceCurrency,
+        destination_currency = DestinationCurrency,
+        exchange_rate = ExchangeRate
+    }.
 
 -spec convert_volume(hg_invoice_payment:exchange_context(), cash_volume()) -> cash_volume().
 convert_volume(_ExchangeContext, {share, _} = CashVolume) ->

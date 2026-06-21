@@ -398,7 +398,14 @@ try_accept_term(ParentName, Name, Value, Selector) ->
     test_term(Name, Value, Values) orelse throw(?rejected({ParentName, Name})).
 
 test_term(currency, V, Vs) ->
-    ordsets:is_element(V, Vs);
+    case application:get_env(hellgate, currency_exchange_enabled, false) of
+        true ->
+            %% currency conversion is allowed
+            %% ignore the currency difference
+            true;
+        false ->
+            ordsets:is_element(V, Vs)
+    end;
 test_term(category, V, Vs) ->
     ordsets:is_element(V, Vs);
 test_term(payment_tool, PT, PMs) ->

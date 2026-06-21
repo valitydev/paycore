@@ -28,7 +28,9 @@ get_exchange_rate(SourceCurrency, DestinationCurrency) ->
         }} ->
             {ok, #{p => P, q => Q}};
         {exception, #'service_ExRateNotFound'{}} ->
-            {error, not_found}
+            {error, not_found};
+        {error, _} ->
+            {error, unexpected_error}
     end.
 
 issue_call(Func, Args) ->

@@ -44,11 +44,19 @@
 
 %%
 
--define(posting(Source, Destination, Volume, Details), #domain_CashFlowPosting{
+%-define(posting(Source, Destination, Volume, Details), #domain_CashFlowPosting{
+%    source = Source,
+%    destination = Destination,
+%    volume = Volume,
+%    details = Details
+%}).
+
+-define(posting(Source, Destination, Volume, Details, ExchangeContext), #domain_CashFlowPosting{
     source = Source,
     destination = Destination,
     volume = Volume,
-    details = Details
+    details = Details,
+    exchange_context = ExchangeContext
 }).
 
 -define(final_posting(Source, Destination, Volume, Details), #domain_FinalCashFlowPosting{
@@ -56,6 +64,14 @@
     destination = Destination,
     volume = Volume,
     details = Details
+}).
+
+-define(final_posting(Source, Destination, Volume, Details, ExchangeContext), #domain_FinalCashFlowPosting{
+    source = Source,
+    destination = Destination,
+    volume = Volume,
+    details = Details,
+    exchange_context = ExchangeContext
 }).
 
 -spec finalize(cash_flow(), context(), account_map()) -> final_cash_flow() | no_return().
@@ -69,9 +85,10 @@ compute_postings(CF, Context, AccountMap) ->
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
             compute_volume(Volume, Context),
-            Details
+            Details,
+            ExchangeContext
         )
-     || ?posting(Source, Destination, Volume, Details) <- CF
+     || ?posting(Source, Destination, Volume, Details, ExchangeContext) <- CF
     ].
 
 -spec construct_final_account(account(), account_map()) -> final_cash_flow_account() | no_return().
@@ -127,8 +144,8 @@ resolve_account(AccountType, AccountMap) ->
 -spec revert(final_cash_flow()) -> final_cash_flow().
 revert(CF) ->
     [
-        ?final_posting(Destination, Source, Volume, revert_details(Details))
-     || ?final_posting(Source, Destination, Volume, Details) <- CF
+        ?final_posting(Destination, Source, Volume, revert_details(Details), ExchangeContext)
+     || ?final_posting(Source, Destination, Volume, Details, ExchangeContext) <- CF
     ].
 
 revert_details(undefined) ->

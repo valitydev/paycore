@@ -1224,6 +1224,7 @@ make_refund_cashflow(Refund, Payment, Revision, St, Opts, MerchantTerms, VS, Tim
     Route = get_route(St),
     ProviderPaymentsTerms = get_provider_terminal_terms(Route, VS, Revision),
     Allocation = Refund#domain_InvoicePaymentRefund.allocation,
+    ExchangeContext = get_exchange_context(St),
     CollectCashflowContext = genlib_map:compact(#{
         operation => refund,
         provision_terms => get_provider_refunds_terms(ProviderPaymentsTerms, Refund, Payment),
@@ -1237,7 +1238,8 @@ make_refund_cashflow(Refund, Payment, Revision, St, Opts, MerchantTerms, VS, Tim
         varset => VS,
         revision => Revision,
         refund => Refund,
-        allocation => Allocation
+        allocation => Allocation,
+        exchange_context => ExchangeContext
     }),
     hg_cashflow_utils:collect_cashflow(CollectCashflowContext).
 
@@ -1864,8 +1866,9 @@ process_refund_result(Changes, Refund0, St) ->
 repair_process_timeout(Activity, Action, #st{repair_scenario = Scenario} = St) ->
     case hg_invoice_repair:check_for_action(fail_pre_processing, Scenario) of
         {result, Result} when
-            Activity =:= {payment, routing} orelse
-                Activity =:= {payment, cash_flow_building}
+            Activity =:= {payment, routing};
+            Activity =:= {payment, cash_flow_building};
+            Activity =:= {payment, exchange_context_building}
         ->
             rollback_broken_payment_limits(St),
             Result;
@@ -3153,17 +3156,14 @@ construct_proxy_invoice(
         details = Details,
         cost = Cost
     },
-    St
+    _St
 ) ->
-    ExchangeContext = get_exchange_context(St),
-    {ConvertedCost, OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
     #proxy_provider_Invoice{
         id = InvoiceID,
         created_at = CreatedAt,
         due = Due,
         details = Details,
-        cost = construct_proxy_cash(ConvertedCost),
-        original_cost = construct_proxy_cash(OriginalCost)
+        cost = construct_proxy_cash(Cost)
     }.
 
 construct_proxy_shop(
@@ -3408,7 +3408,7 @@ merge_change(
     #st{} = St,
     Opts
 ) ->
-    _ = validate_transition([{payment, routing}], Change, St, Opts),
+    _ = validate_transition([{payment, exchange_context_building}], Change, St, Opts),
     St#st{
         activity = {payment, cash_flow_building},
         exchange_context = #{
@@ -3513,6 +3513,7 @@ merge_change(Change = ?payment_status_changed({failed, _} = Status), #st{payment
          || S <- [
                 risk_scoring,
                 routing,
+                exchange_context_building,
                 cash_flow_building,
                 shop_limit_failure,
                 routing_failure,
