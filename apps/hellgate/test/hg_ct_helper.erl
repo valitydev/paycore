@@ -209,7 +209,6 @@ start_app(hellgate = AppName) ->
                     pre_aggregation_size => 2
                 }
             }},
-            {currency_exchange_enabled, true},
             {backend, progressor}
         ]),
         #{

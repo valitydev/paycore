@@ -71,6 +71,7 @@ init_per_suite(C) ->
         {cowboy, CowboySpec},
         snowflake
     ]),
+    application:set_env(hellgate, currency_exchange_enabled, true),
     RootUrl = maps:get(hellgate_root_url, Ret),
     _ = hg_limiter_helper:init_per_suite(C),
     _ = hg_domain:upsert(hg_invoice_dummy_data:construct_domain_fixture()),
