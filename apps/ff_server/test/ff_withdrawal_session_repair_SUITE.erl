@@ -173,9 +173,8 @@ repair_failed_session_with_failure(C) ->
                     <<"task_type">> := <<"repair">>
                 },
                 #{
-                    <<"error">> :=
-                        <<"{exception,error,{unable_to_finish_session,{error,notfound}}}">>,
-                    <<"task_status">> := <<"error">>,
+                    <<"error">> := null,
+                    <<"task_status">> := <<"finished">>,
                     <<"task_type">> := <<"timeout">>
                 }
             ] = json:decode(TraceBody),
