@@ -78,6 +78,7 @@ init_per_suite(C) ->
     PartyConfigRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
     PartyClient = {party_client:create_client(), party_client:create_context()},
     ok = hg_context:save(hg_context:create()),
+    %% все магазины рублёвые, но каждая категория роутится на терминалы с раными валютами
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(2), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),

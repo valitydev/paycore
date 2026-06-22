@@ -44,13 +44,6 @@
 
 %%
 
-%-define(posting(Source, Destination, Volume, Details), #domain_CashFlowPosting{
-%    source = Source,
-%    destination = Destination,
-%    volume = Volume,
-%    details = Details
-%}).
-
 -define(posting(Source, Destination, Volume, Details, ExchangeContext), #domain_CashFlowPosting{
     source = Source,
     destination = Destination,

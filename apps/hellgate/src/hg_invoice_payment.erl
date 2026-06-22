@@ -86,6 +86,8 @@
 -export([accrue_status_timing/3]).
 -export([get_limit_values/2]).
 
+-export([get_exchange_context/2]).
+
 %% Machine like
 
 -export([init/3]).
@@ -239,9 +241,11 @@
     exchange_context => exchange_context() | undefined
 }.
 
+-type currency_code() :: dmsl_domain_thrift:'CurrencySymbolicCode'().
+
 -type exchange_context() :: #{
-    source := dmsl_domain_thrift:'CurrencySymbolicCode'(),
-    destination := dmsl_domain_thrift:'CurrencySymbolicCode'(),
+    source := currency_code(),
+    destination := currency_code(),
     rate := dmsl_base_thrift:'Rational'()
 }.
 
@@ -2207,9 +2211,7 @@ process_currency_exchange(Action, St) ->
             {next, {[?payment_rollback_started({failure, Failure})], hg_machine_action:set_timeout(0, Action)}}
     end.
 
-%build_exchange_context(#{provider_ref := ProviderRef, terminal_ref := TerminalRef}, VS, Revision, St) ->
 build_exchange_context(Route, VS, Revision, St) ->
-    %Route = ?route(ProviderRef, TerminalRef),
     #domain_Cash{
         currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}
     } = get_payment_cost(get_payment(St)),
@@ -2223,6 +2225,8 @@ build_exchange_context(Route, VS, Revision, St) ->
             get_exchange_context(PaymentCurrency, TerminalCurrency)
     end.
 
+-spec get_exchange_context(currency_code(), currency_code()) ->
+    {ok, exchange_context()} | {error, _Reason}.
 get_exchange_context(SrcCurrency, DstCurrency) ->
     case hg_exrates:get_exchange_rate(SrcCurrency, DstCurrency) of
         {ok, #{p := P, q := Q}} ->
