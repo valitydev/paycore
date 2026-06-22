@@ -11,7 +11,7 @@
     process_call/2,
     process_repair/2,
     process_notification/2,
-    marshal_event_body/1,
+    marshal_event_body/2,
     unmarshal_event_body/1,
     marshal_aux_state/1,
     unmarshal_aux_state/1,
@@ -55,8 +55,8 @@ process_repair(_Args, _Machine) ->
 process_notification(_Args, _Machine) ->
     #{}.
 
--spec marshal_event_body(prg_machine:event_body()) -> {undefined, binary()}.
-marshal_event_body(Body) ->
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {undefined, binary()}.
+marshal_event_body(_Timestamp, Body) ->
     {undefined, term_to_binary(Body)}.
 
 -spec unmarshal_event_body(binary()) -> prg_machine:event_body().

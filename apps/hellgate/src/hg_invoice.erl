@@ -55,7 +55,7 @@
 -export([process_call/2]).
 -export([process_repair/2]).
 -export([process_notification/2]).
--export([marshal_event_body/1]).
+-export([marshal_event_body/2]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
@@ -245,8 +245,6 @@ process_callback(Tag, Callback) ->
                 ok;
             {ok, {exception, invalid_callback}} ->
                 {error, invalid_callback};
-            {ok, {error, invalid_callback}} ->
-                {error, invalid_callback};
             {error, _} = Error ->
                 Error
         end
@@ -263,7 +261,7 @@ process_session_change_by_tag(Tag, SessionChange) ->
                 ok;
             {ok, {exception, invalid_callback}} ->
                 {error, notfound};
-            {ok, {error, _}} ->
+            {ok, {exception, _}} ->
                 {error, failed};
             {error, _} = Error ->
                 Error
@@ -1059,8 +1057,8 @@ apply_event_changes(Changes, St0, Dt) ->
         end,
     collapse_changes(Changes, St, #{timestamp => Dt}).
 
--spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
-marshal_event_body(Changes) when is_list(Changes) ->
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(_Timestamp, Changes) when is_list(Changes) ->
     #{data := Data} = wrap_event_payload({invoice_changes, Changes}),
     Msgp = mg_msgpack_marshalling:marshal(Data),
     {?EVENT_FORMAT_VERSION, msgpack_payload_to_binary(Msgp)}.

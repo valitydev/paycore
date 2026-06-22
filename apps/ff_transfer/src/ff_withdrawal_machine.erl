@@ -44,6 +44,13 @@
     | unknown_withdrawal_error().
 
 -type notify_args() :: {session_finished, session_id(), session_result()}.
+-type notify_error() ::
+    notfound
+    | failed
+    | timeout
+    | {unknown_namespace, prg_machine:namespace()}
+    | prg_machine:processor_error()
+    | term().
 
 -type session_id() :: ff_withdrawal_session:id().
 -type session_result() :: ff_withdrawal_session:session_result().
@@ -86,7 +93,7 @@
 -export([process_call/2]).
 -export([process_repair/2]).
 -export([process_notification/2]).
--export([marshal_event_body/1]).
+-export([marshal_event_body/2]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
@@ -137,8 +144,7 @@ repair(ID, Scenario) ->
 start_adjustment(WithdrawalID, Params) ->
     call(WithdrawalID, {start_adjustment, Params}).
 
--spec notify(id(), notify_args()) ->
-    ok | {error, notfound | failed} | no_return().
+-spec notify(id(), notify_args()) -> ok | {error, notify_error()} | no_return().
 notify(ID, Args) ->
     prg_machine:notify(?NS, ID, Args).
 
@@ -207,9 +213,9 @@ process_notification({session_finished, SessionID, SessionResult}, Machine) ->
 apply_event(_EventID, _Ts, Body, Model) ->
     ff_withdrawal:apply_event(Body, Model).
 
--spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
-marshal_event_body(Body) ->
-    ff_machine_lib:marshal_event_body(withdrawal, ?EVENT_FORMAT_VERSION, Body).
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Timestamp, Body) ->
+    ff_machine_lib:marshal_event_body(withdrawal, ?EVENT_FORMAT_VERSION, Body, Timestamp).
 
 -spec unmarshal_event_body(binary()) -> prg_machine:event_body().
 unmarshal_event_body(Payload) ->

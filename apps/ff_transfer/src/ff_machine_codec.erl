@@ -11,8 +11,9 @@
 -type domain() :: deposit | source | destination | withdrawal | withdrawal_session.
 -type format_version() :: pos_integer().
 -type timestamped_event() :: {ev, term(), term()}.
+-type event_payload() :: {bin, binary()}.
 
--spec marshal_event(domain(), format_version(), timestamped_event()) -> ff_msgpack:t().
+-spec marshal_event(domain(), format_version(), timestamped_event()) -> event_payload().
 marshal_event(deposit, 1, Timestamped) ->
     marshal_thrift_event(
         Timestamped,
@@ -101,7 +102,7 @@ unmarshal_aux_state(Payload) when is_binary(Payload) ->
 
 %% Event payload: write the legacy envelope term_to_binary({bin, ThriftBin})
 %% (machinery_prg_backend used machinery_utils:encode(term, ...)).
--spec payload_to_binary(ff_msgpack:t()) -> binary().
+-spec payload_to_binary(event_payload()) -> binary().
 payload_to_binary(Payload) ->
     term_to_binary(Payload).
 
@@ -110,7 +111,7 @@ payload_to_binary(Payload) ->
     fun((timestamped_event()) -> term()),
     atom(),
     atom()
-) -> ff_msgpack:t().
+) -> event_payload().
 marshal_thrift_event(Timestamped, MarshalFun, ThriftModule, ThriftStruct) ->
     ThriftChange = MarshalFun(Timestamped),
     Type = {struct, struct, {ThriftModule, ThriftStruct}},

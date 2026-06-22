@@ -215,6 +215,12 @@ process_session(#{status := {finished, _}, id := ID, result := Result, withdrawa
                 [WithdrawalID, ID]
             ),
             {suspend, []};
+        {error, notfound} ->
+            _ = logger:warning(
+                "Withdrawal ~p not found, dropping session_finished notification for session ~p",
+                [WithdrawalID, ID]
+            ),
+            {suspend, []};
         {error, _} = Error ->
             erlang:error({unable_to_finish_session, Error})
     end;

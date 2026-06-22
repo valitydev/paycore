@@ -57,7 +57,7 @@
 -export([process_call/2]).
 -export([process_repair/2]).
 -export([process_notification/2]).
--export([marshal_event_body/1]).
+-export([marshal_event_body/2]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
@@ -139,9 +139,9 @@ process_notification(_Args, _Machine) ->
 apply_event(_EventID, _Ts, Body, Model) ->
     ff_destination:apply_event(Body, Model).
 
--spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
-marshal_event_body(Body) ->
-    ff_machine_lib:marshal_event_body(destination, ?EVENT_FORMAT_VERSION, Body).
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Timestamp, Body) ->
+    ff_machine_lib:marshal_event_body(destination, ?EVENT_FORMAT_VERSION, Body, Timestamp).
 
 -spec unmarshal_event_body(binary()) -> prg_machine:event_body().
 unmarshal_event_body(Payload) ->

@@ -25,7 +25,7 @@
 -export([process_call/2]).
 -export([process_repair/2]).
 -export([process_notification/2]).
--export([marshal_event_body/1]).
+-export([marshal_event_body/2]).
 -export([unmarshal_event_body/1]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
@@ -348,8 +348,8 @@ marshal_invoice_template_params(Params) ->
     Type = {struct, struct, {dmsl_payproc_thrift, 'InvoiceTemplateCreateParams'}},
     hg_proto_utils:serialize(Type, Params).
 
--spec marshal_event_body(prg_machine:event_body()) -> {pos_integer(), binary()}.
-marshal_event_body(Changes) when is_list(Changes) ->
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(_Timestamp, Changes) when is_list(Changes) ->
     #{data := Data} = wrap_event_payload({invoice_template_changes, Changes}),
     Msgp = mg_msgpack_marshalling:marshal(Data),
     {?EVENT_FORMAT_VERSION, msgpack_payload_to_binary(Msgp)}.

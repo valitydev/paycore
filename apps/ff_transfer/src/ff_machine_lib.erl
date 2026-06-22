@@ -20,6 +20,7 @@
 -export([history_to_events/1]).
 -export([codec_timestamp/1]).
 -export([marshal_event_body/3]).
+-export([marshal_event_body/4]).
 -export([unmarshal_event_body/2]).
 -export([marshal_aux_state/1]).
 -export([unmarshal_aux_state/1]).
@@ -181,7 +182,14 @@ codec_timestamp(DateTime) ->
 -spec marshal_event_body(ff_machine_codec:domain(), pos_integer(), prg_machine:event_body()) ->
     {pos_integer(), binary()}.
 marshal_event_body(Domain, Format, Body) ->
-    Timestamped = {ev, prg_machine:timestamp(), Body},
+    marshal_event_body(Domain, Format, Body, prg_machine:timestamp()).
+
+-spec marshal_event_body(
+    ff_machine_codec:domain(), pos_integer(), prg_machine:event_body(), timestamp()
+) ->
+    {pos_integer(), binary()}.
+marshal_event_body(Domain, Format, Body, Timestamp) ->
+    Timestamped = {ev, Timestamp, Body},
     Encoded = ff_machine_codec:marshal_event(Domain, Format, Timestamped),
     {Format, ff_machine_codec:payload_to_binary(Encoded)}.
 

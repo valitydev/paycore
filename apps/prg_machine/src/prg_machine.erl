@@ -22,13 +22,16 @@
 
 -type get_error() ::
     notfound
+    | timeout
     | {unknown_namespace, namespace()}
     | processor_error().
 
 -type repair_error() ::
     notfound
+    | timeout
     | working
     | failed
+    | {unknown_namespace, namespace()}
     | processor_error()
     | {repair, {failed, term()}}.
 
@@ -87,7 +90,7 @@
 
 -callback process_notification(args(), machine()) -> result().
 
--callback marshal_event_body(event_body()) -> {undefined | pos_integer(), binary()}.
+-callback marshal_event_body(timestamp(), event_body()) -> {undefined | pos_integer(), binary()}.
 
 -callback unmarshal_event_body(binary()) -> event_body().
 
@@ -135,7 +138,8 @@ handler_namespace(Handler) ->
 
 %% Client API
 
--spec start(namespace(), id(), args()) -> {ok, ok} | {error, exists | term()}.
+-spec start(namespace(), id(), args()) ->
+    {ok, ok} | {error, exists | timeout | {unknown_namespace, namespace()} | term()}.
 start(NS, ID, Args) ->
     Req = #{
         ns => NS,
@@ -148,16 +152,17 @@ start(NS, ID, Args) ->
             Ok;
         {error, <<"process already exists">>} ->
             {error, exists};
-        {error, _} = Error ->
-            Error
+        Error ->
+            map_client_error(NS, Error)
     end.
 
--spec call(namespace(), id(), call()) -> {ok, response()} | {error, notfound | failed | term()}.
+-spec call(namespace(), id(), call()) ->
+    {ok, response()} | {error, notfound | failed | timeout | {unknown_namespace, namespace()} | term()}.
 call(NS, ID, CallArgs) ->
     call(NS, ID, CallArgs, undefined, undefined, forward).
 
 -spec call(namespace(), id(), call(), event_id() | undefined, non_neg_integer() | undefined, forward | backward) ->
-    {ok, response()} | {error, notfound | failed | term()}.
+    {ok, response()} | {error, notfound | failed | timeout | {unknown_namespace, namespace()} | term()}.
 call(NS, ID, CallArgs, After, Limit, Direction) ->
     Req = request(NS, ID, CallArgs, encode_range(After, Limit, Direction)),
     case progressor:call(Req) of
@@ -173,8 +178,8 @@ call(NS, ID, CallArgs, After, Limit, Direction) ->
             {error, Exception};
         {error, {exception, Class, Reason, _Stacktrace}} ->
             {error, {exception, Class, Reason}};
-        {error, _} = Error ->
-            Error
+        Error ->
+            map_client_error(NS, Error)
     end.
 
 -spec repair(namespace(), id(), args()) ->
@@ -201,6 +206,10 @@ repair(NS, ID, Args) ->
             {error, Exception};
         {error, {exception, Class, Reason, _Stacktrace}} ->
             {error, {exception, Class, Reason}};
+        {error, <<"namespace not found">>} ->
+            {error, {unknown_namespace, NS}};
+        {error, <<"timeout">>} ->
+            {error, timeout};
         {error, Reason} ->
             %% The repair-failed reason is our own term encoded by process/3
             %% (marshal_process_result -> encode_term); hand it back as a term.
@@ -213,21 +222,23 @@ get(NS, ID) ->
 
 -spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, get_error()}.
 get(NS, ID, Range) ->
-    Req = request(NS, ID, undefined, Range),
-    case progressor:get(Req) of
-        {ok, Process} ->
-            case prg_machine_registry:lookup(NS) of
-                {ok, Handler} ->
+    case prg_machine_registry:lookup(NS) of
+        {ok, Handler} ->
+            Req = request(NS, ID, undefined, Range),
+            case progressor:get(Req) of
+                {ok, Process} ->
                     {ok, unmarshal_machine(Handler, NS, Process)};
-                {error, _} = Error ->
-                    Error
+                {error, <<"process not found">>} ->
+                    {error, notfound};
+                {error, {exception, _Class, _Reason} = Exception} ->
+                    {error, Exception};
+                {error, {exception, Class, Reason, _Stacktrace}} ->
+                    {error, {exception, Class, Reason}};
+                Error ->
+                    map_client_error(NS, Error)
             end;
-        {error, <<"process not found">>} ->
-            {error, notfound};
-        {error, {exception, _Class, _Reason} = Exception} ->
-            {error, Exception};
-        {error, {exception, Class, Reason, _Stacktrace}} ->
-            {error, {exception, Class, Reason}}
+        {error, _} = Error ->
+            Error
     end.
 
 -spec get_history(namespace(), id()) -> {ok, history()} | {error, get_error()}.
@@ -250,7 +261,7 @@ get_history(NS, ID, After, Limit, Direction) ->
     end.
 
 -spec notify(namespace(), id(), args()) ->
-    ok | {error, notfound | failed | processor_error() | term()}.
+    ok | {error, notfound | failed | timeout | {unknown_namespace, namespace()} | processor_error() | term()}.
 notify(NS, ID, Args) ->
     case call(NS, ID, {notify, Args}) of
         {ok, _} -> ok;
@@ -398,24 +409,24 @@ unmarshal_machine(Handler, NS, #{process_id := ID, history := RawHistory} = Proc
 
 unmarshal_event(Handler, #{
     event_id := EventID,
-    timestamp := TsSec,
+    timestamp := TsMicroSec,
     payload := Payload
 }) ->
     Body = unmarshal_event_body(Handler, Payload),
-    {EventID, event_timestamp_to_datetime(TsSec), Body};
+    {EventID, event_timestamp_to_datetime(TsMicroSec), Body};
 unmarshal_event(_Handler, #{event_id := EventID} = Ev) ->
     erlang:error({missing_event_payload, EventID, maps:keys(Ev)}).
 
 marshal_new_events(Handler, LastEventID, Bodies) ->
-    %% One microsecond timestamp for the whole batch (as the old emit_events did).
-    %% The PG backend stores timestamptz with microseconds and auto-detects units.
-    Ts = erlang:system_time(microsecond),
+    %% One timestamp for the whole batch (as the old emit_events did).
+    BatchTs = timestamp(),
+    StorageTs = erlang:system_time(microsecond),
     lists:zipwith(
         fun(EventID, Body) ->
-            {Format, Bin} = marshal_event_body(Handler, Body),
+            {Format, Bin} = marshal_event_body(Handler, BatchTs, Body),
             #{
                 event_id => EventID,
-                timestamp => Ts,
+                timestamp => StorageTs,
                 metadata => event_metadata(Format),
                 payload => Bin
             }
@@ -424,8 +435,8 @@ marshal_new_events(Handler, LastEventID, Bodies) ->
         Bodies
     ).
 
-marshal_event_body(Handler, Body) ->
-    Handler:marshal_event_body(Body).
+marshal_event_body(Handler, Timestamp, Body) ->
+    Handler:marshal_event_body(Timestamp, Body).
 
 -spec unmarshal_event_body(module(), binary()) -> event_body().
 unmarshal_event_body(Handler, Payload) ->
@@ -533,6 +544,13 @@ range_from_process(#{range := Range = #{}}) ->
     Range;
 range_from_process(_) ->
     #{direction => forward}.
+
+map_client_error(NS, {error, <<"namespace not found">>}) ->
+    {error, {unknown_namespace, NS}};
+map_client_error(_NS, {error, <<"timeout">>}) ->
+    {error, timeout};
+map_client_error(_NS, Error) ->
+    Error.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
