@@ -206,14 +206,8 @@ repair(NS, ID, Args) ->
             {error, Exception};
         {error, {exception, Class, Reason, _Stacktrace}} ->
             {error, {exception, Class, Reason}};
-        {error, <<"namespace not found">>} ->
-            {error, {unknown_namespace, NS}};
-        {error, <<"timeout">>} ->
-            {error, timeout};
-        {error, Reason} ->
-            %% The repair-failed reason is our own term encoded by process/3
-            %% (marshal_process_result -> encode_term); hand it back as a term.
-            {error, {repair, {failed, decode_term(Reason)}}}
+        Error ->
+            map_client_error(repair, NS, Error)
     end.
 
 -spec get(namespace(), id()) -> {ok, machine()} | {error, get_error()}.
@@ -545,11 +539,16 @@ range_from_process(#{range := Range = #{}}) ->
 range_from_process(_) ->
     #{direction => forward}.
 
-map_client_error(NS, {error, <<"namespace not found">>}) ->
+map_client_error(NS, Error) ->
+    map_client_error(common, NS, Error).
+
+map_client_error(_Type, NS, {error, <<"namespace not found">>}) ->
     {error, {unknown_namespace, NS}};
-map_client_error(_NS, {error, <<"timeout">>}) ->
+map_client_error(_Type, _NS, {error, <<"timeout">>}) ->
     {error, timeout};
-map_client_error(_NS, Error) ->
+map_client_error(repair, _NS, {error, Reason}) ->
+    {error, {repair, {failed, decode_term(Reason)}}};
+map_client_error(_Type, _NS, Error) ->
     Error.
 
 -ifdef(TEST).

@@ -24,11 +24,9 @@ schedule_deadline(Deadline) ->
     {schedule, #{at => marshal_timer({deadline, Deadline}), action => timeout}}.
 
 -spec marshal_timer(timer()) -> timestamp_us().
-marshal_timer({timeout, 0}) ->
+marshal_timer({timeout, Seconds}) when is_integer(Seconds), Seconds =< 0 ->
     erlang:system_time(microsecond);
-marshal_timer({timeout, Seconds}) when is_integer(Seconds), Seconds < 0 ->
-    erlang:system_time(microsecond);
-marshal_timer({timeout, Seconds}) when is_integer(Seconds), Seconds >= 0 ->
+marshal_timer({timeout, Seconds}) when is_integer(Seconds), Seconds > 0 ->
     erlang:system_time(microsecond) + Seconds * 1000000;
 marshal_timer({deadline, {{{_, _, _}, {_, _, _}} = Dt, USec}}) when is_integer(USec) ->
     datetime_to_microseconds(Dt, USec);
