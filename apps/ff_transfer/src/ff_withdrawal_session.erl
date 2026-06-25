@@ -96,15 +96,9 @@
     opts := ff_adapter:opts()
 }.
 
--type id() :: machinery:id().
+-type id() :: binary().
 
--type action() ::
-    undefined
-    | continue
-    | {setup_callback, ff_withdrawal_callback:tag(), machinery:timer()}
-    | {setup_timer, machinery:timer()}
-    | retry
-    | finish.
+-type action() :: prg_action:t().
 
 -type process_result() :: {action(), [event()]}.
 
@@ -183,21 +177,24 @@ create(ID, Data, Params) ->
     {ok, [{created, Session}]}.
 
 -spec apply_event(event(), undefined | session_state()) -> session_state().
-apply_event({created, Session}, undefined) ->
+apply_event(Ev, State) ->
+    apply_event_(Ev, State).
+
+apply_event_({created, Session}, undefined) ->
     Session;
-apply_event({next_state, AdapterState}, Session) ->
+apply_event_({next_state, AdapterState}, Session) ->
     Session#{adapter_state => AdapterState};
-apply_event({transaction_bound, TransactionInfo}, Session) ->
+apply_event_({transaction_bound, TransactionInfo}, Session) ->
     Session#{transaction_info => TransactionInfo};
-apply_event({finished, success = Result}, Session) ->
+apply_event_({finished, success = Result}, Session) ->
     Session#{status => {finished, success}, result => Result};
-apply_event({finished, {success, TransactionInfo} = Result}, Session) ->
+apply_event_({finished, {success, TransactionInfo} = Result}, Session) ->
     %% for backward compatibility with events stored in DB - take TransactionInfo here.
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
     Session#{status => {finished, success}, result => Result, transaction_info => TransactionInfo};
-apply_event({finished, {failed, _} = Result} = Status, Session) ->
+apply_event_({finished, {failed, _} = Result} = Status, Session) ->
     Session#{status => Status, result => Result};
-apply_event({callback, _Ev} = WrappedEvent, Session) ->
+apply_event_({callback, _Ev} = WrappedEvent, Session) ->
     Callbacks0 = callbacks_index(Session),
     Callbacks1 = ff_withdrawal_callback_utils:apply_event(WrappedEvent, Callbacks0),
     set_callbacks_index(Callbacks1, Session).
@@ -208,7 +205,22 @@ process_session(#{status := {finished, _}, id := ID, result := Result, withdrawa
     WithdrawalID = ff_adapter_withdrawal:id(Withdrawal),
     case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, Result}) of
         ok ->
-            {finish, []};
+            {suspend, []};
+        {error, failed} ->
+            %% The target withdrawal machine is already in error. The legacy
+            %% machinery notify was fire-and-forget, so a broken target never
+            %% poisoned the session — keep that behaviour, just log a warning.
+            _ = logger:warning(
+                "Withdrawal ~p is in error, dropping session_finished notification for session ~p",
+                [WithdrawalID, ID]
+            ),
+            {suspend, []};
+        {error, notfound} ->
+            _ = logger:warning(
+                "Withdrawal ~p not found, dropping session_finished notification for session ~p",
+                [WithdrawalID, ID]
+            ),
+            {suspend, []};
         {error, _} = Error ->
             erlang:error({unable_to_finish_session, Error})
     end;
@@ -247,13 +259,13 @@ process_callback(#{tag := CallbackTag} = Params, Session) ->
     {ok, Callback} = find_callback(CallbackTag, Session),
     case ff_withdrawal_callback:status(Callback) of
         succeeded ->
-            {ok, {ff_withdrawal_callback:response(Callback), {undefined, []}}};
+            {ok, {ff_withdrawal_callback:response(Callback), {idle, []}}};
         pending ->
             case status(Session) of
                 active ->
                     do_process_callback(Params, Callback, Session);
                 {finished, _} ->
-                    {error, {{session_already_finished, make_session_finish_params(Session)}, {undefined, []}}}
+                    {error, {{session_already_finished, make_session_finish_params(Session)}, {idle, []}}}
             end
     end.
 
@@ -301,14 +313,15 @@ process_adapter_intent(Intent, Session, Events0) ->
 process_adapter_intent({finish, {success, _TransactionInfo}}, _Session) ->
     %% we ignore TransactionInfo here
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
-    {continue, [{finished, success}]};
+    {timeout, [{finished, success}]};
 process_adapter_intent({finish, Result}, _Session) ->
-    {continue, [{finished, Result}]};
+    {timeout, [{finished, Result}]};
 process_adapter_intent({sleep, #{timer := Timer, tag := Tag}}, Session) ->
+    ok = ff_machine_tag:create_binding(ff_withdrawal_session_machine:namespace(), Tag, id(Session)),
     Events = create_callback(Tag, Session),
-    {{setup_callback, Tag, Timer}, Events};
+    {prg_action:schedule_timer(Timer), Events};
 process_adapter_intent({sleep, #{timer := Timer}}, _Session) ->
-    {{setup_timer, Timer}, []}.
+    {prg_action:schedule_timer(Timer), []}.
 
 %%
 

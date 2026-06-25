@@ -23,12 +23,15 @@
 -type decoded_value() :: decoded_value(any()).
 -type decoded_value(T) :: T.
 
+-type timestamp() :: {calendar:datetime(), non_neg_integer()}.
+
 -export_type([codec/0]).
 -export_type([type_name/0]).
 -export_type([encoded_value/0]).
 -export_type([encoded_value/1]).
 -export_type([decoded_value/0]).
 -export_type([decoded_value/1]).
+-export_type([timestamp/0]).
 
 %% Callbacks
 
@@ -298,7 +301,7 @@ marshal(_, Other) ->
 
 -spec unmarshal(type_name(), encoded_value()) -> decoded_value().
 unmarshal({list, T}, V) ->
-    [marshal(T, E) || E <- V];
+    [unmarshal(T, E) || E <- V];
 unmarshal({set, T}, V) ->
     ordsets:from_list([unmarshal(T, E) || E <- ordsets:to_list(V)]);
 unmarshal(id, V) ->
@@ -360,25 +363,13 @@ unmarshal(three_ds_verification, Value) when
         Value =:= authentication_could_not_be_performed
 ->
     Value;
+unmarshal(complex_action, undefined) ->
+    undefined;
 unmarshal(complex_action, #repairer_ComplexAction{
     timer = TimerAction,
     remove = RemoveAction
 }) ->
-    unmarshal(timer_action, TimerAction) ++ unmarshal(remove_action, RemoveAction);
-unmarshal(timer_action, undefined) ->
-    [];
-unmarshal(timer_action, {set_timer, SetTimerAction}) ->
-    [{set_timer, unmarshal(set_timer_action, SetTimerAction)}];
-unmarshal(timer_action, {unset_timer, #repairer_UnsetTimerAction{}}) ->
-    [unset_timer];
-unmarshal(remove_action, undefined) ->
-    [];
-unmarshal(remove_action, #repairer_RemoveAction{}) ->
-    [remove];
-unmarshal(set_timer_action, #repairer_SetTimerAction{
-    timer = Timer
-}) ->
-    unmarshal(timer, Timer);
+    unmarshal_repairer_complex_action(TimerAction, RemoveAction);
 unmarshal(timer, {timeout, Timeout}) ->
     {timeout, unmarshal(integer, Timeout)};
 unmarshal(timer, {deadline, Deadline}) ->
@@ -576,6 +567,15 @@ unmarshal(range, #'fistful_base_EventRange'{
 unmarshal(bool, V) when is_boolean(V) ->
     V.
 
+unmarshal_repairer_complex_action(_, #repairer_RemoveAction{}) ->
+    remove;
+unmarshal_repairer_complex_action(undefined, undefined) ->
+    idle;
+unmarshal_repairer_complex_action({set_timer, #repairer_SetTimerAction{timer = Timer}}, undefined) ->
+    prg_action:schedule_timer(unmarshal(timer, Timer));
+unmarshal_repairer_complex_action({unset_timer, _}, undefined) ->
+    suspend.
+
 maybe_unmarshal(_Type, undefined) ->
     undefined;
 maybe_unmarshal(Type, Value) ->
@@ -586,7 +586,7 @@ maybe_marshal(_Type, undefined) ->
 maybe_marshal(Type, Value) ->
     marshal(Type, Value).
 
--spec parse_timestamp(binary()) -> machinery:timestamp().
+-spec parse_timestamp(binary()) -> timestamp().
 parse_timestamp(Bin) ->
     try
         MicroSeconds = genlib_rfc3339:parse(Bin, microsecond),

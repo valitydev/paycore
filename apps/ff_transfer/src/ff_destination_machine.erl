@@ -4,18 +4,27 @@
 
 -module(ff_destination_machine).
 
+-behaviour(prg_machine).
+
+-define(EVENT_FORMAT_VERSION, 1).
+
 %% API
 
--type id() :: machinery:id().
+-type id() :: prg_machine:id().
 -type ctx() :: ff_entity_context:context().
 -type destination() :: ff_destination:destination_state().
 -type change() :: ff_destination:event().
--type event() :: {integer(), ff_machine:timestamped_event(change())}.
+-type timestamp() :: prg_machine:timestamp().
+-type timestamped_event(T) :: {ev, timestamp(), T}.
+-type event() :: {integer(), timestamped_event(change())}.
 -type events() :: [event()].
 -type event_range() :: {After :: non_neg_integer() | undefined, Limit :: non_neg_integer() | undefined}.
 
 -type params() :: ff_destination:params().
--type st() :: ff_machine:st(destination()).
+-type st() :: #{
+    model := destination(),
+    ctx := ctx()
+}.
 
 -type repair_error() :: ff_repair:repair_error().
 -type repair_response() :: ff_repair:repair_response().
@@ -40,99 +49,108 @@
 -export([destination/1]).
 -export([ctx/1]).
 
-%% Machinery
+%% prg_machine
 
--behaviour(machinery).
+-export([namespace/0]).
+-export([init/2]).
+-export([process_signal/2]).
+-export([process_call/2]).
+-export([process_repair/2]).
+-export([process_notification/2]).
+-export([marshal_event_body/2]).
+-export([unmarshal_event_body/1]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
--export([init/4]).
--export([process_timeout/3]).
--export([process_repair/4]).
--export([process_call/4]).
--export([process_notification/4]).
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
 
-%% Pipeline
-
--import(ff_pipeline, [do/1, unwrap/1]).
-
-%%
 -define(NS, 'ff/destination_v2').
+
+%% API
 
 -spec create(params(), ctx()) ->
     ok
     | {error, ff_destination:create_error() | exists}.
-create(#{id := ID} = Params, Ctx) ->
-    do(fun() ->
-        Events = unwrap(ff_destination:create(Params)),
-        unwrap(machinery:start(?NS, ID, {Events, Ctx}, backend()))
-    end).
+create(Params, Ctx) ->
+    ff_machine_lib:create(?NS, fun ff_destination:create/1, Params, Ctx).
 
 -spec get(id()) ->
     {ok, st()}
     | {error, notfound}.
 get(ID) ->
-    ff_machine:get(ff_destination, ?NS, ID).
+    get(ID, {undefined, undefined}).
 
 -spec get(id(), event_range()) ->
     {ok, st()}
     | {error, notfound}.
 get(ID, {After, Limit}) ->
-    ff_machine:get(ff_destination, ?NS, ID, {After, Limit, forward}).
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, notfound).
 
 -spec events(id(), event_range()) ->
     {ok, events()}
     | {error, notfound}.
 events(ID, {After, Limit}) ->
-    do(fun() ->
-        History = unwrap(ff_machine:history(ff_destination, ?NS, ID, {After, Limit, forward})),
-        [{EventID, TsEv} || {EventID, _, TsEv} <- History]
-    end).
+    ff_machine_lib:events(?NS, ID, {After, Limit}, notfound).
 
 %% Accessors
 
 -spec destination(st()) -> destination().
-destination(St) ->
-    ff_machine:model(St).
+destination(#{model := Model}) ->
+    Model.
 
 -spec ctx(st()) -> ctx().
-ctx(St) ->
-    ff_machine:ctx(St).
+ctx(#{ctx := Ctx}) ->
+    Ctx.
 
-%% Machinery
+%% prg_machine
 
--type machine() :: ff_machine:machine(change()).
--type result() :: ff_machine:result(change()).
--type handler_opts() :: machinery:handler_opts(_).
--type handler_args() :: machinery:handler_args(_).
+-spec namespace() -> prg_machine:namespace().
+namespace() ->
+    ?NS.
 
--spec init({[change()], ctx()}, machine(), _, handler_opts()) -> result().
-init({Events, Ctx}, #{}, _, _Opts) ->
-    #{
-        events => ff_machine:emit_events(Events),
-        aux_state => #{ctx => Ctx}
-    }.
+-spec init({[change()], ctx()}, machine()) -> prg_result().
+init({Events, Ctx}, _Machine) ->
+    ff_machine_lib:init_result(Events, Ctx).
 
-%%
-
--spec process_timeout(machine(), handler_args(), handler_opts()) -> result().
-process_timeout(_Machine, _, _Opts) ->
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
+process_signal(timeout, _Machine) ->
     #{}.
 
-%%
+-spec process_call(term(), machine()) -> no_return().
+process_call(CallArgs, _Machine) ->
+    erlang:error({unexpected_call, CallArgs}).
 
--spec process_call(_CallArgs, machine(), handler_args(), handler_opts()) -> {ok, result()}.
-process_call(_CallArgs, #{}, _, _Opts) ->
-    {ok, #{}}.
+-spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
+process_repair(Scenario, Machine) ->
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
 
--spec process_repair(ff_repair:scenario(), machine(), handler_args(), handler_opts()) ->
-    {ok, {repair_response(), result()}} | {error, repair_error()}.
-process_repair(Scenario, Machine, _Args, _Opts) ->
-    ff_repair:apply_scenario(ff_destination, Machine, Scenario).
-
--spec process_notification(_, machine(), handler_args(), handler_opts()) -> result() | no_return().
-process_notification(_Args, _Machine, _HandlerArgs, _Opts) ->
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
     #{}.
 
-%% Internals
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_destination:apply_event(Body, Model).
 
-backend() ->
-    fistful:backend(?NS).
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Timestamp, Body) ->
+    ff_machine_lib:marshal_event_body(destination, ?EVENT_FORMAT_VERSION, Body, Timestamp).
+
+-spec unmarshal_event_body(binary()) -> prg_machine:event_body().
+unmarshal_event_body(Payload) ->
+    ff_machine_lib:unmarshal_event_body(destination, Payload).
+
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    ff_machine_lib:marshal_aux_state(AuxSt).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    ff_machine_lib:unmarshal_aux_state(Payload).

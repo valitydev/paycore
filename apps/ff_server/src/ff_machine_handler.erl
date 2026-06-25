@@ -22,7 +22,7 @@ init(Request, Opts) ->
     maybe
         {method_is_valid, true} ?= {method_is_valid, Method =:= <<"GET">>},
         {process_id_is_valid, true} ?= {process_id_is_valid, is_binary(ProcessID)},
-        {ok, Trace} ?= ff_machine:trace(NS, ProcessID),
+        {ok, Trace} ?= ff_machine_trace:trace(NS, ProcessID),
         Body = unicode:characters_to_binary(json:encode(Trace)),
         Req = cowboy_req:reply(200, #{}, Body, Request),
         {ok, Req, undefined}

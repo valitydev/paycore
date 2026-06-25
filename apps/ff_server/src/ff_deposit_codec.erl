@@ -211,7 +211,7 @@ deposit_timestamped_change_codec_test() ->
         external_id => genlib:unique()
     },
     Change = {created, Deposit},
-    TimestampedChange = {ev, machinery_time:now(), Change},
+    TimestampedChange = {ev, {calendar:universal_time(), 0}, Change},
     Type = {struct, struct, {fistful_deposit_thrift, 'TimestampedChange'}},
     Binary = ff_proto_utils:serialize(Type, marshal(timestamped_change, TimestampedChange)),
     Decoded = ff_proto_utils:deserialize(Type, Binary),

@@ -51,9 +51,9 @@ get_route_provision_terms(?route(ProviderRef, TerminalRef), VS, Revision) ->
     TermsSet.
 
 get_party_client() ->
-    HgContext = hg_context:load(),
-    Client = hg_context:get_party_client(HgContext),
-    Context = hg_context:get_party_client_context(HgContext),
+    HgContext = op_context:load(op_context:key(hellgate)),
+    Client = op_context:get_party_client(HgContext),
+    Context = op_context:get_party_client_context(HgContext),
     {Client, Context}.
 
 -spec get_party(party_config_ref()) -> {party_config_ref(), party()} | hg_domain:get_error().

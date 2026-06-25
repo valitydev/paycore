@@ -98,7 +98,7 @@
     dmsl_payproc_thrift:'SessionChangePayload'()
     | {invoice_payment_rec_token_acquired, dmsl_payproc_thrift:'InvoicePaymentRecTokenAcquired'()}.
 -type events() :: [event()].
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type result() :: {events(), action()}.
 
 -type callback() :: dmsl_proxy_provider_thrift:'Callback'().
@@ -210,7 +210,7 @@ process_change(#proxy_provider_PaymentSessionChange{status = {failure, Failure}}
         ?session_activated(),
         ?session_finished(?session_failed({failure, Failure}))
     ],
-    Result = {SessionEvents, hg_machine_action:instant()},
+    Result = {SessionEvents, timeout},
     apply_result(Result, Session);
 process_change(_Change, _Session) ->
     %% NOTE For now there is no other applicable change defined in protocol.
@@ -233,7 +233,7 @@ do_process(active, Session) ->
 do_process(suspended, Session) ->
     process_callback_timeout(Session);
 do_process(finished, Session) ->
-    {{[], hg_machine_action:new()}, Session}.
+    {{[], idle}, Session}.
 
 repair(#{repair_scenario := {result, ProxyResult}} = Session) ->
     Result = handle_proxy_result(ProxyResult, Session),
@@ -252,7 +252,7 @@ process_callback_timeout(Session) ->
             apply_result(Result, Session);
         {operation_failure, OperationFailure} ->
             SessionEvents = [?session_finished(?session_failed(OperationFailure))],
-            Result = {SessionEvents, hg_machine_action:new()},
+            Result = {SessionEvents, idle},
             apply_result(Result, Session)
     end.
 
@@ -315,7 +315,7 @@ handle_proxy_result(
     Events1 = hg_proxy_provider:bind_transaction(Trx, Session),
     Events2 = hg_proxy_provider:update_proxy_state(ProxyState, Session),
     Events3 = hg_proxy_provider:handle_interaction_intent({Type, Intent}, Session),
-    {Events4, Action} = handle_proxy_intent(Intent, hg_machine_action:new(), Session),
+    {Events4, Action} = handle_proxy_intent(Intent, idle, Session),
     {lists:flatten([Events1, Events2, Events3, Events4]), Action}.
 
 handle_callback_result(
@@ -332,7 +332,7 @@ handle_proxy_callback_result(
     Events1 = hg_proxy_provider:bind_transaction(Trx, Session),
     Events2 = hg_proxy_provider:update_proxy_state(ProxyState, Session),
     Events3 = hg_proxy_provider:handle_interaction_intent({Type, Intent}, Session),
-    {Events4, Action} = handle_proxy_intent(Intent, hg_machine_action:unset_timer(hg_machine_action:new()), Session),
+    {Events4, Action} = handle_proxy_intent(Intent, suspend, Session),
     {lists:flatten([Events0, Events1, Events2, Events3, Events4]), Action};
 handle_proxy_callback_result(
     #proxy_provider_PaymentCallbackProxyResult{intent = undefined, trx = Trx, next_state = ProxyState},
@@ -340,7 +340,7 @@ handle_proxy_callback_result(
 ) ->
     Events1 = hg_proxy_provider:bind_transaction(Trx, Session),
     Events2 = hg_proxy_provider:update_proxy_state(ProxyState, Session),
-    {Events1 ++ Events2, hg_machine_action:new()}.
+    {Events1 ++ Events2, idle}.
 
 apply_result({Events, _Action} = Result, T) ->
     {Result, update_state_with(Events, T)}.
@@ -366,17 +366,17 @@ handle_proxy_intent(#proxy_provider_FinishIntent{status = {success, Success}}, A
 handle_proxy_intent(#proxy_provider_FinishIntent{status = {failure, Failure}}, Action, _Session) ->
     Events = [?session_finished(?session_failed({failure, Failure}))],
     {Events, Action};
-handle_proxy_intent(#proxy_provider_SleepIntent{timer = Timer}, Action0, _Session) ->
-    Action1 = hg_machine_action:set_timer(Timer, Action0),
+handle_proxy_intent(#proxy_provider_SleepIntent{timer = Timer}, _Action0, _Session) ->
+    Action1 = prg_action:schedule_timer(Timer),
     {[], Action1};
 handle_proxy_intent(
     #proxy_provider_SuspendIntent{tag = Tag, timeout = Timer, timeout_behaviour = TimeoutBehaviour},
-    Action0,
+    _Action0,
     Session
 ) ->
     #{payment_id := PaymentID, invoice_id := InvoiceID} = tag_context(Session),
     ok = hg_machine_tag:create_binding(hg_invoice:namespace(), Tag, PaymentID, InvoiceID),
-    Action1 = hg_machine_action:set_timer(Timer, Action0),
+    Action1 = prg_action:schedule_timer(Timer),
     Events = [?session_suspended(Tag, TimeoutBehaviour)],
     {Events, Action1}.
 

@@ -58,6 +58,8 @@
 
 -export([make_trace_id/1]).
 
+-export([cleanup_progressor_namespaces/0]).
+
 -include("hg_ct_domain.hrl").
 -include("hg_ct_json.hrl").
 
@@ -319,42 +321,18 @@ start_app(progressor = AppName) ->
             {namespaces, #{
                 invoice => #{
                     processor => #{
-                        client => hg_progressor,
+                        client => prg_machine,
                         options => #{
-                            party_client => #{},
-                            ns => <<"invoice">>,
-                            handler => hg_machine
+                            ns => invoice
                         }
                     },
                     worker_pool_size => 150
                 },
                 invoice_template => #{
                     processor => #{
-                        client => hg_progressor,
+                        client => prg_machine,
                         options => #{
-                            party_client => #{},
-                            ns => <<"invoice_template">>,
-                            handler => hg_machine
-                        }
-                    }
-                },
-                customer => #{
-                    processor => #{
-                        client => hg_progressor,
-                        options => #{
-                            party_client => #{},
-                            ns => <<"customer">>,
-                            handler => hg_machine
-                        }
-                    }
-                },
-                recurrent_paytools => #{
-                    processor => #{
-                        client => hg_progressor,
-                        options => #{
-                            party_client => #{},
-                            ns => <<"recurrent_paytools">>,
-                            handler => hg_machine
+                            ns => invoice_template
                         }
                     }
                 }
@@ -1049,3 +1027,10 @@ make_due_date(LifetimeSeconds) ->
 make_trace_id(Prefix) ->
     B = genlib:to_binary(Prefix),
     iolist_to_binary([binary:part(B, 0, min(byte_size(B), 20)), $., hg_utils:unique_id()]).
+
+-spec cleanup_progressor_namespaces() -> ok.
+cleanup_progressor_namespaces() ->
+    lists:foreach(
+        fun(Ns) -> prg_test_utils:cleanup(#{ns => Ns}) end,
+        [invoice, invoice_template]
+    ).

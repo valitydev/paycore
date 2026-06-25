@@ -24,7 +24,7 @@ marshal_state(State, ID, Context) ->
         context = marshal(ctx, Context)
     }.
 
--spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_session_thrift:'Event'().
+-spec marshal_event(ff_withdrawal_session_machine:event()) -> fistful_wthd_session_thrift:'Event'().
 marshal_event({EventID, {ev, Timestamp, Change}}) ->
     #wthd_session_Event{
         sequence = ff_codec:marshal(event_id, EventID),

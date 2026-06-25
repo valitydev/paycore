@@ -501,11 +501,36 @@ unmarshal_repair_scenario_test() ->
             events => [
                 {status_changed, pending}
             ],
-            action => [
-                {set_timer, {timeout, 0}}
-            ]
+            action => timeout
         }},
         unmarshal(repair_scenario, Scenario)
     ).
+
+-spec unmarshal_repair_scenario_deadline_timer_test() -> _.
+unmarshal_repair_scenario_deadline_timer_test() ->
+    Deadline = <<"2099-06-13T12:34:56.789Z">>,
+    Scenario = {
+        add_events,
+        #wthd_AddEventsRepair{
+            events = [],
+            action = #repairer_ComplexAction{
+                timer =
+                    {set_timer, #repairer_SetTimerAction{
+                        timer = {deadline, Deadline}
+                    }}
+            }
+        }
+    },
+    ParsedDeadline = ff_codec:unmarshal(timestamp, Deadline),
+    ExpectedAt = prg_action:marshal_timer({deadline, ParsedDeadline}),
+    ?assertEqual(
+        {add_events, #{
+            events => [],
+            action => {schedule, #{at => ExpectedAt, action => timeout}}
+        }},
+        unmarshal(repair_scenario, Scenario)
+    ),
+    %% Machinery {datetime, micro} from ff_codec must map to the same wire timestamp.
+    ?assertEqual(ExpectedAt, prg_action:marshal_timer({deadline, ParsedDeadline})).
 
 -endif.

@@ -167,10 +167,11 @@ trace_destination_test(C) ->
                 ],
                 #{<<"NS">> := #{}}
             ],
-            <<"events">> := [
-                #{<<"event_id">> := 1, <<"event_payload">> := #{<<"created">> := _}, <<"event_timestamp">> := _},
-                #{<<"event_id">> := 2, <<"event_payload">> := #{<<"account">> := _}, <<"event_timestamp">> := _}
-            ],
+            <<"events">> :=
+                [
+                    #{<<"event_id">> := 1, <<"event_payload">> := #{<<"created">> := _}, <<"event_timestamp">> := _},
+                    #{<<"event_id">> := 2, <<"event_payload">> := #{<<"account">> := _}, <<"event_timestamp">> := _}
+                ],
             <<"task_status">> := <<"finished">>,
             <<"task_type">> := <<"init">>
         }

@@ -103,7 +103,7 @@
 -type event() :: dmsl_payproc_thrift:'InvoicePaymentChangePayload'().
 -type event_payload() :: dmsl_payproc_thrift:'InvoicePaymentRefundChangePayload'().
 -type events() :: [event()].
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type result() :: {events(), action()}.
 -type machine_result() :: {next | done, result()}.
 
@@ -271,10 +271,10 @@ do_process(accounter, Refund) ->
 do_process(failure, Refund) ->
     process_failure(Refund);
 do_process(finished, _Refund) ->
-    {done, {[], hg_machine_action:new()}}.
+    {done, {[], idle}}.
 
 process_refund_cashflow(Refund) ->
-    Action = hg_machine_action:set_timeout(0, hg_machine_action:new()),
+    Action = timeout,
     PartyConfigRef = get_injected_party_config_ref(Refund),
     ShopConfigRef = get_injected_shop_config_ref(Refund),
     Shop = get_injected_shop(Refund),
@@ -316,7 +316,7 @@ finish_session_processing({Events0, Action}, Session, Refund) ->
     Events1 = hg_session:wrap_events(Events0, Session),
     case {hg_session:status(Session), hg_session:result(Session)} of
         {finished, ?session_succeeded()} ->
-            NewAction = hg_machine_action:set_timeout(0, Action),
+            NewAction = timeout,
             {next, {Events1, NewAction}};
         {finished, ?session_failed(Failure)} ->
             case check_retry_possibility(Failure, Refund) of
@@ -326,7 +326,7 @@ finish_session_processing({Events0, Action}, Session, Refund) ->
                     {next, {Events1 ++ SessionEvents, SessionAction}};
                 fatal ->
                     RollbackStarted = [?refund_rollback_started(Failure)],
-                    {next, {Events1 ++ RollbackStarted, hg_machine_action:set_timeout(0, Action)}}
+                    {next, {Events1 ++ RollbackStarted, timeout}}
             end;
         _ ->
             {next, {Events1, Action}}
@@ -335,14 +335,14 @@ finish_session_processing({Events0, Action}, Session, Refund) ->
 process_accounter(Refund) ->
     _ = commit_refund_limits(Refund),
     _PostingPlanLog = commit_refund_cashflow(Refund),
-    {done, {[?refund_status_changed(?refund_succeeded())], hg_machine_action:new()}}.
+    {done, {[?refund_status_changed(?refund_succeeded())], idle}}.
 
 process_failure(Refund) ->
     Failure = failure(Refund),
     _ = rollback_refund_limits(Refund),
     _PostingPlanLog = rollback_refund_cashflow(Refund),
     Events = [?refund_status_changed(?refund_failed(Failure))],
-    {done, {Events, hg_machine_action:new()}}.
+    {done, {Events, idle}}.
 
 hold_refund_limits(Refund) ->
     DomainRefund = refund(Refund),
@@ -451,9 +451,9 @@ get_manual_refund_events(#{transaction_info := TransactionInfo}) ->
 get_manual_refund_events(_) ->
     [].
 
-retry_session(Action, Timeout) ->
+retry_session(_Action, Timeout) ->
     NewEvents = [hg_session:wrap_event(?refunded(), hg_session:create())],
-    NewAction = hg_machine_action:set_timer({timeout, Timeout}, Action),
+    NewAction = prg_action:schedule_timer({timeout, Timeout}),
     {NewEvents, NewAction}.
 
 -spec check_retry_possibility(failure(), t()) ->

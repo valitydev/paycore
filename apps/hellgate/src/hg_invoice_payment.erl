@@ -388,7 +388,7 @@ get_chargeback_opts(#st{opts = Opts} = St) ->
 %%
 
 -type event() :: dmsl_payproc_thrift:'InvoicePaymentChangePayload'().
--type action() :: hg_machine_action:t().
+-type action() :: prg_action:t().
 -type events() :: [event()].
 -type result() :: {events(), action()}.
 -type machine_result() :: {next | done, result()}.
@@ -462,7 +462,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt} = Opts) ->
                 []
         end,
     Events = [?payment_started(Payment2)] ++ CascadeTokenEvents,
-    {collapse_changes(Events, undefined, #{}), {Events, hg_machine_action:instant()}}.
+    {collapse_changes(Events, undefined, #{}), {Events, timeout}}.
 
 seed_bank_card_from_parent(PartyConfigRef, BCT, #{parent_payment := ParentPayment}) ->
     case get_recurrent_token(ParentPayment) of
@@ -985,7 +985,7 @@ total_capture(St, Reason, Cart, Allocation) ->
     Payment = get_payment(St),
     Cost = get_payment_cost(Payment),
     Changes = start_capture(Reason, Cost, Cart, Allocation),
-    {ok, {Changes, hg_machine_action:instant()}}.
+    {ok, {Changes, timeout}}.
 
 partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocation) ->
     Payment = get_payment(St0),
@@ -1009,7 +1009,7 @@ partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocat
     },
     FinalCashflow = calculate_cashflow(Context, Opts),
     Changes = start_partial_capture(Reason, Cost, Cart, FinalCashflow, Allocation),
-    {ok, {Changes, hg_machine_action:instant()}}.
+    {ok, {Changes, timeout}}.
 
 -spec cancel(st(), binary()) -> {ok, result()}.
 cancel(St, Reason) ->
@@ -1017,7 +1017,7 @@ cancel(St, Reason) ->
     _ = assert_activity({payment, flow_waiting}, St),
     _ = assert_payment_flow(hold, Payment),
     Changes = start_session(?cancelled_with_reason(Reason)),
-    {ok, {Changes, hg_machine_action:instant()}}.
+    {ok, {Changes, timeout}}.
 
 assert_capture_cost_currency(undefined, _) ->
     ok;
@@ -1148,7 +1148,7 @@ refund(Params, St0, #{timestamp := CreatedAt} = Opts) ->
         refund => Refund,
         cash_flow => FinalCashflow
     }),
-    {Refund, {Changes, hg_machine_action:instant()}}.
+    {Refund, {Changes, timeout}}.
 
 -spec manual_refund(refund_params(), st(), opts()) -> {domain_refund(), result()}.
 manual_refund(Params, St0, #{timestamp := CreatedAt} = Opts) ->
@@ -1165,7 +1165,7 @@ manual_refund(Params, St0, #{timestamp := CreatedAt} = Opts) ->
         cash_flow => FinalCashflow,
         transaction_info => TransactionInfo
     }),
-    {Refund, {Changes, hg_machine_action:instant()}}.
+    {Refund, {Changes, timeout}}.
 
 make_refund(Params, Payment, Revision, CreatedAt, St, Opts) ->
     _ = assert_no_pending_chargebacks(St),
@@ -1625,7 +1625,7 @@ construct_adjustment(
         state = State
     },
     Events = [?adjustment_ev(ID, ?adjustment_created(Adjustment)) | AdditionalEvents],
-    {Adjustment, {Events, hg_machine_action:instant()}}.
+    {Adjustment, {Events, timeout}}.
 
 construct_adjustment_id(#st{adjustments = As}) ->
     erlang:integer_to_binary(length(As) + 1).
@@ -1679,7 +1679,7 @@ process_adjustment_capture(ID, _Action, St) ->
     ok = finalize_adjustment_cashflow(Adjustment, St, Opts),
     Status = ?adjustment_captured(maps:get(timestamp, Opts)),
     Event = ?adjustment_ev(ID, ?adjustment_status_changed(Status)),
-    {done, {[Event], hg_machine_action:new()}}.
+    {done, {[Event], idle}}.
 
 prepare_adjustment_cashflow(Adjustment, St, Options) ->
     PlanID = construct_adjustment_plan_id(Adjustment, St, Options),
@@ -1755,7 +1755,7 @@ process_signal(timeout, St, Options) ->
     ).
 
 process_timeout(St) ->
-    Action = hg_machine_action:new(),
+    Action = idle,
     repair_process_timeout(get_activity(St), Action, St).
 
 -spec process_timeout(activity(), action(), st()) -> machine_result().
@@ -1904,19 +1904,19 @@ process_session_change(_Tag, _Payload, undefined, _St) ->
 %%
 
 -spec process_shop_limit_initialization(action(), st()) -> machine_result().
-process_shop_limit_initialization(Action, St) ->
+process_shop_limit_initialization(_Action, St) ->
     Opts = get_opts(St),
     _ = hold_shop_limits(Opts, St),
     case check_shop_limits(Opts, St) of
         ok ->
-            {next, {[?shop_limit_initiated()], hg_machine_action:set_timeout(0, Action)}};
+            {next, {[?shop_limit_initiated()], timeout}};
         {error, {limit_overflow = Error, IDs}} ->
             Failure = construct_shop_limit_failure(Error, IDs),
             Events = [
                 ?shop_limit_initiated(),
                 ?payment_rollback_started(Failure)
             ],
-            {next, {Events, hg_machine_action:set_timeout(0, Action)}}
+            {next, {Events, timeout}}
     end.
 
 construct_shop_limit_failure(limit_overflow, IDs) ->
@@ -1924,16 +1924,16 @@ construct_shop_limit_failure(limit_overflow, IDs) ->
     Reason = genlib:format("Limits with following IDs overflowed: ~p", [IDs]),
     {failure, payproc_errors:construct('PaymentFailure', Error, Reason)}.
 
-process_shop_limit_failure(Action, #st{failure = Failure} = St) ->
+process_shop_limit_failure(_Action, #st{failure = Failure} = St) ->
     Opts = get_opts(St),
     _ = rollback_shop_limits(Opts, St, [ignore_business_error, ignore_not_found]),
-    {done, {[?payment_status_changed(?failed(Failure))], hg_machine_action:set_timeout(0, Action)}}.
+    {done, {[?payment_status_changed(?failed(Failure))], timeout}}.
 
 -spec process_shop_limit_finalization(action(), st()) -> machine_result().
-process_shop_limit_finalization(Action, St) ->
+process_shop_limit_finalization(_Action, St) ->
     Opts = get_opts(St),
     _ = commit_shop_limits(Opts, St),
-    {next, {[?shop_limit_applied()], hg_machine_action:set_timeout(0, Action)}}.
+    {next, {[?shop_limit_applied()], timeout}}.
 
 -spec process_risk_score(action(), st()) -> machine_result().
 process_risk_score(Action, St) ->
@@ -1947,7 +1947,7 @@ process_risk_score(Action, St) ->
     Events = [?risk_score_changed(RiskScore)],
     case check_risk_score(RiskScore) of
         ok ->
-            {next, {Events, hg_machine_action:set_timeout(0, Action)}};
+            {next, {Events, timeout}};
         {error, risk_score_is_too_high = Reason} ->
             logger:notice("No route found, reason = ~p, varset: ~p", [Reason, VS1]),
             handle_choose_route_error(Reason, Events, St, Action)
@@ -1984,7 +1984,7 @@ process_routing(Action, St) ->
                         Revision,
                         St
                     ),
-                    {next, {Events, hg_machine_action:set_timeout(0, Action)}}
+                    {next, {Events, timeout}}
             end
     end.
 
@@ -2109,7 +2109,7 @@ handle_filtered_routes_exhaustion(Result, Revision, St, Action) ->
             handle_choose_route_error(Error, [], St, Action);
         _ConsideredRoutes ->
             Events = produce_routing_events(hg_routing_ctx:set_error(Error, Result), Revision, St),
-            {next, {Events, hg_machine_action:set_timeout(0, Action)}}
+            {next, {Events, timeout}}
     end.
 
 log_rejected_route_groups(Result, VS) ->
@@ -2156,7 +2156,7 @@ mk_static_error_(T, []) -> T;
 mk_static_error_(Sub, [Code | Codes]) -> mk_static_error_({Code, Sub}, Codes).
 
 -spec process_cash_flow_building(action(), st()) -> machine_result().
-process_cash_flow_building(Action, St) ->
+process_cash_flow_building(_Action, St) ->
     Route = get_route(St),
     Opts = get_opts(St),
     Revision = get_payment_revision(St),
@@ -2182,7 +2182,7 @@ process_cash_flow_building(Action, St) ->
         {1, FinalCashflow}
     ),
     Events = [?cash_flow_changed(FinalCashflow)],
-    {next, {Events, hg_machine_action:set_timeout(0, Action)}}.
+    {next, {Events, timeout}}.
 
 %%
 
@@ -2239,9 +2239,9 @@ process_adjustment_cashflow(ID, _Action, St) ->
     Adjustment = get_adjustment(ID, St),
     ok = prepare_adjustment_cashflow(Adjustment, St, Opts),
     Events = [?adjustment_ev(ID, ?adjustment_status_changed(?adjustment_processed()))],
-    {next, {Events, hg_machine_action:instant()}}.
+    {next, {Events, timeout}}.
 
-process_accounter_update(Action, #st{partial_cash_flow = FinalCashflow, capture_data = CaptureData} = St) ->
+process_accounter_update(_Action, #st{partial_cash_flow = FinalCashflow, capture_data = CaptureData} = St) ->
     #payproc_InvoicePaymentCaptureData{
         reason = Reason,
         cash = Cost,
@@ -2256,7 +2256,7 @@ process_accounter_update(Action, #st{partial_cash_flow = FinalCashflow, capture_
         ]
     ),
     Events = start_session(?captured(Reason, Cost, Cart, Allocation)),
-    {next, {Events, hg_machine_action:set_timeout(0, Action)}}.
+    {next, {Events, timeout}}.
 
 %%
 
@@ -2281,11 +2281,11 @@ process_session(St) ->
 process_session(undefined, St0) ->
     Target = get_target(St0),
     TargetType = get_target_type(Target),
-    Action = hg_machine_action:new(),
+    Action = idle,
     case validate_processing_deadline(get_payment(St0), TargetType) of
         ok ->
             Events = start_session(Target),
-            Result = {Events, hg_machine_action:set_timeout(0, Action)},
+            Result = {Events, timeout},
             {next, Result};
         Failure ->
             process_failure(get_activity(St0), [], Action, Failure, St0)
@@ -2310,7 +2310,7 @@ finish_session_processing(Activity, {Events0, Action}, Session, St0) ->
         {finished, ?session_succeeded()} ->
             TargetType = get_target_type(hg_session:target(Session)),
             _ = maybe_notify_fault_detector(Activity, TargetType, finish, St0),
-            NewAction = hg_machine_action:set_timeout(0, Action),
+            NewAction = timeout,
             InvoiceID = get_invoice_id(get_invoice(get_opts(St0))),
             St1 = collapse_changes(Events1, St0, #{invoice_id => InvoiceID}),
             _ =
@@ -2334,7 +2334,7 @@ finish_session_processing(Activity, {Events0, Action}, Session, St0) ->
     end.
 
 -spec finalize_payment(action(), st()) -> machine_result().
-finalize_payment(Action, St) ->
+finalize_payment(_Action, St) ->
     Target =
         case get_payment_flow(get_payment(St)) of
             ?invoice_payment_flow_instant() ->
@@ -2357,13 +2357,13 @@ finalize_payment(Action, St) ->
             _ ->
                 start_session(Target)
         end,
-    {done, {StartEvents, hg_machine_action:set_timeout(0, Action)}}.
+    {done, {StartEvents, timeout}}.
 
 -spec process_result(action(), st()) -> machine_result().
 process_result(Action, St) ->
     process_result(get_activity(St), Action, St).
 
-process_result({payment, processing_accounter}, Action, #st{new_cash = Cost} = St0) when
+process_result({payment, processing_accounter}, _Action, #st{new_cash = Cost} = St0) when
     Cost =/= undefined
 ->
     %% Rebuild cashflow for new cost
@@ -2397,18 +2397,18 @@ process_result({payment, processing_accounter}, Action, #st{new_cash = Cost} = S
         construct_payment_plan_id(St2),
         get_cashflow_plan(St2)
     ),
-    {next, {[?cash_flow_changed(FinalCashflow)], hg_machine_action:set_timeout(0, Action)}};
+    {next, {[?cash_flow_changed(FinalCashflow)], timeout}};
 process_result({payment, processing_accounter}, Action, St) ->
     Target = get_target(St),
     NewAction = get_action(Target, Action, St),
     {done, {[?payment_status_changed(Target)], NewAction}};
-process_result({payment, routing_failure}, Action, #st{failure = Failure} = St) ->
-    NewAction = hg_machine_action:set_timeout(0, Action),
+process_result({payment, routing_failure}, _Action, #st{failure = Failure} = St) ->
+    NewAction = timeout,
     Routes = get_candidate_routes(St),
     _ = rollback_payment_limits(Routes, get_iter(St), St, [ignore_business_error, ignore_not_found]),
     {done, {[?payment_status_changed(?failed(Failure))], NewAction}};
-process_result({payment, processing_failure}, Action, #st{failure = Failure} = St) ->
-    NewAction = hg_machine_action:set_timeout(0, Action),
+process_result({payment, processing_failure}, _Action, #st{failure = Failure} = St) ->
+    NewAction = timeout,
     %% We need to rollback only current route.
     %% Previously used routes are supposed to have their limits already rolled back.
     Route = get_route(St),
@@ -2588,13 +2588,13 @@ process_fatal_payment_failure(?cancelled(), _Events, _Action, Failure, _St) ->
     error({invalid_cancel_failure, Failure});
 process_fatal_payment_failure(?captured(), _Events, _Action, Failure, _St) ->
     error({invalid_capture_failure, Failure});
-process_fatal_payment_failure(?processed(), Events, Action, Failure, _St) ->
+process_fatal_payment_failure(?processed(), Events, _Action, Failure, _St) ->
     RollbackStarted = [?payment_rollback_started(Failure)],
-    {next, {Events ++ RollbackStarted, hg_machine_action:set_timeout(0, Action)}}.
+    {next, {Events ++ RollbackStarted, timeout}}.
 
-retry_session(Action, Target, Timeout) ->
+retry_session(_Action, Target, Timeout) ->
     NewEvents = start_session(Target),
-    NewAction = set_timer({timeout, Timeout}, Action),
+    NewAction = prg_action:schedule_timer({timeout, Timeout}),
     {NewEvents, NewAction}.
 
 get_actual_retry_strategy(Target, #st{retry_attempts = Attempts}) ->
@@ -2642,18 +2642,15 @@ do_check_failure_type({authorization_failed, {temporarily_unavailable, _}}) ->
 do_check_failure_type(_Failure) ->
     fatal.
 
-get_action(?processed(), Action, St) ->
+get_action(?processed(), _Action, St) ->
     case get_payment_flow(get_payment(St)) of
         ?invoice_payment_flow_instant() ->
-            hg_machine_action:set_timeout(0, Action);
+            timeout;
         ?invoice_payment_flow_hold(_, HeldUntil) ->
-            hg_machine_action:set_deadline(HeldUntil, Action)
+            prg_action:schedule_deadline(HeldUntil)
     end;
 get_action(_Target, Action, _St) ->
     Action.
-
-set_timer(Timer, Action) ->
-    hg_machine_action:set_timer(Timer, Action).
 
 get_provider_payment_terms(St, Revision) ->
     Opts = get_opts(St),
@@ -3943,8 +3940,10 @@ get_st_meta(_) ->
 %% Timings
 
 -spec define_event_timestamp(change_opts()) -> integer().
-define_event_timestamp(#{timestamp := Dt}) ->
+define_event_timestamp(#{timestamp := Dt}) when is_binary(Dt) ->
     hg_datetime:parse(Dt, millisecond);
+define_event_timestamp(#{timestamp := Dt}) ->
+    hg_datetime:parse(hg_datetime:format_dt(Dt), millisecond);
 define_event_timestamp(#{}) ->
     erlang:system_time(millisecond).
 
@@ -4096,9 +4095,9 @@ get_message(invoice_payment_status_changed) ->
     "Invoice payment status is changed".
 
 get_party_client() ->
-    HgContext = hg_context:load(),
-    Client = hg_context:get_party_client(HgContext),
-    Context = hg_context:get_party_client_context(HgContext),
+    HgContext = op_context:load(op_context:key(hellgate)),
+    Client = op_context:get_party_client(HgContext),
+    Context = op_context:get_party_client_context(HgContext),
     {Client, Context}.
 
 is_route_cascade_available(

@@ -4,6 +4,7 @@
 
 -export([format_dt/1]).
 -export([format_ts/1]).
+-export([format_ts/2]).
 -export([format_now/0]).
 -export([compare/2]).
 -export([between/2]).

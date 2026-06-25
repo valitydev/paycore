@@ -197,8 +197,9 @@ stop_app(AppName) ->
 
 -spec set_context(config()) -> ok.
 set_context(C) ->
-    ok = ff_context:save(
-        ff_context:create(#{
+    ok = op_context:save(
+        op_context:key(fistful),
+        op_context:create(#{
             party_client => party_client:create_client(),
             woody_context => cfg('$woody_ctx', C)
         })
@@ -206,7 +207,7 @@ set_context(C) ->
 
 -spec unset_context() -> ok.
 unset_context() ->
-    ok = ff_context:cleanup().
+    ok = op_context:cleanup(fistful).
 
 %%
 
