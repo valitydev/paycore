@@ -96,61 +96,7 @@ construct_domain_fixture() ->
                 ]),
                 terms = #domain_ProvisionTermSet{
                     payments = #domain_PaymentsProvisionTerms{
-                        cash_limit = {
-                            decisions,
-                            [
-                                #domain_CashLimitDecision{
-                                    if_ = {condition, {currency_is, ?cur(<<"RUB">>)}},
-                                    then_ = {
-                                        value,
-                                        ?cashrng(
-                                            {inclusive, ?cash(10, <<"RUB">>)},
-                                            {exclusive, ?cash(420000000, <<"RUB">>)}
-                                        )
-                                    }
-                                },
-                                #domain_CashLimitDecision{
-                                    if_ = {condition, {currency_is, ?cur(<<"USD">>)}},
-                                    then_ = {
-                                        value,
-                                        ?cashrng(
-                                            {inclusive, ?cash(10, <<"USD">>)},
-                                            {exclusive, ?cash(420000000, <<"USD">>)}
-                                        )
-                                    }
-                                },
-                                #domain_CashLimitDecision{
-                                    if_ = {condition, {currency_is, ?cur(<<"EUR">>)}},
-                                    then_ = {
-                                        value,
-                                        ?cashrng(
-                                            {inclusive, ?cash(10, <<"EUR">>)},
-                                            {exclusive, ?cash(420000000, <<"EUR">>)}
-                                        )
-                                    }
-                                },
-                                #domain_CashLimitDecision{
-                                    if_ = {condition, {currency_is, ?cur(<<"JPY">>)}},
-                                    then_ = {
-                                        value,
-                                        ?cashrng(
-                                            {inclusive, ?cash(10, <<"JPY">>)},
-                                            {exclusive, ?cash(420000000, <<"JPY">>)}
-                                        )
-                                    }
-                                },
-                                #domain_CashLimitDecision{
-                                    if_ = {condition, {currency_is, ?cur(<<"CNY">>)}},
-                                    then_ = {
-                                        value,
-                                        ?cashrng(
-                                            {inclusive, ?cash(10, <<"CNY">>)},
-                                            {exclusive, ?cash(420000000, <<"CNY">>)}
-                                        )
-                                    }
-                                }
-                            ]
-                        }
+                        allow_exchange = {constant, true}
                     }
                 }
             }
@@ -300,6 +246,13 @@ payment_provision_terms(Currency, Category) ->
                 )
             ]
         },
+        cash_limit = {
+            value,
+            ?cashrng(
+                {inclusive, ?cash(10, Currency)},
+                {exclusive, ?cash(420000000, Currency)}
+            )
+        },
         refunds = #domain_PaymentRefundsProvisionTerms{
             cash_flow = {
                 value,
@@ -333,5 +286,6 @@ payment_provision_terms(Currency, Category) ->
                     )
                 ]
             }
-        }
+        },
+        allow_exchange = {constant, true}
     }.

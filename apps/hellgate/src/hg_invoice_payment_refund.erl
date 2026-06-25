@@ -126,7 +126,7 @@
     payment_id := payment_id(),
     repair_scenario => repair_scenario(),
     payment_info => payment_info(),
-    exchange_context => hg_invoice_payment:exchange_context() | undefined
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type options() :: #{
@@ -139,7 +139,7 @@
     repair_scenario => repair_scenario(),
     payment_info => payment_info(),
 
-    exchange_context => hg_invoice_payment:exchange_context() | undefined
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type repair_scenario() :: {result, proxy_result()}.
@@ -232,7 +232,7 @@ process_callback(Payload, PaymentInfo0, Refund) ->
 
 -spec process_callback(callback(), payment_info(), t(), options()) -> {callback_response(), machine_result()}.
 process_callback(Payload, PaymentInfo0, Refund0, Options) ->
-    Refund = inject_context(Options, Refund0),
+    Refund = Refund0#{injected_context => maps:with([exchange_context], Options)},
     PaymentInfo1 = construct_payment_info(PaymentInfo0, Refund),
     Session0 = hg_session:set_payment_info(PaymentInfo1, session(Refund)),
     {Response, {Result, Session1}} = hg_session:process_callback(Payload, Session0),
@@ -499,13 +499,13 @@ get_initial_retry_strategy() ->
     hg_retry:new_strategy(maps:get(refunded, PolicyConfig, no_retry)).
 
 inject_context(Options, Refund) ->
-    Invoice = maps:get(invoice, Options, undefined),
-    Payment = maps:get(payment, Options, undefined),
-    {InvoiceID, ShopConfigRef} = get_opts_invoice_data(Invoice),
-    {PaymentID, Revision} = get_opts_payment_data(Payment),
-    Party = maps:get(party, Options, undefined),
-    PartyConfigRef = maps:get(party_config_ref, Options, undefined),
-    {ShopConfigRef, Shop} = try_get_shop(ShopConfigRef, PartyConfigRef, Revision),
+    Invoice = maps:get(invoice, Options),
+    Payment = maps:get(payment, Options),
+    #domain_Invoice{id = InvoiceID, shop_ref = ShopConfigRef} = Invoice,
+    #domain_InvoicePayment{id = PaymentID, domain_revision = Revision} = Payment,
+    Party = maps:get(party, Options),
+    PartyConfigRef = maps:get(party_config_ref, Options),
+    {ShopConfigRef, Shop} = hg_party:get_shop(ShopConfigRef, PartyConfigRef, Revision),
     Context = genlib_map:compact(#{
         party => Party,
         shop => Shop,
@@ -520,24 +520,6 @@ inject_context(Options, Refund) ->
         exchange_context => maps:get(exchange_context, Options, undefined)
     }),
     Refund#{injected_context => Context}.
-
-get_opts_invoice_data(undefined) ->
-    {undefined, undefined};
-get_opts_invoice_data(#domain_Invoice{id = InvoiceID, shop_ref = ShopConfigRef}) ->
-    {InvoiceID, ShopConfigRef}.
-
-get_opts_payment_data(undefined) ->
-    {undefined, undefined};
-get_opts_payment_data(#domain_InvoicePayment{id = PaymentID, domain_revision = Revision}) ->
-    {PaymentID, Revision}.
-
-try_get_shop(ShopConfigRef, PartyConfigRef, _Revision) when
-    ShopConfigRef =:= undefined;
-    PartyConfigRef =:= undefined
-->
-    {undefined, undefined};
-try_get_shop(ShopConfigRef, PartyConfigRef, Revision) ->
-    hg_party:get_shop(ShopConfigRef, PartyConfigRef, Revision).
 
 get_injected_party_config_ref(#{injected_context := #{party_config_ref := V}}) -> V.
 get_injected_invoice(#{injected_context := #{invoice := V}}) -> V.
@@ -611,7 +593,7 @@ get_refund_created_at(#domain_InvoicePaymentRefund{created_at = CreatedAt}) ->
 
 construct_payment_info(PaymentInfo, Refund) ->
     ExchangeContext = get_injected_exchange_context(Refund),
-    {ConvertedCash, _OriginalCash} = maybe_convert_cash(ExchangeContext, cash(Refund)),
+    ConvertedCash = maybe_convert_cash(ExchangeContext, cash(Refund)),
     PaymentInfo#proxy_provider_PaymentInfo{
         refund = #proxy_provider_InvoicePaymentRefund{
             id = id(Refund),
@@ -622,12 +604,9 @@ construct_payment_info(PaymentInfo, Refund) ->
     }.
 
 maybe_convert_cash(undefined, Cash) ->
-    {Cash, undefined};
+    Cash;
 maybe_convert_cash(ExchangeContext, Cash) ->
-    {
-        hg_currency_converter:convert_cash(ExchangeContext, Cash),
-        Cash
-    }.
+    hg_currency_converter:convert_cash(ExchangeContext, Cash).
 
 construct_proxy_cash(#domain_Cash{
     amount = Amount,

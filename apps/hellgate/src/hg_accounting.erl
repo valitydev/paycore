@@ -16,7 +16,6 @@
 -export([collect_provider_account_map/4]).
 -export([collect_system_account_map/4]).
 -export([collect_external_account_map/4]).
--export([empty_log/0]).
 
 -export([hold/2]).
 -export([plan/2]).
@@ -74,12 +73,6 @@
     min_available_amount => amount(),
     max_available_amount => amount()
 }.
-
--spec empty_log() -> posting_plan_log().
-empty_log() ->
-    #'accounter_PostingPlanLog'{
-        affected_accounts = #{}
-    }.
 
 -spec get_account(account_id()) -> account().
 get_account(AccountID) ->

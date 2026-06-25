@@ -52,7 +52,8 @@
     route_data := route_data(),
     pin_data => pin_data(),
     fd_overrides => fd_overrides(),
-    rejection_reason => route_rejection_reason() | undefined
+    rejection_reason => route_rejection_reason() | undefined,
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type fd_score() :: #{

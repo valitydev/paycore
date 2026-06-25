@@ -73,7 +73,6 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
 
     MerchantTerms = get_merchant_payment_terms(Revision, Shop, VS),
     ProviderTerms = hg_invoice_payment:get_provider_terminal_terms(Route, VS, Revision),
-    {MaybeExchangeContext, MaybeCurrencyChangedEvents} = maybe_get_exchange_context(Cost1, ProviderTerms),
 
     CashflowContext = #{
         provision_terms => ProviderTerms,
@@ -82,8 +81,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
         payment => Payment,
         timestamp => CreatedAt1,
         varset => VS,
-        revision => Revision,
-        exchange_context => MaybeExchangeContext
+        revision => Revision
     },
     FinalCashflow = hg_invoice_payment:calculate_cashflow(PaymentInstitution, CashflowContext, Opts),
 
@@ -94,9 +92,8 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
             ?shop_limit_applied()
         ] ++
             RiskScoreEventList ++
-            [?route_changed(Route)] ++
-            MaybeCurrencyChangedEvents ++
             [
+                ?route_changed(Route),
                 ?cash_flow_changed(FinalCashflow),
                 hg_session:wrap_event(?processed(), hg_session:create())
             ] ++
@@ -270,31 +267,6 @@ collect_validation_varset(
         risk_score => RiskScore,
         flow => instant
     }.
-
-maybe_get_exchange_context(
-    #domain_Cash{
-        currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}
-    },
-    #domain_PaymentsProvisionTerms{
-        currencies = {value, [#domain_CurrencyRef{symbolic_code = TerminalCurrency}]}
-    }
-) when PaymentCurrency =:= TerminalCurrency ->
-    {undefined, []};
-maybe_get_exchange_context(
-    #domain_Cash{
-        currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}
-    },
-    #domain_PaymentsProvisionTerms{
-        currencies = {value, [#domain_CurrencyRef{symbolic_code = TerminalCurrency}]}
-    }
-) ->
-    {ok,
-        #{
-            source := Src,
-            destination := Dst,
-            rate := Rate
-        } = ExchangeContext} = hg_invoice_payment:get_exchange_context(PaymentCurrency, TerminalCurrency),
-    {ExchangeContext, [?payment_currency_changed(Src, Dst, Rate)]}.
 
 %%
 

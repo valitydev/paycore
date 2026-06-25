@@ -90,7 +90,6 @@ check_activity_compatibility(?SCENARIO_FAIL_PRE_PROCESSING, Activity) when
     Activity =:= {payment, new} orelse
         Activity =:= {payment, risk_scoring} orelse
         Activity =:= {payment, routing} orelse
-        Activity =:= {payment, exchange_context_building} orelse
         Activity =:= {payment, cash_flow_building}
 ->
     ok;

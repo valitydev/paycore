@@ -27,6 +27,7 @@
     register_payment/4,
     start_payment/3,
     start_payment_ev/2,
+    fail_payment_no_route/2,
     register_payment_ev_no_risk_scoring/2,
     await_payment_session_started/4,
     await_payment_capture/3,
@@ -260,7 +261,7 @@ start_payment(InvoiceID, PaymentParams, Client) ->
     case next_change(InvoiceID, Client) of
         ?payment_ev(PaymentID, ?cash_flow_changed(_)) ->
             PaymentID;
-        ?payment_ev(PaymentID, ?payment_currency_changed(_, _, _)) ->
+        ?payment_ev(PaymentID, ?invoice_payment_exchange_context_changed(_)) ->
             ?payment_ev(PaymentID, ?cash_flow_changed(_)) = next_change(InvoiceID, Client),
             PaymentID
     end.
@@ -275,6 +276,17 @@ start_payment_ev(InvoiceID, Client) ->
         ?payment_ev(PaymentID, ?route_changed(Route))
     ] = next_changes(InvoiceID, 5, Client),
     Route.
+
+-spec fail_payment_no_route(_, _) -> _.
+fail_payment_no_route(InvoiceID, Client) ->
+    [
+        ?payment_ev(PaymentID, ?payment_started(?payment_w_status(?pending()))),
+        ?payment_ev(PaymentID, ?shop_limit_initiated()),
+        ?payment_ev(PaymentID, ?shop_limit_applied()),
+        ?payment_ev(PaymentID, ?risk_score_changed(_RiskScore)),
+        ?payment_ev(PaymentID, ?payment_status_changed(?failed(_)))
+    ] = next_changes(InvoiceID, 5, Client),
+    PaymentID.
 
 -spec register_payment_ev_no_risk_scoring(_, _) -> _.
 register_payment_ev_no_risk_scoring(InvoiceID, Client) ->

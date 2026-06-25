@@ -28,8 +28,6 @@
 
 -export([collect_cashflow/1]).
 -export([collect_cashflow/2]).
--export([convert_cashflow/2]).
--export([convert_volume/2]).
 
 -type party() :: dmsl_domain_thrift:'PartyConfig'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
@@ -42,8 +40,6 @@
 -type revision() :: hg_domain:revision().
 -type payment_institution() :: hg_payment_institution:t().
 -type final_cash_flow() :: hg_cashflow:final_cash_flow().
--type cash_flow() :: hg_cashflow:cash_flow().
--type cash_volume() :: hg_cashflow:cash_volume().
 
 -spec collect_cashflow(cash_flow_context()) -> final_cash_flow().
 collect_cashflow(#{shop := {_, Shop}, varset := VS, revision := Revision} = Context) ->
@@ -121,80 +117,16 @@ construct_transaction_cashflow(
 
 construct_provider_cashflow(PaymentInstitution, #{provision_terms := ProvisionTerms} = Context) ->
     ProviderCashflowSelector = get_provider_cashflow_selector(ProvisionTerms),
-    ProviderCashflow0 = get_selector_value(provider_payment_cash_flow, ProviderCashflowSelector),
-    ExchangeContext = maps:get(exchange_context, Context, undefined),
-    ProviderCashflow = maybe_convert_cashflow(ExchangeContext, ProviderCashflow0),
+    ProviderCashflow = get_selector_value(provider_payment_cash_flow, ProviderCashflowSelector),
+    Opts = maps:with([exchange_context], Context),
     AccountMap = hg_accounting:collect_account_map(make_collect_account_context(PaymentInstitution, Context)),
-    construct_final_cashflow(ProviderCashflow, #{operation_amount => get_amount(Context)}, AccountMap).
-
-maybe_convert_cashflow(undefined, ProviderCashflow) ->
-    ProviderCashflow;
-maybe_convert_cashflow(ExchangeContext, ProviderCashflow) ->
-    convert_cashflow(ExchangeContext, ProviderCashflow).
-
--spec convert_cashflow(hg_invoice_payment:exchange_context(), cash_flow()) -> cash_flow().
-convert_cashflow(ExchangeContext, ProviderCashflow) ->
-    lists:foldr(
-        fun(#domain_CashFlowPosting{volume = CashVolume} = P, Acc) ->
-            [
-                P#domain_CashFlowPosting{
-                    volume = convert_volume(ExchangeContext, CashVolume),
-                    exchange_context = construct_exchange_context(ExchangeContext)
-                }
-                | Acc
-            ]
-        end,
-        [],
-        ProviderCashflow
-    ).
-
-construct_exchange_context(#{
-    source := SourceCurrency,
-    destination := DestinationCurrency,
-    rate := ExchangeRate
-}) ->
-    #domain_ExchangeContext{
-        source_currency = SourceCurrency,
-        destination_currency = DestinationCurrency,
-        exchange_rate = ExchangeRate
-    }.
-
--spec convert_volume(hg_invoice_payment:exchange_context(), cash_volume()) -> cash_volume().
-convert_volume(_ExchangeContext, {share, _} = CashVolume) ->
-    CashVolume;
-convert_volume(ExchangeContext, {product, {Kind, CashVolumeList}}) ->
-    {product, {Kind, convert_volumes(ExchangeContext, CashVolumeList)}};
-convert_volume(
-    #{source := PaymentCurrency, destination := TerminalCurrency} = ExchangeContext,
-    {fixed, #domain_CashVolumeFixed{
-        cash =
-            #domain_Cash{
-                currency = #domain_CurrencyRef{symbolic_code = FeeCurrency}
-            } = Cash
-    }} = CashVolume
-) ->
-    case FeeCurrency of
-        PaymentCurrency ->
-            CashVolume;
-        TerminalCurrency ->
-            %% reverse conversion needed
-            ReConvertedCash = hg_currency_converter:reverse_convert_cash(ExchangeContext, Cash),
-            {fixed, #domain_CashVolumeFixed{
-                cash = ReConvertedCash
-            }}
-    end.
-
-convert_volumes(ExchangeContext, CashVolumeList) ->
-    lists:foldr(
-        fun(CashVolume, Acc) ->
-            [convert_volume(ExchangeContext, CashVolume) | Acc]
-        end,
-        [],
-        CashVolumeList
-    ).
+    construct_final_cashflow(ProviderCashflow, #{operation_amount => get_amount(Context)}, AccountMap, Opts).
 
 construct_final_cashflow(Cashflow, Context, AccountMap) ->
-    hg_cashflow:finalize(Cashflow, Context, AccountMap).
+    construct_final_cashflow(Cashflow, Context, AccountMap, #{}).
+
+construct_final_cashflow(Cashflow, Context, AccountMap, Opts) ->
+    hg_cashflow:finalize(Cashflow, Context, AccountMap, Opts).
 
 get_cashflow_payment_institution(
     #domain_ShopConfig{payment_institution = PaymentInstitutionRef},

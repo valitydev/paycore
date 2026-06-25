@@ -76,11 +76,9 @@
     }
 ).
 
--define(payment_currency_changed(SourceCurrency, DestinationCurrency, ExchangeRate),
-    {invoice_payment_currency_changed, #payproc_InvoicePaymentCurrencyChanged{
-        source_currency = SourceCurrency,
-        destination_currency = DestinationCurrency,
-        exchange_rate = ExchangeRate
+-define(invoice_payment_exchange_context_changed(ExchangeContext),
+    {invoice_payment_exchange_context_changed, #payproc_InvoicePaymentExchangeContextChanged{
+        exchange_context = ExchangeContext
     }}
 ).
 

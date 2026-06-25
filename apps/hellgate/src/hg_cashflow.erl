@@ -32,10 +32,14 @@
 -type shop_config_ref() :: dmsl_domain_thrift:'ShopConfigRef'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type route() :: hg_route:payment_route().
+-type options() :: #{
+    exchange_context => hg_invoice_payment:exchange_context()
+}.
 
 %%
 
 -export([finalize/3]).
+-export([finalize/4]).
 -export([revert/1]).
 
 -export([compute_volume/2]).
@@ -44,12 +48,11 @@
 
 %%
 
--define(posting(Source, Destination, Volume, Details, ExchangeContext), #domain_CashFlowPosting{
+-define(posting(Source, Destination, Volume, Details), #domain_CashFlowPosting{
     source = Source,
     destination = Destination,
     volume = Volume,
-    details = Details,
-    exchange_context = ExchangeContext
+    details = Details
 }).
 
 -define(final_posting(Source, Destination, Volume, Details), #domain_FinalCashFlowPosting{
@@ -69,20 +72,30 @@
 
 -spec finalize(cash_flow(), context(), account_map()) -> final_cash_flow() | no_return().
 finalize(CF, Context, AccountMap) ->
-    compute_postings(CF, Context, AccountMap).
+    finalize(CF, Context, AccountMap, #{}).
 
--spec compute_postings(cash_flow(), context(), account_map()) -> final_cash_flow() | no_return().
-compute_postings(CF, Context, AccountMap) ->
+-spec finalize(cash_flow(), context(), account_map(), options()) -> final_cash_flow() | no_return().
+finalize(CF, Context, AccountMap, Opts) ->
+    compute_postings(CF, Context, AccountMap, Opts).
+
+-spec compute_postings(cash_flow(), context(), account_map(), options()) -> final_cash_flow() | no_return().
+compute_postings(CF, Context, AccountMap, Opts) ->
+    ExchangeContext = maps:get(exchange_context, Opts, undefined),
     [
         ?final_posting(
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
-            compute_volume(Volume, Context),
+            maybe_convert_cash(ExchangeContext, compute_volume(Volume, Context)),
             Details,
             ExchangeContext
         )
-     || ?posting(Source, Destination, Volume, Details, ExchangeContext) <- CF
+     || ?posting(Source, Destination, Volume, Details) <- CF
     ].
+
+maybe_convert_cash(undefined, Cash) ->
+    Cash;
+maybe_convert_cash(ExchangeContext, Cash) ->
+    hg_currency_converter:reverse_convert_cash(ExchangeContext, Cash).
 
 -spec construct_final_account(account(), account_map()) -> final_cash_flow_account() | no_return().
 construct_final_account(AccountType, AccountMap) ->

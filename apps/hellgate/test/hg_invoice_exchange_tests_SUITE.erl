@@ -454,12 +454,8 @@ payment_failed_exchange_rate_unknown(C) ->
         C
     ),
     PaymentParams = hg_invoice_helper:make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
-    _ = hg_invoice_helper:start_payment_ev(InvoiceID, Client),
-    [
-        ?payment_ev(PaymentID, ?payment_rollback_started(_)),
-        ?payment_ev(PaymentID, ?payment_status_changed(?failed(_)))
-    ] = hg_invoice_helper:next_changes(InvoiceID, 2, Client),
+    ?payment_state(?payment(_PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    _ = hg_invoice_helper:fail_payment_no_route(InvoiceID, Client),
     ok.
 
 -spec payment_failed_exchange_rate_timeout(config()) -> test_return().
@@ -474,12 +470,8 @@ payment_failed_exchange_rate_timeout(C) ->
         C
     ),
     PaymentParams = hg_invoice_helper:make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
-    _ = hg_invoice_helper:start_payment_ev(InvoiceID, Client),
-    [
-        ?payment_ev(PaymentID, ?payment_rollback_started(_)),
-        ?payment_ev(PaymentID, ?payment_status_changed(?failed(_)))
-    ] = hg_invoice_helper:next_changes(InvoiceID, 2, Client),
+    ?payment_state(?payment(_PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    _ = hg_invoice_helper:fail_payment_no_route(InvoiceID, Client),
     ok.
 
 -spec payment_failed_exchange_rate_unexpected(config()) -> test_return().
@@ -494,12 +486,8 @@ payment_failed_exchange_rate_unexpected(C) ->
         C
     ),
     PaymentParams = hg_invoice_helper:make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
-    _ = hg_invoice_helper:start_payment_ev(InvoiceID, Client),
-    [
-        ?payment_ev(PaymentID, ?payment_rollback_started(_)),
-        ?payment_ev(PaymentID, ?payment_status_changed(?failed(_)))
-    ] = hg_invoice_helper:next_changes(InvoiceID, 2, Client),
+    ?payment_state(?payment(_PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    _ = hg_invoice_helper:fail_payment_no_route(InvoiceID, Client),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -39,6 +39,10 @@
     error => get_routes_error()
 }.
 
+-type route_updates() :: #{
+    exchange_context => hg_invoice_payment:exchange_context()
+}.
+
 -type get_routes_error() :: {misconfiguration, _Reason}.
 
 -type blacklist_context() :: hg_inspector:blacklist_context().
@@ -150,8 +154,8 @@ fill_accepted(Predestination, Revision, VS, Routes) ->
             PRef = hg_route:provider_ref(Route),
             TRef = hg_route:terminal_ref(Route),
             try
-                true = acceptable_terminal(Predestination, PRef, TRef, VS, Revision),
-                [Route | AccIn]
+                {ok, Updates} = acceptable_terminal(Predestination, PRef, TRef, VS, Revision),
+                [maps:merge(Route, Updates) | AccIn]
             catch
                 {rejected, Reason} ->
                     [hg_route:set_accepted({false, {rejected, Reason}}, Route) | AccIn];
@@ -249,7 +253,7 @@ gather_pin_info(#domain_RoutingPin{features = Features}, Ctx) ->
     hg_route:terminal_ref(),
     varset(),
     revision()
-) -> true | no_return().
+) -> {ok, route_updates()} | no_return().
 acceptable_terminal(Predestination, ProviderRef, TerminalRef, VS, Revision) ->
     {Client, Context} = get_party_client(),
     Result = party_client_thrift:compute_provider_terminal_terms(
@@ -262,7 +266,12 @@ acceptable_terminal(Predestination, ProviderRef, TerminalRef, VS, Revision) ->
     ),
     case Result of
         {ok, ProvisionTermSet} ->
-            check_terms_acceptability(Predestination, ProvisionTermSet, VS);
+            {UpdVS, Updates} = maybe_currency_conversion(
+                ProvisionTermSet#domain_ProvisionTermSet.payments,
+                VS
+            ),
+            true = check_terms_acceptability(Predestination, ProvisionTermSet, UpdVS),
+            {ok, Updates};
         {error, #payproc_ProvisionTermSetUndefined{}} ->
             throw(?rejected({'ProvisionTermSet', undefined}))
     end.
@@ -272,6 +281,38 @@ get_party_client() ->
     Client = hg_context:get_party_client(HgContext),
     Context = hg_context:get_party_client_context(HgContext),
     {Client, Context}.
+
+maybe_currency_conversion(
+    #domain_PaymentsProvisionTerms{
+        currencies = {value, [#domain_CurrencyRef{symbolic_code = DestinationCurrency} = DestiationCurrencyRef]},
+        allow_exchange = {constant, true}
+    },
+    #{currency := #domain_CurrencyRef{symbolic_code = SourceCurrency}} = VS
+) when SourceCurrency =/= DestinationCurrency ->
+    case hg_exrates:get_exchange_rate(SourceCurrency, DestinationCurrency) of
+        {ok, #{p := P, q := Q}} ->
+            ExchangeContext = #domain_ExchangeContext{
+                source_currency = SourceCurrency,
+                destination_currency = DestinationCurrency,
+                exchange_rate = #base_Rational{p = P, q = Q}
+            },
+            UpdVS = VS#{
+                currency => DestiationCurrencyRef,
+                cost => hg_currency_converter:convert_cash(ExchangeContext, getv(cost, VS))
+            },
+            {UpdVS, #{exchange_context => ExchangeContext}};
+        {error, _} ->
+            throw(?rejected({'PaymentsProvisionTerms', exchange_error}))
+    end;
+%% Check production domain config before use
+%maybe_currency_conversion(
+%    #domain_PaymentsProvisionTerms{currencies = {value, Currencies}},
+%    _VS
+%) when erlang:length(Currencies) > 1 ->
+%    throw(?rejected({'PaymentsProvisionTerms', too_many_currencies}));
+maybe_currency_conversion(_Terms, VS) ->
+    %% in other cases we rely on check_terms_acceptability/3
+    {VS, #{}}.
 
 check_terms_acceptability(payment, Terms, VS) ->
     acceptable_payment_terms(Terms#domain_ProvisionTermSet.payments, VS);
@@ -398,14 +439,7 @@ try_accept_term(ParentName, Name, Value, Selector) ->
     test_term(Name, Value, Values) orelse throw(?rejected({ParentName, Name})).
 
 test_term(currency, V, Vs) ->
-    case application:get_env(hellgate, currency_exchange_enabled, false) of
-        true ->
-            %% currency conversion is allowed
-            %% ignore the currency difference
-            true;
-        false ->
-            ordsets:is_element(V, Vs)
-    end;
+    ordsets:is_element(V, Vs);
 test_term(category, V, Vs) ->
     ordsets:is_element(V, Vs);
 test_term(payment_tool, PT, PMs) ->
