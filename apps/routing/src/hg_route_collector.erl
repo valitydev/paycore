@@ -284,7 +284,7 @@ get_party_client() ->
 
 maybe_currency_conversion(
     #domain_PaymentsProvisionTerms{
-        currencies = {value, [#domain_CurrencyRef{symbolic_code = DestinationCurrency} = DestiationCurrencyRef]},
+        currencies = {value, [#domain_CurrencyRef{symbolic_code = DestinationCurrency} = DestinationCurrencyRef]},
         allow_exchange = {constant, true}
     },
     #{currency := #domain_CurrencyRef{symbolic_code = SourceCurrency}} = VS
@@ -297,7 +297,7 @@ maybe_currency_conversion(
                 exchange_rate = #base_Rational{p = P, q = Q}
             },
             UpdVS = VS#{
-                currency => DestiationCurrencyRef,
+                currency => DestinationCurrencyRef,
                 cost => hg_currency_converter:convert_cash(ExchangeContext, getv(cost, VS))
             },
             {UpdVS, #{exchange_context => ExchangeContext}};

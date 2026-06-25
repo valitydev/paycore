@@ -61,7 +61,7 @@
  {<<"erlydtl">>,{pkg,<<"erlydtl">>,<<"0.14.0">>},2},
  {<<"exrates_proto">>,
   {git,"https://github.com/valitydev/exrates-proto.git",
-       {ref,"e23772c160f10d141851e98a3a0995e297df9cb3"}},
+       {ref,"924f813ca2bddfdcaa3b6570733212c810035304"}},
   0},
  {<<"fault_detector_proto">>,
   {git,"https://github.com/valitydev/fault-detector-proto.git",

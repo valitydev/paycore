@@ -1007,7 +1007,7 @@ partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocat
     ProviderTerms = hg_party:get_route_payment_terms(Route, VS, Revision),
     ok = validate_provider_holds_terms(ProviderTerms),
     ExchangeContext = get_exchange_context(St),
-    Context = #{
+    Context = genlib_map:compact(#{
         provision_terms => ProviderTerms,
         merchant_terms => MerchantTerms,
         route => Route,
@@ -1017,7 +1017,7 @@ partial_capture(St0, Reason, Cost, Cart, Opts, MerchantTerms, Timestamp, Allocat
         revision => Revision,
         allocation => Allocation,
         exchange_context => ExchangeContext
-    },
+    }),
     FinalCashflow = calculate_cashflow(Context, Opts),
     Changes = start_partial_capture(Reason, Cost, Cart, FinalCashflow, Allocation),
     {ok, {Changes, hg_machine_action:instant()}}.

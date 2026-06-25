@@ -73,7 +73,6 @@ init_(PaymentID, Params, #{timestamp := CreatedAt0} = Opts) ->
 
     MerchantTerms = get_merchant_payment_terms(Revision, Shop, VS),
     ProviderTerms = hg_invoice_payment:get_provider_terminal_terms(Route, VS, Revision),
-
     CashflowContext = #{
         provision_terms => ProviderTerms,
         merchant_terms => MerchantTerms,
