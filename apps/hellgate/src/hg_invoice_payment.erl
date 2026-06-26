@@ -238,7 +238,7 @@
     exchange_context => exchange_context()
 }.
 
--type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'().
+-type exchange_context() :: hg_currency_converter:exchange_context().
 
 %%
 
@@ -3017,7 +3017,7 @@ construct_payment_info(
     PaymentInfo
 ) ->
     ExchangeContext = get_exchange_context(St),
-    {ConvertedCost, _OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
+    ConvertedCost = hg_currency_converter:maybe_convert_cash(ExchangeContext, Cost),
     PaymentInfo#proxy_provider_PaymentInfo{
         capture = construct_proxy_capture(ConvertedCost)
     };
@@ -3033,7 +3033,7 @@ construct_proxy_payment(
         domain_revision = Revision,
         payer = Payer,
         payer_session_info = PayerSessionInfo,
-        cost = Cost,
+        cost = Cost0,
         make_recurrent = MakeRecurrent,
         skip_recurrent = SkipRecurrent,
         processing_deadline = Deadline
@@ -3043,8 +3043,13 @@ construct_proxy_payment(
 ) ->
     ContactInfo = get_contact_info(Payer),
     PaymentTool = get_payer_payment_tool(Payer),
-    ExchangeContext = get_exchange_context(St),
-    {ConvertedCost, OriginalCost} = maybe_convert_cash(ExchangeContext, Cost),
+    {Cost1, OriginalCost} =
+        case get_exchange_context(St) of
+            undefined ->
+                {Cost0, undefined};
+            ExchangeContext ->
+                {hg_currency_converter:convert_cash(ExchangeContext, Cost0), Cost0}
+        end,
     #proxy_provider_InvoicePayment{
         id = ID,
         created_at = CreatedAt,
@@ -3052,7 +3057,7 @@ construct_proxy_payment(
         payment_resource = construct_payment_resource(Payer, St),
         payment_service = hg_payment_tool:get_payment_service(PaymentTool, Revision),
         payer_session_info = PayerSessionInfo,
-        cost = construct_proxy_cash(ConvertedCost),
+        cost = construct_proxy_cash(Cost1),
         original_cost = maybe_construct_proxy_cash(OriginalCost),
         contact_info = ContactInfo,
         make_recurrent = MakeRecurrent,
@@ -3143,23 +3148,6 @@ construct_proxy_capture(Cost) ->
     #proxy_provider_InvoicePaymentCapture{
         cost = construct_proxy_cash(Cost)
     }.
-
-maybe_convert_cash(undefined, Cost) ->
-    {Cost, undefined};
-maybe_convert_cash(
-    #domain_ExchangeContext{source_currency = PaymentCurrency} = ExchangeContext,
-    #domain_Cash{currency = #domain_CurrencyRef{symbolic_code = PaymentCurrency}} = OriginalCash
-) ->
-    ConvertedCash = hg_currency_converter:convert_cash(ExchangeContext, OriginalCash),
-    {ConvertedCash, OriginalCash}.
-
-maybe_reverse_convert_cash(undefined, Cost) ->
-    Cost;
-maybe_reverse_convert_cash(
-    #domain_ExchangeContext{destination_currency = TerminalCurrency} = ExchangeContext,
-    #domain_Cash{currency = #domain_CurrencyRef{symbolic_code = TerminalCurrency}} = TerminalCash
-) ->
-    hg_currency_converter:reverse_convert_cash(ExchangeContext, TerminalCash).
 
 %%
 
@@ -3410,7 +3398,7 @@ merge_change(Change = ?cash_changed(_OldCash, NewCash), #st{} = St, Opts) ->
     ),
     Payment0 = get_payment(St),
     ExchangeContext = get_exchange_context(St),
-    ReConvertedNewCash = maybe_reverse_convert_cash(ExchangeContext, NewCash),
+    ReConvertedNewCash = hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, NewCash),
     Payment1 = Payment0#domain_InvoicePayment{changed_cost = ReConvertedNewCash},
     St#st{new_cash = ReConvertedNewCash, new_cash_provided = true, payment = Payment1};
 merge_change(Change = ?payment_rollback_started(Failure), St, Opts) ->
