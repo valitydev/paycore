@@ -299,12 +299,15 @@ maybe_currency_conversion(
         {error, _} ->
             throw(?rejected({'PaymentsProvisionTerms', exchange_error}))
     end;
-%% Check production domain config before use
-%maybe_currency_conversion(
-%    #domain_PaymentsProvisionTerms{currencies = {value, Currencies}},
-%    _VS
-%) when erlang:length(Currencies) > 1 ->
-%    throw(?rejected({'PaymentsProvisionTerms', too_many_currencies}));
+maybe_currency_conversion(
+    #domain_PaymentsProvisionTerms{
+        currencies = {value, Currencies},
+        allow_exchange = {constant, true}
+    },
+    _VS
+) when erlang:length(Currencies) > 1 ->
+    %% If currency conversion is allowed, only one currency must be specified
+    throw(?rejected({'PaymentsProvisionTerms', too_many_currencies}));
 maybe_currency_conversion(_Terms, VS) ->
     %% in other cases we rely on check_terms_acceptability/3
     {VS, undefined}.
