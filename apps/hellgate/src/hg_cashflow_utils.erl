@@ -20,7 +20,8 @@
     revision := revision(),
     merchant_terms => dmsl_domain_thrift:'PaymentsServiceTerms'(),
     refund => refund(),
-    allocation => hg_allocation:allocation()
+    allocation => hg_allocation:allocation(),
+    exchange_context => hg_invoice_payment:exchange_context() | undefined
 }.
 
 -export_type([cash_flow_context/0]).
@@ -117,11 +118,15 @@ construct_transaction_cashflow(
 construct_provider_cashflow(PaymentInstitution, #{provision_terms := ProvisionTerms} = Context) ->
     ProviderCashflowSelector = get_provider_cashflow_selector(ProvisionTerms),
     ProviderCashflow = get_selector_value(provider_payment_cash_flow, ProviderCashflowSelector),
+    Opts = maps:with([exchange_context], Context),
     AccountMap = hg_accounting:collect_account_map(make_collect_account_context(PaymentInstitution, Context)),
-    construct_final_cashflow(ProviderCashflow, #{operation_amount => get_amount(Context)}, AccountMap).
+    construct_final_cashflow(ProviderCashflow, #{operation_amount => get_amount(Context)}, AccountMap, Opts).
 
 construct_final_cashflow(Cashflow, Context, AccountMap) ->
-    hg_cashflow:finalize(Cashflow, Context, AccountMap).
+    construct_final_cashflow(Cashflow, Context, AccountMap, #{}).
+
+construct_final_cashflow(Cashflow, Context, AccountMap, Opts) ->
+    hg_cashflow:finalize(Cashflow, Context, AccountMap, Opts).
 
 get_cashflow_payment_institution(
     #domain_ShopConfig{payment_institution = PaymentInstitutionRef},

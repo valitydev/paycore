@@ -231,7 +231,8 @@ collect_postings(Cashflow) ->
             to_id = Destination,
             amount = Amount,
             currency_sym_code = CurrencyCode,
-            description = construct_posting_description(Details)
+            description = construct_posting_description(Details),
+            exchange_context = ExchangeContext
         }
      || #domain_FinalCashFlowPosting{
             source = #domain_FinalCashFlowAccount{account_id = Source},
@@ -240,7 +241,8 @@ collect_postings(Cashflow) ->
             volume = #domain_Cash{
                 amount = Amount,
                 currency = #domain_CurrencyRef{symbolic_code = CurrencyCode}
-            }
+            },
+            exchange_context = ExchangeContext
         } <- Cashflow
     ].
 

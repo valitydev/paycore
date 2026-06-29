@@ -76,6 +76,12 @@
     }
 ).
 
+-define(invoice_payment_exchange_context_changed(ExchangeContext),
+    {invoice_payment_exchange_context_changed, #payproc_InvoicePaymentExchangeContextChanged{
+        exchange_context = ExchangeContext
+    }}
+).
+
 -define(cash_flow_changed(CashFlow),
     {invoice_payment_cash_flow_changed, #payproc_InvoicePaymentCashFlowChanged{
         cash_flow = CashFlow

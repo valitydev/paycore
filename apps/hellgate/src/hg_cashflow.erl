@@ -12,6 +12,8 @@
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export_type([final_cash_flow/0]).
+-export_type([cash_flow/0]).
+-export_type([cash_volume/0]).
 
 -type account() :: dmsl_domain_thrift:'CashFlowAccount'().
 -type account_id() :: dmsl_domain_thrift:'AccountID'().
@@ -30,10 +32,14 @@
 -type shop_config_ref() :: dmsl_domain_thrift:'ShopConfigRef'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type route() :: hg_route:payment_route().
+-type options() :: #{
+    exchange_context => hg_invoice_payment:exchange_context()
+}.
 
 %%
 
 -export([finalize/3]).
+-export([finalize/4]).
 -export([revert/1]).
 
 -export([compute_volume/2]).
@@ -56,18 +62,32 @@
     details = Details
 }).
 
+-define(final_posting(Source, Destination, Volume, Details, ExchangeContext), #domain_FinalCashFlowPosting{
+    source = Source,
+    destination = Destination,
+    volume = Volume,
+    details = Details,
+    exchange_context = ExchangeContext
+}).
+
 -spec finalize(cash_flow(), context(), account_map()) -> final_cash_flow() | no_return().
 finalize(CF, Context, AccountMap) ->
-    compute_postings(CF, Context, AccountMap).
+    finalize(CF, Context, AccountMap, #{}).
 
--spec compute_postings(cash_flow(), context(), account_map()) -> final_cash_flow() | no_return().
-compute_postings(CF, Context, AccountMap) ->
+-spec finalize(cash_flow(), context(), account_map(), options()) -> final_cash_flow() | no_return().
+finalize(CF, Context, AccountMap, Opts) ->
+    compute_postings(CF, Context, AccountMap, Opts).
+
+-spec compute_postings(cash_flow(), context(), account_map(), options()) -> final_cash_flow() | no_return().
+compute_postings(CF, Context, AccountMap, Opts) ->
+    ExchangeContext = maps:get(exchange_context, Opts, undefined),
     [
         ?final_posting(
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
-            compute_volume(Volume, Context),
-            Details
+            hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, compute_volume(Volume, Context)),
+            Details,
+            ExchangeContext
         )
      || ?posting(Source, Destination, Volume, Details) <- CF
     ].
@@ -125,8 +145,8 @@ resolve_account(AccountType, AccountMap) ->
 -spec revert(final_cash_flow()) -> final_cash_flow().
 revert(CF) ->
     [
-        ?final_posting(Destination, Source, Volume, revert_details(Details))
-     || ?final_posting(Source, Destination, Volume, Details) <- CF
+        ?final_posting(Destination, Source, Volume, revert_details(Details), ExchangeContext)
+     || ?final_posting(Source, Destination, Volume, Details, ExchangeContext) <- CF
     ].
 
 revert_details(undefined) ->

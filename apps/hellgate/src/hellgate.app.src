@@ -12,6 +12,7 @@
         progressor,
         hg_progressor,
         hg_proto,
+        exrates_proto,
         routing,
         cowboy,
         prometheus,
