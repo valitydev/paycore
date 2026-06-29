@@ -593,7 +593,7 @@ get_refund_created_at(#domain_InvoicePaymentRefund{created_at = CreatedAt}) ->
 
 construct_payment_info(PaymentInfo, Refund) ->
     ExchangeContext = get_injected_exchange_context(Refund),
-    ConvertedCash = maybe_convert_cash(ExchangeContext, cash(Refund)),
+    ConvertedCash = hg_currency_converter:maybe_convert_cash(ExchangeContext, cash(Refund)),
     PaymentInfo#proxy_provider_PaymentInfo{
         refund = #proxy_provider_InvoicePaymentRefund{
             id = id(Refund),
@@ -602,11 +602,6 @@ construct_payment_info(PaymentInfo, Refund) ->
             cash = construct_proxy_cash(ConvertedCash)
         }
     }.
-
-maybe_convert_cash(undefined, Cash) ->
-    Cash;
-maybe_convert_cash(ExchangeContext, Cash) ->
-    hg_currency_converter:convert_cash(ExchangeContext, Cash).
 
 construct_proxy_cash(#domain_Cash{
     amount = Amount,

@@ -85,17 +85,12 @@ compute_postings(CF, Context, AccountMap, Opts) ->
         ?final_posting(
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
-            maybe_convert_cash(ExchangeContext, compute_volume(Volume, Context)),
+            hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, compute_volume(Volume, Context)),
             Details,
             ExchangeContext
         )
      || ?posting(Source, Destination, Volume, Details) <- CF
     ].
-
-maybe_convert_cash(undefined, Cash) ->
-    Cash;
-maybe_convert_cash(ExchangeContext, Cash) ->
-    hg_currency_converter:reverse_convert_cash(ExchangeContext, Cash).
 
 -spec construct_final_account(account(), account_map()) -> final_cash_flow_account() | no_return().
 construct_final_account(AccountType, AccountMap) ->
