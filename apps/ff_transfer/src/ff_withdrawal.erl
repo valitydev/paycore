@@ -182,7 +182,7 @@
 -type invalid_withdrawal_status_error() ::
     {invalid_withdrawal_status, status()}.
 
--type action() :: sleep | continue | undefined.
+-type action() :: prg_action:t().
 
 -export_type([withdrawal/0]).
 -export_type([withdrawal_state/0]).
@@ -500,7 +500,7 @@ start_adjustment(Params, Withdrawal) ->
         {error, {unknown_adjustment, _}} ->
             do_start_adjustment(Params, Withdrawal);
         {ok, _Adjustment} ->
-            {ok, {undefined, []}}
+            {ok, {idle, []}}
     end.
 
 -spec find_adjustment(adjustment_id(), withdrawal_state()) -> {ok, adjustment()} | {error, unknown_adjustment_error()}.
@@ -575,7 +575,7 @@ format_activity(Activity) ->
 finalize_session(SessionID, SessionResult, Withdrawal) ->
     case get_session_by_id(SessionID, Withdrawal) of
         #{id := SessionID, result := SessionResult} ->
-            {ok, {undefined, []}};
+            {ok, {idle, []}};
         #{id := SessionID, result := OtherSessionResult} ->
             logger:warning("Session result mismatch - current: ~p, new: ~p", [OtherSessionResult, SessionResult]),
             {error, result_mismatch};
@@ -598,7 +598,7 @@ get_session_by_id(SessionID, Withdrawal) ->
 try_finish_session(SessionID, SessionResult, Withdrawal) ->
     case is_current_session(SessionID, Withdrawal) of
         true ->
-            {ok, {continue, [{session_finished, {SessionID, SessionResult}}]}};
+            {ok, {timeout, [{session_finished, {SessionID, SessionResult}}]}};
         false ->
             {error, old_session}
     end.
@@ -741,7 +741,7 @@ do_process_transfer(p_transfer_prepare, Withdrawal) ->
     ok = do_rollback_routing([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:prepare(Tr),
-    {continue, [{p_transfer, Ev} || Ev <- Events]};
+    {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(p_transfer_commit, Withdrawal) ->
     ok = commit_routes_limits([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
@@ -749,12 +749,12 @@ do_process_transfer(p_transfer_commit, Withdrawal) ->
     DomainRevision = final_domain_revision(Withdrawal),
     {ok, Wallet} = fetch_wallet(wallet_id(Withdrawal), party_id(Withdrawal), DomainRevision),
     ok = ff_party:wallet_log_balance(wallet_id(Withdrawal), Wallet),
-    {continue, [{p_transfer, Ev} || Ev <- Events]};
+    {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(p_transfer_cancel, Withdrawal) ->
     ok = rollback_routes_limits([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:cancel(Tr),
-    {continue, [{p_transfer, Ev} || Ev <- Events]};
+    {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(limit_check, Withdrawal) ->
     process_limit_check(Withdrawal);
 do_process_transfer(session_starting, Withdrawal) ->
@@ -774,21 +774,21 @@ do_process_transfer(rollback_routing, Withdrawal) ->
 process_routing(Withdrawal) ->
     case do_process_routing(Withdrawal) of
         {ok, [Route | _Rest]} ->
-            {continue, [
+            {timeout, [
                 {route_changed, Route}
             ]};
         {error, {route_not_found, _Rejected} = Reason} ->
             Events = process_transfer_fail(Reason, Withdrawal),
-            {continue, Events};
+            {timeout, Events};
         {error, {inconsistent_quote_route, _Data} = Reason} ->
             Events = process_transfer_fail(Reason, Withdrawal),
-            {continue, Events}
+            {timeout, Events}
     end.
 
 -spec process_rollback_routing(withdrawal_state()) -> process_result().
 process_rollback_routing(Withdrawal) ->
     ok = do_rollback_routing([], Withdrawal),
-    {undefined, []}.
+    {idle, []}.
 
 -spec do_process_routing(withdrawal_state()) -> {ok, [route()]} | {error, Reason} when
     Reason :: ff_withdrawal_routing:route_not_found() | attempt_limit_exceeded | InconsistentQuote,
@@ -905,16 +905,18 @@ process_limit_check(Withdrawal) ->
                     expected_range => Range,
                     balance => Cash
                 },
-                [{limit_check, {wallet_sender, {failed, Details}}}]
+                [{limit_check, {wallet_sender, {failed, Details}}}];
+            {error, {terms_violation, {wallet_limit, {invalid_terms, Details}}}} ->
+                [{limit_check, {wallet_sender, {failed, #{reason => invalid_terms, details => Details}}}}]
         end,
-    {continue, Events}.
+    {timeout, Events}.
 
 -spec process_p_transfer_creation(withdrawal_state()) -> process_result().
 process_p_transfer_creation(Withdrawal) ->
     FinalCashFlow = make_final_cash_flow(Withdrawal),
     PTransferID = construct_p_transfer_id(Withdrawal),
     {ok, PostingsTransferEvents} = ff_postings_transfer:create(PTransferID, FinalCashFlow),
-    {continue, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
+    {timeout, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
 
 -spec process_session_creation(withdrawal_state()) -> process_result().
 process_session_creation(Withdrawal) ->
@@ -950,7 +952,7 @@ process_session_creation(Withdrawal) ->
         dest_auth_data => AuthData
     },
     ok = create_session(ID, TransferData, SessionParams),
-    {continue, [{session_started, ID}]}.
+    {timeout, [{session_started, ID}]}.
 
 -spec construct_session_id(withdrawal_state()) -> id().
 construct_session_id(Withdrawal) ->
@@ -976,11 +978,11 @@ create_session(ID, TransferData, SessionParams) ->
 
 -spec process_session_sleep(withdrawal_state()) -> process_result().
 process_session_sleep(_Withdrawal) ->
-    {sleep, []}.
+    {suspend, []}.
 
 -spec process_transfer_finish(withdrawal_state()) -> process_result().
 process_transfer_finish(_Withdrawal) ->
-    {undefined, [{status_changed, succeeded}]}.
+    {idle, [{status_changed, succeeded}]}.
 
 -spec process_transfer_fail(fail_type(), withdrawal_state()) -> [event()].
 process_transfer_fail(FailType, Withdrawal) ->
@@ -988,11 +990,11 @@ process_transfer_fail(FailType, Withdrawal) ->
     [{status_changed, {failed, Failure}}].
 
 -spec handle_child_result(process_result(), withdrawal_state()) -> process_result().
-handle_child_result({undefined, Events} = Result, Withdrawal) ->
+handle_child_result({idle, Events} = Result, Withdrawal) ->
     NextWithdrawal = lists:foldl(fun(E, Acc) -> apply_event(E, Acc) end, Withdrawal, Events),
     case is_active(NextWithdrawal) of
         true ->
-            {continue, Events};
+            {timeout, Events};
         false ->
             DomainRevision = final_domain_revision(Withdrawal),
             {ok, Wallet} = fetch_wallet(wallet_id(Withdrawal), party_id(Withdrawal), DomainRevision),
@@ -1452,15 +1454,16 @@ is_limit_check_ok({wallet_sender, {failed, _Details}}) ->
 
 -spec validate_wallet_limits(terms(), wallet()) ->
     {ok, valid}
-    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}.
+    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}
+    | {error, {terms_violation, {wallet_limit, {invalid_terms, term()}}}}.
 validate_wallet_limits(Terms, Wallet) ->
     case ff_party:validate_wallet_limits(Terms, Wallet) of
         {ok, valid} = Result ->
             Result;
         {error, {terms_violation, {cash_range, {Cash, CashRange}}}} ->
             {error, {terms_violation, {wallet_limit, {cash_range, {Cash, CashRange}}}}};
-        {error, {invalid_terms, _Details} = Reason} ->
-            erlang:error(Reason)
+        {error, {invalid_terms, _} = Reason} ->
+            {error, {terms_violation, {wallet_limit, Reason}}}
     end.
 
 %% Adjustment validators
@@ -1661,11 +1664,11 @@ process_route_change(Withdrawal, Reason) ->
                 {error, {route_not_found, _Rejected}} ->
                     %% No more routes, return last error
                     Events = process_transfer_fail(Reason, Withdrawal),
-                    {continue, Events}
+                    {timeout, Events}
             end;
         false ->
             Events = process_transfer_fail(Reason, Withdrawal),
-            {undefined, Events}
+            {idle, Events}
     end.
 
 -spec is_failure_transient(fail_type(), withdrawal_state()) -> boolean().
@@ -1734,17 +1737,17 @@ do_process_route_change(Routes, Withdrawal, Reason) ->
     AttemptLimit = get_attempt_limit(Withdrawal),
     case ff_withdrawal_route_attempt_utils:next_route(Routes, Attempts, AttemptLimit) of
         {ok, Route} ->
-            {continue, [
+            {timeout, [
                 {route_changed, Route}
             ]};
         {error, route_not_found} ->
             %% No more routes, return last error
             Events = process_transfer_fail(Reason, Withdrawal),
-            {continue, Events};
+            {timeout, Events};
         {error, attempt_limit_exceeded} ->
             %% Attempt limit exceeded, return last error
             Events = process_transfer_fail(Reason, Withdrawal),
-            {continue, Events}
+            {timeout, Events}
     end.
 
 -spec handle_adjustment_changes(ff_adjustment:changes()) -> [event()].
@@ -1812,8 +1815,6 @@ get_quote_field(provider_id, #{route := Route}) ->
     ff_withdrawal_routing:get_provider(Route);
 get_quote_field(terminal_id, #{route := Route}) ->
     ff_withdrawal_routing:get_terminal(Route).
-
-%%
 
 -spec apply_event(event() | legacy_event(), ff_maybe:'maybe'(withdrawal_state())) -> withdrawal_state().
 apply_event(Ev, T0) ->

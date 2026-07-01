@@ -8,8 +8,8 @@
         genlib,
         ff_core,
         progressor,
-        machinery,
-        machinery_extra,
+        op_context,
+        prg_machine,
         damsel,
         fistful,
         limiter_proto

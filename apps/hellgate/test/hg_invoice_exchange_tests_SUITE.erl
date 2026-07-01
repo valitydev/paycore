@@ -77,7 +77,7 @@ init_per_suite(C) ->
     _ = hg_domain:upsert(hg_invoice_dummy_data:construct_domain_fixture()),
     PartyConfigRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
     PartyClient = {party_client:create_client(), party_client:create_context()},
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     %% все магазины рублёвые, но каждая категория роутится на терминалы с раными валютами
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(2), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
@@ -91,7 +91,7 @@ init_per_suite(C) ->
     ShopConfigRefCny = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(5), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),
-    ok = hg_context:cleanup(),
+    ok = op_context:cleanup(hellgate),
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
     ok = hg_invoice_helper:start_kv_store(SupPid),
@@ -114,7 +114,7 @@ init_per_suite(C) ->
 end_per_suite(C) ->
     _ = hg_domain:cleanup(),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_ct_helper:cleanup_progressor_namespaces(),
     _ = [application:stop(App) || App <- cfg(apps, C)],
     hg_invoice_helper:stop_kv_store(cfg(test_sup, C)),
     exit(cfg(test_sup, C), shutdown).
@@ -131,7 +131,7 @@ end_per_group(_Group, _C) ->
 init_per_testcase(_, C) ->
     ApiClient = hg_ct_helper:create_client(hg_ct_helper:cfg(root_url, C)),
     Client = hg_client_invoicing:start_link(ApiClient),
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     [
         {client, Client}
         | C

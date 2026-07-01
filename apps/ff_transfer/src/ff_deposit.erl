@@ -134,7 +134,7 @@
 -type is_negative() :: boolean().
 -type cash() :: ff_cash:cash().
 -type cash_range() :: ff_range:range(cash()).
--type action() :: machinery:action() | undefined.
+-type action() :: prg_action:t().
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type currency_id() :: ff_currency:id().
 -type external_id() :: id().
@@ -356,7 +356,7 @@ do_process_transfer(p_transfer_start, Deposit) ->
     create_p_transfer(Deposit);
 do_process_transfer(p_transfer_prepare, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:prepare/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(p_transfer_commit, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:commit/1),
     {ok, Wallet} = ff_party:get_wallet(
@@ -365,10 +365,10 @@ do_process_transfer(p_transfer_commit, Deposit) ->
         domain_revision(Deposit)
     ),
     ok = ff_party:wallet_log_balance(wallet_id(Deposit), Wallet),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(p_transfer_cancel, Deposit) ->
     {ok, Events} = ff_pipeline:with(p_transfer, Deposit, fun ff_postings_transfer:cancel/1),
-    {continue, Events};
+    {timeout, Events};
 do_process_transfer(limit_check, Deposit) ->
     process_limit_check(Deposit);
 do_process_transfer({fail, Reason}, Deposit) ->
@@ -381,7 +381,7 @@ create_p_transfer(Deposit) ->
     FinalCashFlow = make_final_cash_flow(Deposit),
     PTransferID = construct_p_transfer_id(id(Deposit)),
     {ok, PostingsTransferEvents} = ff_postings_transfer:create(PTransferID, FinalCashFlow),
-    {continue, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
+    {timeout, [{p_transfer, Ev} || Ev <- PostingsTransferEvents]}.
 
 -spec process_limit_check(deposit_state()) -> process_result().
 process_limit_check(Deposit) ->
@@ -411,18 +411,20 @@ process_limit_check(Deposit) ->
                     expected_range => Range,
                     balance => Cash
                 },
-                [{limit_check, {wallet_receiver, {failed, Details}}}]
+                [{limit_check, {wallet_receiver, {failed, Details}}}];
+            {error, {terms_violation, {wallet_limit, {invalid_terms, Details}}}} ->
+                [{limit_check, {wallet_receiver, {failed, #{reason => invalid_terms, details => Details}}}}]
         end,
-    {continue, Events}.
+    {timeout, Events}.
 
 -spec process_transfer_finish(deposit_state()) -> process_result().
 process_transfer_finish(_Deposit) ->
-    {undefined, [{status_changed, succeeded}]}.
+    {idle, [{status_changed, succeeded}]}.
 
 -spec process_transfer_fail(fail_type(), deposit_state()) -> process_result().
 process_transfer_fail(limit_check, Deposit) ->
     Failure = build_failure(limit_check, Deposit),
-    {undefined, [{status_changed, {failed, Failure}}]}.
+    {idle, [{status_changed, {failed, Failure}}]}.
 
 -spec make_final_cash_flow(deposit_state()) -> final_cash_flow().
 make_final_cash_flow(Deposit) ->
@@ -555,15 +557,16 @@ is_limit_check_ok({wallet_receiver, {failed, _Details}}) ->
 
 -spec validate_wallet_limits(terms(), wallet()) ->
     {ok, valid}
-    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}.
+    | {error, {terms_violation, {wallet_limit, {cash_range, {cash(), cash_range()}}}}}
+    | {error, {terms_violation, {wallet_limit, {invalid_terms, term()}}}}.
 validate_wallet_limits(Terms, Wallet) ->
     case ff_party:validate_wallet_limits(Terms, Wallet) of
         {ok, valid} = Result ->
             Result;
         {error, {terms_violation, {cash_range, {Cash, CashRange}}}} ->
             {error, {terms_violation, {wallet_limit, {cash_range, {Cash, CashRange}}}}};
-        {error, {invalid_terms, _Details} = Reason} ->
-            erlang:error(Reason)
+        {error, {invalid_terms, _} = Reason} ->
+            {error, {terms_violation, {wallet_limit, Reason}}}
     end.
 
 %% Helpers

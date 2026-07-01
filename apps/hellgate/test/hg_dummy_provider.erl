@@ -204,8 +204,9 @@ process_payment(?processed(), undefined, PaymentInfo, CtxOpts, _) ->
         empty_cvv ->
             %% simple workflow without 3DS
             result(?sleep(0), <<"sleeping">>);
-        preauth_3ds_offsite ->
+        Scenario when Scenario =:= preauth_3ds_offsite; Scenario =:= preauth_3ds_offsite_fail ->
             %% user interaction in sleep intent
+            reset_offsite_preauth_state(PaymentInfo),
             Uri = get_callback_url(),
             UserInteraction = ?redirect(
                 Uri,
@@ -279,10 +280,11 @@ process_payment(?processed(), <<"sleeping_with_user_interaction">>, PaymentInfo,
     Key = {get_invoice_id(PaymentInfo), get_payment_id(PaymentInfo)},
     TrxID = hg_utils:construct_complex_id([get_payment_id(PaymentInfo), get_ctx_opts_override(CtxOpts)]),
     Trx = mk_trx(TrxID, PaymentInfo),
+    MaxPending = offsite_preauth_max_pending_polls(get_payment_info_scenario(PaymentInfo)),
     case get_transaction_state(Key) of
         processed ->
             finish(success(PaymentInfo), Trx);
-        {pending, Count} when Count > 2 ->
+        {pending, Count} when is_integer(MaxPending), Count > MaxPending ->
             finish(failure(authorization_failed), undefined);
         {pending, Count} ->
             set_transaction_state(Key, {pending, Count + 1}),
@@ -612,6 +614,8 @@ get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"preauth_3ds:
     {preauth_3ds, erlang:binary_to_integer(Timeout)};
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"preauth_3ds_offsite">>}}) ->
     preauth_3ds_offsite;
+get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"preauth_3ds_offsite_fail">>}}) ->
+    preauth_3ds_offsite_fail;
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"preauth_3ds_sleep:timeout=", Timeout/binary>>}}) ->
     {preauth_3ds_sleep, erlang:binary_to_integer(Timeout)};
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"forbidden">>}}) ->
@@ -667,6 +671,7 @@ get_payment_tool_scenario({'bank_card', #domain_BankCard{token = Token} = BCard}
     | {mobile_commerce, failure}
     | {mobile_commerce, success}
     | preauth_3ds_offsite
+    | preauth_3ds_offsite_fail
     | change_cash_increase
     | change_cash_decrease
     | change_currency_and_increase
@@ -694,6 +699,7 @@ make_payment_tool(Code, PSys) when
         Code =:= no_preauth_timeout_failure orelse
         Code =:= no_preauth_suspend_default orelse
         Code =:= preauth_3ds_offsite orelse
+        Code =:= preauth_3ds_offsite_fail orelse
         Code =:= change_cash_increase orelse
         Code =:= change_cash_decrease orelse
         Code =:= forbidden orelse
@@ -893,6 +899,15 @@ set_transaction_state(Key, Value) ->
 
 get_transaction_state(Key) ->
     hg_kv_store:get(Key).
+
+offsite_preauth_max_pending_polls(preauth_3ds_offsite) ->
+    unlimited;
+offsite_preauth_max_pending_polls(_) ->
+    2.
+
+reset_offsite_preauth_state(PaymentInfo) ->
+    Key = {get_invoice_id(PaymentInfo), get_payment_id(PaymentInfo)},
+    set_transaction_state(Key, undefined).
 
 maybe_sleep(#{<<"sleep_ms">> := TimeMs}) when is_binary(TimeMs) ->
     timer:sleep(binary_to_integer(TimeMs));

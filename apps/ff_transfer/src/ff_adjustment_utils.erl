@@ -60,7 +60,7 @@
 -type adjustment() :: ff_adjustment:adjustment().
 -type event() :: ff_adjustment:event().
 -type final_cash_flow() :: ff_cash_flow:final_cash_flow().
--type action() :: machinery:action() | undefined.
+-type action() :: ff_adjustment:action().
 -type changes() :: ff_adjustment:changes().
 -type domain_revision() :: ff_domain_config:revision().
 

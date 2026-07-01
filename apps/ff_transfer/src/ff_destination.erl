@@ -214,11 +214,14 @@ is_accessible(Destination) ->
     ff_account:is_accessible(account(Destination)).
 
 -spec apply_event(event(), ff_maybe:'maybe'(destination_state())) -> destination_state().
-apply_event({created, Destination}, undefined) ->
+apply_event(Ev, State) ->
+    apply_event_(Ev, State).
+
+apply_event_({created, Destination}, undefined) ->
     Destination;
-apply_event({status_changed, S}, Destination) ->
+apply_event_({status_changed, S}, Destination) ->
     Destination#{status => S};
-apply_event({account, Ev}, #{account := Account} = Destination) ->
+apply_event_({account, Ev}, #{account := Account} = Destination) ->
     Destination#{account => ff_account:apply_event(Ev, Account)};
-apply_event({account, Ev}, Destination) ->
-    apply_event({account, Ev}, Destination#{account => undefined}).
+apply_event_({account, Ev}, Destination) ->
+    apply_event_({account, Ev}, Destination#{account => undefined}).

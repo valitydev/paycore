@@ -13,7 +13,7 @@
 
 -type withdrawal() :: ff_withdrawal:withdrawal_state() | dmsl_wthd_domain_thrift:'Withdrawal'().
 -type limit() :: limproto_limiter_thrift:'Limit'().
--type config() :: ct_suite:ct_config().
+-type config() :: ct_helper:config().
 -type id() :: binary().
 
 -spec init_per_suite(config()) -> _.

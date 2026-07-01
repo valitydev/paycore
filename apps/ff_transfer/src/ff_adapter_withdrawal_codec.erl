@@ -340,7 +340,7 @@ unmarshal(intent, {finish, #wthd_provider_FinishIntent{status = {failure, Failur
 unmarshal(intent, {sleep, #wthd_provider_SleepIntent{timer = Timer, callback_tag = Tag}}) ->
     {sleep,
         genlib_map:compact(#{
-            timer => ff_codec:unmarshal(timer, Timer),
+            timer => unmarshal_provider_timer(ff_codec:unmarshal(timer, Timer)),
             tag => Tag
         })};
 unmarshal(process_callback_result, _NotImplemented) ->
@@ -421,3 +421,32 @@ unmarshal_msgpack({arr, V}) when is_list(V) ->
     [unmarshal_msgpack(ListItem) || ListItem <- V];
 unmarshal_msgpack({obj, V}) when is_map(V) ->
     maps:fold(fun(Key, Value, Map) -> Map#{unmarshal_msgpack(Key) => unmarshal_msgpack(Value)} end, #{}, V).
+
+%% base.Timer deadline on the wire is base.Timestamp (RFC3339).
+%% prg_action:timer() accepts {deadline, calendar:datetime() | {datetime(), USec} | binary()}.
+unmarshal_provider_timer({deadline, Deadline}) when is_binary(Deadline) ->
+    {deadline, Deadline};
+unmarshal_provider_timer({deadline, {DateTime, USec}}) when is_integer(USec) ->
+    {deadline, {DateTime, USec}};
+unmarshal_provider_timer(Timer) ->
+    Timer.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec unmarshal_provider_timer_preserves_microseconds_test() -> _.
+unmarshal_provider_timer_preserves_microseconds_test() ->
+    Dt = {{2026, 6, 13}, {12, 34, 56}},
+    USec = 789000,
+    ?assertEqual(
+        {deadline, {Dt, USec}},
+        unmarshal_provider_timer({deadline, {Dt, USec}})
+    ),
+    ?assertEqual(
+        prg_action:marshal_timer({deadline, {Dt, USec}}),
+        prg_action:marshal_timer(unmarshal_provider_timer({deadline, {Dt, USec}}))
+    ).
+
+-endif.

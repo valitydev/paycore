@@ -83,7 +83,6 @@ start_processing_apps(Options) ->
         dmt_client,
         party_client,
         {fistful, [
-            {machinery_backend, progressor},
             {services, services(Options)}
         ]},
         ff_server,
@@ -150,6 +149,7 @@ start_optional_apps(_) ->
 
 setup_dominant(Config0, Options) ->
     Config1 = setup_dominant_internal(Config0, Options),
+    _ = ct_domain_config:cleanup(),
     Config2 = ct_limiter:init_per_suite(Config1),
     DomainConfig = domain_config(Config2, Options),
     _ = ct_domain_config:upsert(DomainConfig),
@@ -250,56 +250,41 @@ progressor_namespaces() ->
     #{
         'ff/source_v1' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/source_v1',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_source_machine, party_client => #{}}},
-                    schema => ff_source_machinery_schema
+                    ns => 'ff/source_v1'
                 }
             }
         },
         'ff/destination_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/destination_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_destination_machine, party_client => #{}}},
-                    schema => ff_destination_machinery_schema
+                    ns => 'ff/destination_v2'
                 }
             }
         },
         'ff/deposit_v1' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/deposit_v1',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_deposit_machine, party_client => #{}}},
-                    schema => ff_deposit_machinery_schema
+                    ns => 'ff/deposit_v1'
                 }
             }
         },
         'ff/withdrawal_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/withdrawal_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_withdrawal_machine, party_client => #{}}},
-                    schema => ff_withdrawal_machinery_schema
+                    ns => 'ff/withdrawal_v2'
                 }
             }
         },
         'ff/withdrawal/session_v2' => #{
             processor => #{
-                client => machinery_prg_backend,
+                client => prg_machine,
                 options => #{
-                    namespace => 'ff/withdrawal/session_v2',
-                    %% TODO Party client create
-                    handler => {fistful, #{handler => ff_withdrawal_session_machine, party_client => #{}}},
-                    schema => ff_withdrawal_session_machinery_schema
+                    ns => 'ff/withdrawal/session_v2'
                 }
             }
         }

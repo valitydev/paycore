@@ -65,15 +65,6 @@ init([]) ->
     {ok, Ip} = inet:parse_address(IpEnv),
     WoodyOpts = maps:with([net_opts, handler_limits], WoodyOptsEnv),
 
-    %% NOTE See 'sys.config'
-    %% TODO Refactor after namespaces params moved from progressor'
-    %% application env.
-    Backends = [
-        contruct_backend_childspec(N, H, S, PartyClient)
-     || {N, H, S} <- get_namespaces_params()
-    ],
-    ok = application:set_env(fistful, backends, maps:from_list(Backends)),
-
     Services =
         [
             {ff_withdrawal_adapter_host, ff_withdrawal_adapter_host},
@@ -107,9 +98,16 @@ init([]) ->
         )
     ),
     PartyClientSpec = party_client:child_spec(party_client, PartyClient),
+    PrgMachineSpec = prg_machine_registry:get_child_spec([
+        ff_deposit_machine,
+        ff_source_machine,
+        ff_destination_machine,
+        ff_withdrawal_machine,
+        ff_withdrawal_session_machine
+    ]),
     % TODO
     %  - Zero thoughts given while defining this strategy.
-    {ok, {#{strategy => one_for_one}, [PartyClientSpec, ServicesChildSpec]}}.
+    {ok, {#{strategy => one_for_one}, [PartyClientSpec, PrgMachineSpec, ServicesChildSpec]}}.
 
 -spec enable_health_logging(erl_health:check()) -> erl_health:check().
 enable_health_logging(Check) ->
@@ -124,36 +122,6 @@ get_prometheus_routes() ->
 get_handler(Service, Handler, WrapperOpts) ->
     {Path, ServiceSpec} = ff_services:get_service_spec(Service),
     {Path, {ServiceSpec, wrap_handler(Handler, WrapperOpts)}}.
-
--define(PROCESSOR_OPT_PATTERN(NS, Handler, Schema), #{
-    processor := #{
-        client := machinery_prg_backend,
-        options := #{
-            namespace := NS,
-            handler := {fistful, #{handler := Handler, party_client := _}},
-            schema := Schema
-        }
-    }
-}).
-
--spec get_namespaces_params() ->
-    [{machinery:namespace(), MachineryImpl :: module(), Schema :: module()}].
-get_namespaces_params() ->
-    {ok, Namespaces} = application:get_env(progressor, namespaces),
-    lists:map(
-        fun({_, ?PROCESSOR_OPT_PATTERN(NS, Handler, Schema)}) ->
-            {NS, Handler, Schema}
-        end,
-        maps:to_list(Namespaces)
-    ).
-
-contruct_backend_childspec(NS, Handler, Schema, PartyClient) ->
-    {NS,
-        {machinery_prg_backend, #{
-            namespace => NS,
-            handler => {fistful, #{handler => Handler, party_client => PartyClient}},
-            schema => Schema
-        }}}.
 
 wrap_handler(Handler, WrapperOpts) ->
     FullOpts = maps:merge(#{handler => Handler}, WrapperOpts),

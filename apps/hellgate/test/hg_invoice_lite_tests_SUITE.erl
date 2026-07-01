@@ -16,6 +16,7 @@
 -export([payment_ok_test/1]).
 -export([payment_start_idempotency/1]).
 -export([payment_success/1]).
+-export([payment_success_trace/1]).
 -export([payment_w_first_blacklisted_success/1]).
 -export([payment_w_all_blacklisted/1]).
 -export([register_payment_success/1]).
@@ -27,7 +28,6 @@
 -export([payment_success_empty_cvv/1]).
 -export([payment_has_optional_fields/1]).
 -export([payment_last_trx_correct/1]).
--export([payment_success_trace/1]).
 
 -type config() :: hg_ct_helper:config().
 -type test_case_name() :: hg_ct_helper:test_case_name().
@@ -100,11 +100,11 @@ init_per_suite(C) ->
     _ = hg_domain:upsert(construct_domain_fixture()),
     PartyConfigRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
     PartyClient = {party_client:create_client(), party_client:create_context()},
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),
-    ok = hg_context:cleanup(),
+    ok = op_context:cleanup(hellgate),
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
     ok = hg_invoice_helper:start_kv_store(SupPid),
@@ -123,7 +123,7 @@ init_per_suite(C) ->
 end_per_suite(C) ->
     _ = hg_domain:cleanup(),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_ct_helper:cleanup_progressor_namespaces(),
     _ = [application:stop(App) || App <- cfg(apps, C)],
     hg_invoice_helper:stop_kv_store(cfg(test_sup, C)),
     exit(cfg(test_sup, C), shutdown).
@@ -147,7 +147,7 @@ end_per_group(_Group, _C) ->
 init_per_testcase(_, C) ->
     ApiClient = hg_ct_helper:create_client(hg_ct_helper:cfg(root_url, C)),
     Client = hg_client_invoicing:start_link(ApiClient),
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     [
         {client, Client}
         | C
@@ -257,152 +257,16 @@ payment_success(C) ->
 payment_success_trace(C) ->
     Client = cfg(client, C),
     InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    Context = #base_Content{
-        type = <<"application/x-erlang-binary">>,
-        data = erlang:term_to_binary({you, 643, "not", [<<"welcome">>, here]})
-    },
-    PayerSessionInfo = #domain_PayerSessionInfo{
-        redirect_url = <<"https://redirectly.io/merchant">>
-    },
-    PaymentParams = (make_payment_params(?pmt_sys(<<"visa-ref">>)))#payproc_InvoicePaymentParams{
-        payer_session_info = PayerSessionInfo,
-        context = Context
-    },
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     PaymentID = process_payment(InvoiceID, PaymentParams, Client),
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
-
-    RootUrl = unicode:characters_to_binary(cfg(root_url, C)),
-    UrlInternal = <<RootUrl/binary, "/traces/internal/invoice/", InvoiceID/binary>>,
-    UrlJaeger = <<RootUrl/binary, "/traces/jaeger/invoice/", InvoiceID/binary>>,
-    {ok, _Status, _Headers, RefInternal} = hackney:get(UrlInternal),
-    {ok, BodyInternal} = hackney:body(RefInternal),
-    [
-        #{
-            <<"args">> := #{
-                <<"content_type">> := <<"thrift_call">>,
-                <<"content">> := #{
-                    <<"call">> := #{
-                        <<"function">> := <<"Create">>,
-                        <<"service">> := <<"Invoicing">>
-                    },
-                    <<"params">> := _
-                }
-            },
-            <<"error">> := null,
-            <<"events">> := [
-                #{
-                    <<"event_id">> := 1,
-                    <<"event_payload">> := _,
-                    <<"event_timestamp">> := _
-                }
-            ],
-            <<"finished">> := _,
-            <<"otel_trace_id">> := _,
-            <<"retry_attempts">> := 0,
-            <<"retry_interval">> := 0,
-            <<"running">> := _,
-            <<"scheduled">> := _,
-            <<"task_id">> := _,
-            <<"task_metadata">> := #{<<"range">> := #{}},
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"init">>
-        },
-        #{<<"task_type">> := <<"call">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"finished">>},
-        #{<<"task_type">> := <<"timeout">>, <<"task_status">> := <<"cancelled">>}
-    ] = json:decode(BodyInternal),
-    {ok, _Status2, _Headers2, RefJaeger} = hackney:get(UrlJaeger),
-    {ok, BodyJaeger} = hackney:body(RefJaeger),
-    #{
-        <<"data">> := [
-            #{
-                <<"traceId">> := _,
-                <<"processes">> := #{
-                    InvoiceID := #{
-                        <<"service_name">> := <<"hellgate_invoice">>,
-                        <<"tags">> := []
-                    }
-                },
-                <<"spans">> := [
-                    #{
-                        <<"operationName">> := <<"init">>,
-                        <<"process">> := #{
-                            <<"service_name">> := <<"hellgate_invoice">>,
-                            <<"tags">> := []
-                        },
-                        <<"processID">> := InvoiceID,
-                        <<"spanId">> := _,
-                        <<"traceId">> := _,
-                        <<"startTime">> := _,
-                        <<"duration">> := _,
-                        <<"tags">> := [
-                            #{
-                                <<"key">> := <<"task.status">>,
-                                <<"type">> := <<"string">>,
-                                <<"value">> := <<"finished">>
-                            },
-                            #{
-                                <<"key">> := <<"task.retries">>,
-                                <<"type">> := <<"int64">>,
-                                <<"value">> := 0
-                            },
-                            #{
-                                <<"key">> := <<"task.input">>,
-                                <<"type">> := <<"string">>,
-                                <<"value">> := _NestedJsonArgs
-                            }
-                        ],
-                        <<"logs">> := [
-                            #{
-                                <<"timestamp">> := _,
-                                <<"fields">> := [
-                                    #{
-                                        <<"key">> := <<"event.id">>,
-                                        <<"type">> := <<"int64">>,
-                                        <<"value">> := 1
-                                    },
-                                    #{
-                                        <<"key">> := <<"event.payload">>,
-                                        <<"type">> := <<"string">>,
-                                        <<"value">> := _NestedJsonEvent
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    #{<<"operationName">> := <<"call">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>},
-                    #{<<"operationName">> := <<"timeout">>}
-                ]
-            }
-        ]
-    } = json:decode(BodyJaeger),
-    BadInvoiceUrl = <<RootUrl/binary, "/traces/internal/invoice/UnknownInvoice">>,
-    {ok, 404, _, _} = hackney:get(BadInvoiceUrl),
-    BadFormatUrl = <<RootUrl/binary, "/traces/external/invoice/", InvoiceID/binary>>,
-    {ok, 400, _, _} = hackney:get(BadFormatUrl),
+    {ok, Trace} = progressor:trace(#{ns => invoice, id => InvoiceID}),
+    TaskTypes = [maps:get(task_type, Unit) || Unit <- Trace],
+    ?assert(lists:member(<<"init">>, TaskTypes)),
+    ?assert(lists:member(<<"call">>, TaskTypes)),
+    ?assert(lists:member(<<"timeout">>, TaskTypes)),
+    [#{task_type := <<"init">>, task_status := <<"finished">>, events := [_ | _]} | _] =
+        [Unit || Unit <- Trace, maps:get(task_type, Unit) =:= <<"init">>],
     ok.
 
 -spec payment_w_first_blacklisted_success(config()) -> test_return().

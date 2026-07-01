@@ -4,14 +4,21 @@
 
 -module(ff_deposit_machine).
 
--behaviour(machinery).
+-behaviour(prg_machine).
+
+-define(EVENT_FORMAT_VERSION, 1).
 
 %% API
 
--type id() :: machinery:id().
+-type id() :: prg_machine:id().
 -type change() :: ff_deposit:event().
--type event() :: {integer(), ff_machine:timestamped_event(change())}.
--type st() :: ff_machine:st(deposit()).
+-type timestamp() :: prg_machine:timestamp().
+-type timestamped_event(T) :: {ev, timestamp(), T}.
+-type event() :: {integer(), timestamped_event(change())}.
+-type st() :: #{
+    model := deposit(),
+    ctx := ctx()
+}.
 -type deposit() :: ff_deposit:deposit_state().
 -type external_id() :: id().
 -type event_range() :: {After :: non_neg_integer() | undefined, Limit :: non_neg_integer() | undefined}.
@@ -23,6 +30,7 @@
 
 -type repair_error() :: ff_repair:repair_error().
 -type repair_response() :: ff_repair:repair_response().
+-type repair_call_error() :: ff_machine_lib:repair_call_error().
 
 -type unknown_deposit_error() ::
     {unknown_deposit, id()}.
@@ -37,6 +45,7 @@
 -export_type([external_id/0]).
 -export_type([create_error/0]).
 -export_type([repair_error/0]).
+-export_type([repair_call_error/0]).
 
 %% API
 
@@ -51,21 +60,25 @@
 -export([deposit/1]).
 -export([ctx/1]).
 
-%% Machinery
+%% prg_machine
 
--export([init/4]).
--export([process_timeout/3]).
--export([process_repair/4]).
--export([process_call/4]).
--export([process_notification/4]).
-
-%% Pipeline
-
--import(ff_pipeline, [do/1, unwrap/1]).
+-export([namespace/0]).
+-export([init/2]).
+-export([process_signal/2]).
+-export([process_call/2]).
+-export([process_repair/2]).
+-export([process_notification/2]).
+-export([marshal_event_body/2]).
+-export([unmarshal_event_body/1]).
+-export([marshal_aux_state/1]).
+-export([unmarshal_aux_state/1]).
+-export([apply_event/4]).
 
 %% Internal types
 
 -type ctx() :: ff_entity_context:context().
+-type machine() :: prg_machine:machine().
+-type prg_result() :: prg_machine:result().
 
 -define(NS, 'ff/deposit_v1').
 
@@ -75,11 +88,7 @@
     ok
     | {error, ff_deposit:create_error() | exists}.
 create(Params, Ctx) ->
-    do(fun() ->
-        #{id := ID} = Params,
-        Events = unwrap(ff_deposit:create(Params)),
-        unwrap(machinery:start(?NS, ID, {Events, Ctx}, backend()))
-    end).
+    ff_machine_lib:create(?NS, fun ff_deposit:create/1, Params, Ctx).
 
 -spec get(id()) ->
     {ok, st()}
@@ -91,85 +100,81 @@ get(ID) ->
     {ok, st()}
     | {error, unknown_deposit_error()}.
 get(ID, {After, Limit}) ->
-    case ff_machine:get(ff_deposit, ?NS, ID, {After, Limit, forward}) of
-        {ok, _Machine} = Result ->
-            Result;
-        {error, notfound} ->
-            {error, {unknown_deposit, ID}}
-    end.
+    ff_machine_lib:get(?NS, ID, {After, Limit}, ?MODULE, {unknown_deposit, ID}).
 
 -spec events(id(), event_range()) ->
     {ok, [event()]}
     | {error, unknown_deposit_error()}.
 events(ID, {After, Limit}) ->
-    case ff_machine:history(ff_deposit, ?NS, ID, {After, Limit, forward}) of
-        {ok, History} ->
-            {ok, [{EventID, TsEv} || {EventID, _, TsEv} <- History]};
-        {error, notfound} ->
-            {error, {unknown_deposit, ID}}
-    end.
+    ff_machine_lib:events(?NS, ID, {After, Limit}, {unknown_deposit, ID}).
 
 -spec repair(id(), ff_repair:scenario()) ->
-    {ok, repair_response()} | {error, notfound | working | {failed, repair_error()}}.
+    {ok, repair_response()} | {error, repair_call_error()}.
 repair(ID, Scenario) ->
-    machinery:repair(?NS, ID, Scenario, backend()).
+    ff_machine_lib:repair(?NS, ID, Scenario).
 
 %% Accessors
 
 -spec deposit(st()) -> deposit().
-deposit(St) ->
-    ff_machine:model(St).
+deposit(#{model := Model}) ->
+    Model.
 
 -spec ctx(st()) -> ctx().
-ctx(St) ->
-    ff_machine:ctx(St).
+ctx(#{ctx := Ctx}) ->
+    Ctx.
 
-%% Machinery
+%% prg_machine
 
--type machine() :: ff_machine:machine(event()).
--type result() :: ff_machine:result(event()).
--type handler_opts() :: machinery:handler_opts(_).
--type handler_args() :: machinery:handler_args(_).
+-spec namespace() -> prg_machine:namespace().
+namespace() ->
+    ?NS.
 
--spec init({[event()], ctx()}, machine(), handler_args(), handler_opts()) -> result().
-init({Events, Ctx}, #{}, _, _Opts) ->
+-spec init({[change()], ctx()}, machine()) -> prg_result().
+init({Events, Ctx}, _Machine) ->
     #{
-        events => ff_machine:emit_events(Events),
-        action => continue,
-        aux_state => #{ctx => Ctx}
+        events => Events,
+        action => timeout,
+        auxst => #{ctx => Ctx}
     }.
 
--spec process_timeout(machine(), handler_args(), handler_opts()) -> result().
-process_timeout(Machine, _, _Opts) ->
-    St = ff_machine:collapse(ff_deposit, Machine),
-    Deposit = deposit(St),
-    process_result(ff_deposit:process_transfer(Deposit)).
+-spec process_signal(prg_machine:signal(), machine()) -> prg_result().
+process_signal(timeout, Machine) ->
+    Deposit = prg_machine:collapse(?MODULE, Machine),
+    ff_machine_lib:to_prg_result(ff_deposit:process_transfer(Deposit)).
 
--spec process_call(_CallArgs, machine(), handler_args(), handler_opts()) -> no_return().
-process_call(CallArgs, _Machine, _, _Opts) ->
+-spec process_call(term(), machine()) -> no_return().
+process_call(CallArgs, _Machine) ->
     erlang:error({unexpected_call, CallArgs}).
 
--spec process_repair(ff_repair:scenario(), machine(), handler_args(), handler_opts()) ->
-    {ok, {repair_response(), result()}} | {error, repair_error()}.
-process_repair(Scenario, Machine, _Args, _Opts) ->
-    ff_repair:apply_scenario(ff_deposit, Machine, Scenario).
+-spec process_repair(ff_repair:scenario(), machine()) -> prg_result() | {error, term()}.
+process_repair(Scenario, Machine) ->
+    ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
 
--spec process_notification(_, machine(), handler_args(), handler_opts()) -> result() | no_return().
-process_notification(_Args, _Machine, _HandlerArgs, _Opts) ->
+-spec process_notification(prg_machine:args(), machine()) -> prg_result().
+process_notification(_Args, _Machine) ->
     #{}.
 
-%% Internals
+-spec apply_event(
+    prg_machine:event_id(),
+    prg_machine:timestamp(),
+    prg_machine:event_body(),
+    term()
+) -> term().
+apply_event(_EventID, _Ts, Body, Model) ->
+    ff_deposit:apply_event(Body, Model).
 
-backend() ->
-    fistful:backend(?NS).
+-spec marshal_event_body(prg_machine:timestamp(), prg_machine:event_body()) -> {pos_integer(), binary()}.
+marshal_event_body(Timestamp, Body) ->
+    ff_machine_lib:marshal_event_body(deposit, ?EVENT_FORMAT_VERSION, Body, Timestamp).
 
-process_result({Action, Events}) ->
-    genlib_map:compact(#{
-        events => set_events(Events),
-        action => Action
-    }).
+-spec unmarshal_event_body(binary()) -> prg_machine:event_body().
+unmarshal_event_body(Payload) ->
+    ff_machine_lib:unmarshal_event_body(deposit, Payload).
 
-set_events([]) ->
-    undefined;
-set_events(Events) ->
-    ff_machine:emit_events(Events).
+-spec marshal_aux_state(term()) -> binary().
+marshal_aux_state(AuxSt) ->
+    ff_machine_lib:marshal_aux_state(AuxSt).
+
+-spec unmarshal_aux_state(binary()) -> term().
+unmarshal_aux_state(Payload) when is_binary(Payload) ->
+    ff_machine_lib:unmarshal_aux_state(Payload).

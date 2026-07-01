@@ -7,13 +7,13 @@
 -export([create_binding/4]).
 
 -type tag() :: dmsl_base_thrift:'Tag'().
--type ns() :: hg_machine:ns().
+-type ns() :: prg_machine:namespace().
 -type entity_id() :: dmsl_base_thrift:'ID'().
--type machine_id() :: hg_machine:id().
+-type machine_id() :: prg_machine:id().
 
 -spec get_binding(ns(), tag()) -> {ok, entity_id(), machine_id()} | {error, notfound}.
 get_binding(NS, Tag) ->
-    WoodyContext = hg_context:get_woody_context(hg_context:load()),
+    WoodyContext = op_context:get_woody_context(op_context:load(op_context:key(hellgate))),
     case bender_client:get_internal_id(tag_to_external_id(NS, Tag), WoodyContext) of
         {ok, EntityID} ->
             {ok, EntityID, EntityID};
@@ -34,7 +34,7 @@ create_binding(NS, Tag, EntityID, MachineID) ->
 %%
 
 create_binding_(NS, Tag, EntityID, Context) ->
-    WoodyContext = hg_context:get_woody_context(hg_context:load()),
+    WoodyContext = op_context:get_woody_context(op_context:load(op_context:key(hellgate))),
     case bender_client:gen_constant(tag_to_external_id(NS, Tag), EntityID, WoodyContext, Context) of
         {ok, EntityID} ->
             ok;
@@ -43,4 +43,5 @@ create_binding_(NS, Tag, EntityID, Context) ->
     end.
 
 tag_to_external_id(NS, Tag) ->
-    <<?BENDER_NS/binary, "-", NS/binary, "-", Tag/binary>>.
+    BinNS = atom_to_binary(NS, utf8),
+    <<?BENDER_NS/binary, "-", BinNS/binary, "-", Tag/binary>>.

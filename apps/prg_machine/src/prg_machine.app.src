@@ -1,0 +1,18 @@
+{application, prg_machine, [
+    {description, "Unified progressor machine runtime for HG and FF"},
+    {vsn, "0.1.0"},
+    {registered, [prg_machine_registry]},
+    {applications, [
+        kernel,
+        stdlib,
+        genlib,
+        woody,
+        scoper,
+        progressor,
+        op_context
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

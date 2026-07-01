@@ -541,14 +541,14 @@ init_per_suite(C) ->
 
     _BaseRevision = hg_domain:upsert(construct_domain_fixture(BaseLimitsRevision)),
 
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     ShopConfigRef = hg_ct_helper:create_party_and_shop(
         PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient
     ),
     Shop2ConfigRef = hg_ct_helper:create_party_and_shop(
         Party2ConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), PartyClient2
     ),
-    ok = hg_context:cleanup(),
+    ok = op_context:cleanup(hellgate),
 
     {ok, SupPid} = supervisor:start_link(?MODULE, []),
     _ = unlink(SupPid),
@@ -575,7 +575,7 @@ init_per_suite(C) ->
 end_per_suite(C) ->
     _ = hg_domain:cleanup(),
     _ = application:stop(progressor),
-    _ = hg_progressor:cleanup(),
+    _ = hg_ct_helper:cleanup_progressor_namespaces(),
     _ = [application:stop(App) || App <- cfg(apps, C)],
     _ = hg_invoice_helper:stop_kv_store(cfg(test_sup, C)),
     exit(cfg(test_sup, C), shutdown).
@@ -764,7 +764,7 @@ init_per_testcase_(Name, C) ->
     ApiClient = hg_ct_helper:create_client(cfg(root_url, C)),
     Client = hg_client_invoicing:start_link(ApiClient),
     ClientTpl = hg_client_invoice_templating:start_link(ApiClient),
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     [{client, Client}, {client_tpl, ClientTpl} | trace_testcase(Name, C)].
 
 trace_testcase(Name, C) ->
@@ -783,7 +783,7 @@ end_per_testcase(repair_fail_cash_flow_building_succeeded, C) ->
     end_per_testcase(default, C);
 end_per_testcase(_Name, C) ->
     ok = maybe_end_trace(C),
-    ok = hg_context:cleanup(),
+    ok = op_context:cleanup(hellgate),
     _ =
         case cfg(original_domain_revision, C) of
             Revision when is_integer(Revision) ->
@@ -5625,7 +5625,7 @@ payment_with_offsite_preauth_success(C) ->
 payment_with_offsite_preauth_failed(C) ->
     Client = cfg(client, C),
     InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(3), 42000, C),
-    {PaymentTool, Session} = hg_dummy_provider:make_payment_tool(preauth_3ds_offsite, ?pmt_sys(<<"jcb-ref">>)),
+    {PaymentTool, Session} = hg_dummy_provider:make_payment_tool(preauth_3ds_offsite_fail, ?pmt_sys(<<"jcb-ref">>)),
     PaymentParams = make_payment_params(PaymentTool, Session, instant),
     PaymentID = start_payment(InvoiceID, PaymentParams, Client),
     _UserInteraction = await_payment_process_interaction(InvoiceID, PaymentID, Client),
@@ -6161,7 +6161,7 @@ init_route_cascading_group(C1) ->
     PartyConfigRef = cfg(party_config_ref, C1),
     PartyClient = cfg(party_client, C1),
     Revision = hg_domain:head(),
-    ok = hg_context:save(hg_context:create()),
+    ok = op_context:save(op_context:key(hellgate), op_context:create()),
     _ = hg_domain:upsert(cascade_fixture_pre_shop_create(Revision, C1)),
     C2 = [
         {
@@ -6256,7 +6256,7 @@ init_route_cascading_group(C1) ->
         }
         | C1
     ],
-    ok = hg_context:cleanup(),
+    ok = op_context:cleanup(hellgate),
     _ = hg_domain:upsert(cascade_fixture(Revision, C2)),
     [{base_limits_domain_revision, Revision} | C2].
 

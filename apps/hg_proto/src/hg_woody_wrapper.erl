@@ -30,7 +30,7 @@ call(ServiceName, Function, Args, Opts) ->
 -spec call(atom(), woody:func(), woody:args(), client_opts(), woody_deadline:deadline()) -> term().
 call(ServiceName, Function, Args, Opts, Deadline) ->
     Service = get_service_modname(ServiceName),
-    Context = hg_context:get_woody_context(hg_context:load()),
+    Context = op_context:get_woody_context(op_context:load(op_context:key(hellgate))),
     Request = {Service, Function, Args},
     woody_client:call(
         Request,

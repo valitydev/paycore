@@ -2,6 +2,7 @@
 
 -export([apply_scenario/3]).
 -export([apply_scenario/4]).
+-export([to_prg_machine/1]).
 
 %% Types
 
@@ -11,13 +12,22 @@
 
 -type scenario_id() :: atom().
 -type scenario_args() :: any().
--type scenario_result(Event, AuxState) :: machinery:result(Event, AuxState).
--type scenario_result() :: scenario_result(model_event(), model_aux_state()).
--type scenario_error() :: machinery:error(any()).
--type scenario_response() :: machinery:response(any()).
+
+-type timestamped_event(Body) :: {ev, prg_machine:timestamp(), Body}.
+
+-type repair_result() :: #{
+    events := [timestamped_event(model_event())],
+    action => prg_action:t(),
+    aux_state => model_aux_state()
+}.
+
+-type scenario_result() :: repair_result().
+-type scenario_result(_Event, _AuxState) :: repair_result().
+-type scenario_error() :: term().
+-type scenario_response() :: ok | term().
 
 -type processor() :: fun(
-    (scenario_args(), machine()) -> {ok, {scenario_response(), scenario_result()}} | {error, scenario_error()}
+    (scenario_args(), machine()) -> {ok, {scenario_response(), repair_result()}} | {error, scenario_error()}
 ).
 
 -type processors() :: #{
@@ -50,14 +60,19 @@
 -export_type([repair_error/0]).
 -export_type([repair_response/0]).
 -export_type([invalid_result_error/0]).
+-export_type([machine/0]).
 
 %% Internal types
 
 -type model_event() :: any().
 -type model_aux_state() :: any().
--type event() :: ff_machine:timestamped_event(model_event()).
--type result() :: machinery:result(event(), model_aux_state()).
--type machine() :: ff_machine:machine(event()).
+-type result() :: repair_result().
+-type machine() :: #{
+    namespace := prg_machine:namespace(),
+    id := prg_machine:id(),
+    history := [{pos_integer(), timestamped_event(model_event())}],
+    aux_state := model_aux_state()
+}.
 
 %% Pipeline
 
@@ -106,21 +121,39 @@ add_default_processors(Processor) ->
     maps:merge(Default, Processor).
 
 -spec apply_processor(processor(), scenario_args(), machine()) ->
-    {ok, {scenario_response(), ff_machine:result(event())}} | {error, scenario_error()}.
+    {ok, {scenario_response(), repair_result()}} | {error, scenario_error()}.
 apply_processor(Processor, Args, Machine) ->
     do(fun() ->
         {Response, #{events := Events} = Result} = unwrap(Processor(Args, Machine)),
-        {Response, Result#{events => ff_machine:emit_events(Events)}}
+        {Response, Result#{events => prg_machine:emit_events(Events)}}
     end).
 
+-spec to_prg_machine(machine()) -> prg_machine:machine().
+to_prg_machine(#{namespace := NS, id := ID, history := History, aux_state := AuxSt}) ->
+    #{
+        namespace => NS,
+        id => ID,
+        history => repair_history_to_prg(History),
+        aux_state => AuxSt
+    }.
+
 -spec validate_result(module(), machine(), result()) -> {ok, valid} | {error, invalid_result_error()}.
-validate_result(Mod, #{history := History} = Machine, #{events := NewEvents}) ->
-    HistoryLen = erlang:length(History),
-    NewEventsLen = erlang:length(NewEvents),
+validate_result(Mod, RepairMachine, #{events := NewEvents}) ->
+    #{history := RepairHistory, aux_state := AuxSt} = RepairMachine,
+    PrgHistory0 = repair_history_to_prg(RepairHistory),
+    HistoryLen = length(PrgHistory0),
+    NewEventsLen = length(NewEvents),
     IDs = lists:seq(HistoryLen + 1, HistoryLen + NewEventsLen),
-    NewHistory = [{ID, machinery_time:now(), Event} || {ID, Event} <- lists:zip(IDs, NewEvents)],
+    PrgNewHistory = [
+        {EventID, Ts, Body}
+     || {EventID, {ev, Ts, Body}} <- lists:zip(IDs, NewEvents)
+    ],
+    Machine = (to_prg_machine(RepairMachine))#{
+        history => PrgHistory0 ++ PrgNewHistory,
+        aux_state => AuxSt
+    },
     try
-        _ = ff_machine:collapse(Mod, Machine#{history => History ++ NewHistory}),
+        _ = prg_machine:collapse(Mod, Machine),
         {ok, valid}
     catch
         error:Error:Stack ->
@@ -131,6 +164,9 @@ validate_result(Mod, #{history := History} = Machine, #{events := NewEvents}) ->
             }),
             {error, unexpected_failure}
     end.
+
+repair_history_to_prg(History) ->
+    [{ID, Ts, Body} || {ID, {ev, Ts, Body}} <- History].
 
 -spec add_events(scenario_result(), machine()) -> {ok, {ok, scenario_result()}}.
 add_events(Result, _Machine) ->
