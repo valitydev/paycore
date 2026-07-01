@@ -185,10 +185,12 @@ marshal(
     ExpDate = maps:get(exp_date, BankCard, undefined),
     PaymentSystem = maps:get(payment_system, BankCard, undefined),
     IssuerCountry = maps:get(issuer_country, BankCard, undefined),
+    BankName = maps:get(bank_name, BankCard, undefined),
     {bank_card, #domain_BankCard{
         token = Token,
         payment_system = maybe_marshal(payment_system, PaymentSystem),
         issuer_country = IssuerCountry,
+        bank_name = BankName,
         bin = BIN,
         last_digits = LastDigits,
         cardholder_name = CardHolderName,

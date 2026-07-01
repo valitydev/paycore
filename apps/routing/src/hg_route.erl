@@ -13,6 +13,8 @@
 -export([set_availability/3]).
 -export([set_conversion/3]).
 -export([set_priority/2]).
+-export([set_rejection_reason/2]).
+-export([set_exchange_context/2]).
 
 -export([route_data/1]).
 -export([terminal_ref/1]).
@@ -25,7 +27,7 @@
 -export([fd_score/1]).
 -export([blacklisted/1]).
 -export([rejection_reason/1]).
--export([set_rejection_reason/2]).
+-export([exchange_context/1]).
 
 -export([score/1]).
 -export([equal/2]).
@@ -52,7 +54,8 @@
     route_data := route_data(),
     pin_data => pin_data(),
     fd_overrides => fd_overrides(),
-    rejection_reason => route_rejection_reason() | undefined
+    rejection_reason => route_rejection_reason(),
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type fd_score() :: #{
@@ -167,6 +170,18 @@ set_conversion(C, V, #{route_data := Data = #{fd_score := Score}} = R) ->
 set_priority(V, #{route_data := Data} = R) ->
     R#{route_data => Data#{priority => V}}.
 
+-spec set_rejection_reason(route_rejection_reason(), t()) ->
+    t().
+set_rejection_reason(Reason, R) ->
+    R#{rejection_reason => Reason}.
+
+-spec set_exchange_context(hg_invoice_payment:exchange_context() | undefined, t()) ->
+    t().
+set_exchange_context(undefined, R) ->
+    R;
+set_exchange_context(V, R) ->
+    R#{exchange_context => V}.
+
 -spec provider_ref(t()) -> provider_ref().
 provider_ref(#{provider_ref := Ref}) ->
     Ref.
@@ -215,16 +230,17 @@ blacklisted(_) ->
     0.
 
 -spec rejection_reason(t()) ->
-    route_rejection_reason().
+    route_rejection_reason() | undefined.
 rejection_reason(#{rejection_reason := V}) ->
     V;
 rejection_reason(_) ->
     undefined.
 
--spec set_rejection_reason(route_rejection_reason(), t()) ->
-    t().
-set_rejection_reason(Reason, R) ->
-    R#{rejection_reason => Reason}.
+-spec exchange_context(t()) -> hg_invoice_payment:exchange_context() | undefined.
+exchange_context(#{exchange_context := V}) ->
+    V;
+exchange_context(_) ->
+    undefined.
 
 -spec score(t()) -> score().
 score(R) ->

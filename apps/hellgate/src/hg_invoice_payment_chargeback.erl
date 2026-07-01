@@ -420,6 +420,7 @@ build_chargeback_final_cash_flow(State, Opts) ->
     Body = get_body(State),
     Payment = get_opts_payment(Opts),
     Invoice = get_opts_invoice(Opts),
+    ExchangeContext = get_opts_exchange_context(Opts),
     Route = get_opts_route(Opts),
     Party = get_opts_party(Opts),
     PartyConfigRef = get_opts_party_config_ref(Opts),
@@ -432,6 +433,7 @@ build_chargeback_final_cash_flow(State, Opts) ->
     ServiceCashFlow = get_chargeback_service_cash_flow(ServiceTerms),
     ProviderCashFlow = get_chargeback_provider_cash_flow(ProviderTerms),
     ProviderFees = collect_chargeback_provider_fees(ProviderTerms),
+    ProviderOpts = genlib_map:compact(#{exchange_context => ExchangeContext}),
     PaymentInstitutionRef = Shop#domain_ShopConfig.payment_institution,
     PaymentInst = hg_payment_institution:compute_payment_institution(PaymentInstitutionRef, VS, Revision),
     Provider = get_route_provider(Route, Revision),
@@ -449,7 +451,7 @@ build_chargeback_final_cash_flow(State, Opts) ->
     ServiceContext = build_service_cash_flow_context(State),
     ProviderContext = build_provider_cash_flow_context(State, ProviderFees),
     ServiceFinalCF = hg_cashflow:finalize(ServiceCashFlow, ServiceContext, AccountMap),
-    ProviderFinalCF = hg_cashflow:finalize(ProviderCashFlow, ProviderContext, AccountMap),
+    ProviderFinalCF = hg_cashflow:finalize(ProviderCashFlow, ProviderContext, AccountMap, ProviderOpts),
     ServiceFinalCF ++ ProviderFinalCF.
 
 build_service_cash_flow_context(State) ->
@@ -732,6 +734,9 @@ get_opts_payment_state(#{payment_state := PaymentState}) ->
 
 get_opts_payment(#{payment_state := PaymentState}) ->
     hg_invoice_payment:get_payment(PaymentState).
+
+get_opts_exchange_context(#{payment_state := PaymentState}) ->
+    hg_invoice_payment:get_exchange_context(PaymentState).
 
 get_opts_route(#{payment_state := PaymentState}) ->
     hg_invoice_payment:get_route(PaymentState).

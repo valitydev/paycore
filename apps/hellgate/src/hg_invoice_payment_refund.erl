@@ -73,6 +73,7 @@
 
 -export([process/2]).
 -export([process_callback/3]).
+-export([process_callback/4]).
 -export([deduce_activity/1]).
 
 %% Internal types
@@ -124,7 +125,8 @@
     invoice_id := invoice_id(),
     payment_id := payment_id(),
     repair_scenario => repair_scenario(),
-    payment_info => payment_info()
+    payment_info => payment_info(),
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type options() :: #{
@@ -135,7 +137,9 @@
 
     payment => payment(),
     repair_scenario => repair_scenario(),
-    payment_info => payment_info()
+    payment_info => payment_info(),
+
+    exchange_context => hg_invoice_payment:exchange_context()
 }.
 
 -type repair_scenario() :: {result, proxy_result()}.
@@ -224,6 +228,11 @@ process(Options, Refund0) ->
 
 -spec process_callback(callback(), payment_info(), t()) -> {callback_response(), machine_result()}.
 process_callback(Payload, PaymentInfo0, Refund) ->
+    process_callback(Payload, PaymentInfo0, Refund, #{}).
+
+-spec process_callback(callback(), payment_info(), t(), options()) -> {callback_response(), machine_result()}.
+process_callback(Payload, PaymentInfo0, Refund0, Options) ->
+    Refund = Refund0#{injected_context => maps:with([exchange_context], Options)},
     PaymentInfo1 = construct_payment_info(PaymentInfo0, Refund),
     Session0 = hg_session:set_payment_info(PaymentInfo1, session(Refund)),
     {Response, {Result, Session1}} = hg_session:process_callback(Payload, Session0),
@@ -507,7 +516,8 @@ inject_context(Options, Refund) ->
         invoice_id => InvoiceID,
         payment_id => PaymentID,
         repair_scenario => maps:get(repair_scenario, Options, undefined),
-        payment_info => maps:get(payment_info, Options, undefined)
+        payment_info => maps:get(payment_info, Options, undefined),
+        exchange_context => maps:get(exchange_context, Options, undefined)
     }),
     Refund#{injected_context => Context}.
 
@@ -520,6 +530,7 @@ get_injected_invoice_id(#{injected_context := #{invoice_id := V}}) -> V.
 get_injected_payment_id(#{injected_context := #{payment_id := V}}) -> V.
 get_injected_repair_scenario(#{injected_context := Context}) -> maps:get(repair_scenario, Context, undefined).
 get_injected_payment_info(#{injected_context := Context}) -> maps:get(payment_info, Context, undefined).
+get_injected_exchange_context(#{injected_context := Context}) -> maps:get(exchange_context, Context, undefined).
 
 %% Event utils
 
@@ -581,12 +592,14 @@ get_refund_created_at(#domain_InvoicePaymentRefund{created_at = CreatedAt}) ->
     CreatedAt.
 
 construct_payment_info(PaymentInfo, Refund) ->
+    ExchangeContext = get_injected_exchange_context(Refund),
+    ConvertedCash = hg_currency_converter:maybe_convert_cash(ExchangeContext, cash(Refund)),
     PaymentInfo#proxy_provider_PaymentInfo{
         refund = #proxy_provider_InvoicePaymentRefund{
             id = id(Refund),
             created_at = get_refund_created_at(refund(Refund)),
             trx = hg_session:trx_info(session(Refund)),
-            cash = construct_proxy_cash(cash(Refund))
+            cash = construct_proxy_cash(ConvertedCash)
         }
     }.
 

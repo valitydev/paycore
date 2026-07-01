@@ -146,17 +146,15 @@ get_table_prohibitions(Prohibitions, VS, Revision) ->
     [hg_route:t()].
 fill_accepted(Predestination, Revision, VS, Routes) ->
     lists:foldr(
-        fun(Route, AccIn) ->
-            PRef = hg_route:provider_ref(Route),
-            TRef = hg_route:terminal_ref(Route),
+        fun(Route0, AccIn) ->
             try
-                true = acceptable_terminal(Predestination, PRef, TRef, VS, Revision),
-                [Route | AccIn]
+                Route1 = acceptable_terminal(Predestination, Route0, VS, Revision),
+                [Route1 | AccIn]
             catch
                 {rejected, Reason} ->
-                    [hg_route:set_accepted({false, {rejected, Reason}}, Route) | AccIn];
+                    [hg_route:set_accepted({false, {rejected, Reason}}, Route0) | AccIn];
                 error:{misconfiguration, Reason} ->
-                    [hg_route:set_accepted({false, {misconfiguration, Reason}}, Route) | AccIn]
+                    [hg_route:set_accepted({false, {misconfiguration, Reason}}, Route0) | AccIn]
             end
         end,
         [],
@@ -245,24 +243,30 @@ gather_pin_info(#domain_RoutingPin{features = Features}, Ctx) ->
 
 -spec acceptable_terminal(
     route_predestination(),
-    hg_route:provider_ref(),
-    hg_route:terminal_ref(),
+    hg_route:t(),
     varset(),
     revision()
-) -> true | no_return().
-acceptable_terminal(Predestination, ProviderRef, TerminalRef, VS, Revision) ->
+) -> hg_route:t() | no_return().
+acceptable_terminal(Predestination, Route, VS0, Revision) ->
+    ProviderRef = hg_route:provider_ref(Route),
+    TerminalRef = hg_route:terminal_ref(Route),
     {Client, Context} = get_party_client(),
     Result = party_client_thrift:compute_provider_terminal_terms(
         ProviderRef,
         TerminalRef,
         Revision,
-        hg_varset:prepare_varset(VS),
+        hg_varset:prepare_varset(VS0),
         Client,
         Context
     ),
     case Result of
         {ok, ProvisionTermSet} ->
-            check_terms_acceptability(Predestination, ProvisionTermSet, VS);
+            {VS1, ExchangeContext} = maybe_currency_conversion(
+                ProvisionTermSet#domain_ProvisionTermSet.payments,
+                VS0
+            ),
+            true = check_terms_acceptability(Predestination, ProvisionTermSet, VS1),
+            hg_route:set_exchange_context(ExchangeContext, Route);
         {error, #payproc_ProvisionTermSetUndefined{}} ->
             throw(?rejected({'ProvisionTermSet', undefined}))
     end.
@@ -272,6 +276,41 @@ get_party_client() ->
     Client = op_context:get_party_client(HgContext),
     Context = op_context:get_party_client_context(HgContext),
     {Client, Context}.
+
+maybe_currency_conversion(
+    #domain_PaymentsProvisionTerms{
+        currencies = {value, [#domain_CurrencyRef{symbolic_code = DestinationCurrency} = DestinationCurrencyRef]},
+        allow_exchange = {constant, true}
+    },
+    #{currency := #domain_CurrencyRef{symbolic_code = SourceCurrency}} = VS0
+) when SourceCurrency =/= DestinationCurrency ->
+    case hg_exrates:get_exchange_rate(SourceCurrency, DestinationCurrency) of
+        {ok, #{p := P, q := Q}} ->
+            ExchangeContext = #domain_ExchangeContext{
+                source_currency = SourceCurrency,
+                destination_currency = DestinationCurrency,
+                exchange_rate = #base_Rational{p = P, q = Q}
+            },
+            VS1 = VS0#{
+                currency => DestinationCurrencyRef,
+                cost => hg_currency_converter:convert_cash(ExchangeContext, getv(cost, VS0))
+            },
+            {VS1, ExchangeContext};
+        {error, _} ->
+            throw(?rejected({'PaymentsProvisionTerms', exchange_error}))
+    end;
+maybe_currency_conversion(
+    #domain_PaymentsProvisionTerms{
+        currencies = {value, Currencies},
+        allow_exchange = {constant, true}
+    },
+    _VS
+) when erlang:length(Currencies) > 1 ->
+    %% If currency conversion is allowed, only one currency must be specified
+    throw(?rejected({'PaymentsProvisionTerms', too_many_currencies}));
+maybe_currency_conversion(_Terms, VS) ->
+    %% in other cases we rely on check_terms_acceptability/3
+    {VS, undefined}.
 
 check_terms_acceptability(payment, Terms, VS) ->
     acceptable_payment_terms(Terms#domain_ProvisionTermSet.payments, VS);

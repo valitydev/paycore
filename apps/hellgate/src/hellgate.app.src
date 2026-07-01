@@ -13,6 +13,7 @@
         op_context,
         prg_machine,
         hg_proto,
+        exrates_proto,
         routing,
         cowboy,
         prometheus,

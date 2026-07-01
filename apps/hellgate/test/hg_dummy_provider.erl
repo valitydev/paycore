@@ -189,6 +189,9 @@ process_payment(?processed(), undefined, PaymentInfo, CtxOpts, _) ->
         change_cash_decrease ->
             %% simple workflow without 3DS
             result(?sleep(0), <<"sleeping">>);
+        change_currency_and_increase ->
+            %% simple workflow without 3DS
+            result(?sleep(0), <<"sleeping">>);
         no_preauth ->
             %% simple workflow without 3DS
             maybe_fail(PaymentInfo, CtxOpts, result(?sleep(0), <<"sleeping">>));
@@ -258,6 +261,14 @@ process_payment(?processed(), <<"sleeping">>, PaymentInfo, CtxOpts, _) ->
             finish(success(PaymentInfo, get_payment_increased_cost(PaymentInfo)), mk_trx(TrxID, PaymentInfo));
         change_cash_decrease ->
             finish(success(PaymentInfo, get_payment_decreased_cost(PaymentInfo)), mk_trx(TrxID, PaymentInfo));
+        change_currency_and_increase ->
+            finish(
+                success(
+                    PaymentInfo,
+                    get_payment_increased_changed_currency(PaymentInfo)
+                ),
+                mk_trx(TrxID, PaymentInfo)
+            );
         unexpected_failure ->
             error(unexpected_failure);
         {temporary_unavailability, Scenario} ->
@@ -551,6 +562,23 @@ get_payment_decreased_cost(PaymentInfo) ->
     Cost = #proxy_provider_Cash{amount = Amount} = get_payment_cost(PaymentInfo),
     Cost#proxy_provider_Cash{amount = Amount div 2}.
 
+get_payment_increased_changed_currency(PaymentInfo) ->
+    %% the cost was converted from RUB at the exchange rate {80, 1}
+    #proxy_provider_PaymentInfo{
+        payment = #proxy_provider_InvoicePayment{
+            cost =
+                #proxy_provider_Cash{
+                    amount = 525 = Amount,
+                    currency = #domain_Currency{symbolic_code = <<"USD">>}
+                } = Cost,
+            original_cost = #proxy_provider_Cash{
+                amount = 42000,
+                currency = #domain_Currency{symbolic_code = <<"RUB">>}
+            }
+        }
+    } = PaymentInfo,
+    Cost#proxy_provider_Cash{amount = Amount + 10}.
+
 get_payment_info_scenario(
     #proxy_provider_PaymentInfo{payment = #proxy_provider_InvoicePayment{payment_resource = Resource}}
 ) ->
@@ -566,6 +594,8 @@ get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"change_cash_
     change_cash_increase;
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"change_cash_decrease">>}}) ->
     change_cash_decrease;
+get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"change_currency_and_increase">>}}) ->
+    change_currency_and_increase;
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"no_preauth">>}}) ->
     no_preauth;
 get_payment_tool_scenario({'bank_card', #domain_BankCard{token = <<"no_preauth_timeout">>}}) ->
@@ -644,6 +674,7 @@ get_payment_tool_scenario({'bank_card', #domain_BankCard{token = Token} = BCard}
     | preauth_3ds_offsite_fail
     | change_cash_increase
     | change_cash_decrease
+    | change_currency_and_increase
     | forbidden
     | unexpected_failure
     | unexpected_failure_no_trx
@@ -674,7 +705,8 @@ make_payment_tool(Code, PSys) when
         Code =:= forbidden orelse
         Code =:= unexpected_failure orelse
         Code =:= unexpected_failure_when_suspended orelse
-        Code =:= unexpected_failure_no_trx
+        Code =:= unexpected_failure_no_trx orelse
+        Code =:= change_currency_and_increase
 ->
     ?SESSION42(make_bank_card_payment_tool(atom_to_binary(Code, utf8), PSys));
 make_payment_tool({assert_contact_info, ContactInfo}, PSys) ->
