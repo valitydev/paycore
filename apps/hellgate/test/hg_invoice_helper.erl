@@ -9,7 +9,8 @@
 -export([
     start_kv_store/1,
     stop_kv_store/1,
-    start_proxies/1
+    start_proxies/1,
+    start_service_handler/3
 ]).
 
 -export([
@@ -26,6 +27,7 @@
     register_payment/4,
     start_payment/3,
     start_payment_ev/2,
+    fail_payment_no_route/2,
     register_payment_ev_no_risk_scoring/2,
     await_payment_session_started/4,
     await_payment_capture/3,
@@ -44,7 +46,10 @@
     process_payment/3,
     get_payment_cost/3,
     make_cash/1,
-    make_cash/2
+    make_cash/2,
+    execute_payment_refund/4,
+    get_deprecated_cashflow_account/3,
+    start_chargeback/4
 ]).
 
 cfg(Key, C) ->
@@ -83,6 +88,7 @@ start_proxies(Proxies) ->
         )
     ).
 
+-spec start_service_handler(_, _, _) -> binary().
 start_service_handler(Module, C, HandlerOpts) ->
     start_service_handler(Module, Module, C, HandlerOpts).
 
@@ -252,9 +258,13 @@ register_payment(InvoiceID, RegisterPaymentParams, WithRiskScoring, Client) ->
 start_payment(InvoiceID, PaymentParams, Client) ->
     ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
     _ = start_payment_ev(InvoiceID, Client),
-    ?payment_ev(PaymentID, ?cash_flow_changed(_)) =
-        next_change(InvoiceID, Client),
-    PaymentID.
+    case next_change(InvoiceID, Client) of
+        ?payment_ev(PaymentID, ?cash_flow_changed(_)) ->
+            PaymentID;
+        ?payment_ev(PaymentID, ?invoice_payment_exchange_context_changed(_)) ->
+            ?payment_ev(PaymentID, ?cash_flow_changed(_)) = next_change(InvoiceID, Client),
+            PaymentID
+    end.
 
 -spec start_payment_ev(_, _) -> _.
 start_payment_ev(InvoiceID, Client) ->
@@ -266,6 +276,17 @@ start_payment_ev(InvoiceID, Client) ->
         ?payment_ev(PaymentID, ?route_changed(Route))
     ] = next_changes(InvoiceID, 5, Client),
     Route.
+
+-spec fail_payment_no_route(_, _) -> _.
+fail_payment_no_route(InvoiceID, Client) ->
+    [
+        ?payment_ev(PaymentID, ?payment_started(?payment_w_status(?pending()))),
+        ?payment_ev(PaymentID, ?shop_limit_initiated()),
+        ?payment_ev(PaymentID, ?shop_limit_applied()),
+        ?payment_ev(PaymentID, ?risk_score_changed(_RiskScore)),
+        ?payment_ev(PaymentID, ?payment_status_changed(?failed(_)))
+    ] = next_changes(InvoiceID, 5, Client),
+    PaymentID.
 
 -spec register_payment_ev_no_risk_scoring(_, _) -> _.
 register_payment_ev_no_risk_scoring(InvoiceID, Client) ->
@@ -429,3 +450,71 @@ await_payment_process_finish(InvoiceID, PaymentID, Client) ->
         ?payment_ev(PaymentID, ?payment_status_changed(?processed()))
     ] = next_changes(InvoiceID, 3, Client),
     PaymentID.
+
+-spec execute_payment_refund(_, _, _, _) -> _.
+execute_payment_refund(InvoiceID, PaymentID, #payproc_InvoicePaymentRefundParams{cash = undefined} = Params, Client) ->
+    execute_payment_refund_complete(InvoiceID, PaymentID, Params, Client).
+
+execute_payment_refund_complete(InvoiceID, PaymentID, Params, Client) ->
+    ?refund_id(RefundID) = hg_client_invoicing:refund_payment(InvoiceID, PaymentID, Params, Client),
+    PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID, Client),
+    PaymentID = await_refund_session_started(InvoiceID, PaymentID, RefundID, Client),
+    PaymentID = await_refund_payment_complete(InvoiceID, PaymentID, Client),
+    RefundID.
+
+await_refund_created(InvoiceID, PaymentID, RefundID, Client) ->
+    ?payment_ev(PaymentID, ?refund_ev(RefundID, ?refund_created(_Refund, _))) =
+        next_change(InvoiceID, Client),
+    PaymentID.
+
+await_refund_session_started(InvoiceID, PaymentID, RefundID, Client) ->
+    ?payment_ev(PaymentID, ?refund_ev(RefundID, ?session_ev(?refunded(), ?session_started()))) =
+        next_change(InvoiceID, Client),
+    PaymentID.
+
+await_refund_payment_complete(InvoiceID, PaymentID, Client) ->
+    PaymentID = await_sessions_restarts(PaymentID, ?refunded(), InvoiceID, Client, 0),
+    [
+        ?payment_ev(PaymentID, ?refund_ev(_, ?session_ev(?refunded(), ?trx_bound(_)))),
+        ?payment_ev(PaymentID, ?refund_ev(_, ?session_ev(?refunded(), ?session_finished(?session_succeeded())))),
+        ?payment_ev(PaymentID, ?refund_ev(_, ?refund_status_changed(?refund_succeeded()))),
+        ?payment_ev(PaymentID, ?payment_status_changed(?refunded()))
+    ] = next_changes(InvoiceID, 4, Client),
+    PaymentID.
+
+await_sessions_restarts(PaymentID, _Target, _InvoiceID, _Client, 0) ->
+    PaymentID.
+
+-spec get_deprecated_cashflow_account(_, _, _) -> _.
+get_deprecated_cashflow_account(Type, CF, CFContext) ->
+    ID = get_deprecated_cashflow_account_id(Type, CF, CFContext),
+    hg_accounting:get_balance(ID).
+
+get_deprecated_cashflow_account_id(Type, CF, CFContext) ->
+    Account = convert_transaction_account(Type, CFContext),
+    [ID] = [
+        V
+     || #domain_FinalCashFlowPosting{
+            destination = #domain_FinalCashFlowAccount{
+                account_id = V,
+                account_type = T,
+                transaction_account = A
+            }
+        } <- CF,
+        T == Type,
+        A == Account
+    ],
+    ID.
+
+-spec start_chargeback(_, _, _, _) -> _.
+start_chargeback(C, Cost, CBParams, PaymentParams) ->
+    Client = cfg(client, C),
+    PartyConfigRef = cfg(party_config_ref, C),
+    ShopConfigRef = cfg(shop_config_ref, C),
+    {PartyConfigRef, _Party} = hg_party:get_party(PartyConfigRef),
+    {ShopConfigRef, Shop} = hg_party:get_shop(ShopConfigRef, PartyConfigRef),
+    {SettlementID, _} = hg_invoice_utils:get_shop_account(Shop),
+    InvoiceID = start_invoice(ShopConfigRef, <<"rubberduck">>, make_due_date(10), Cost, C),
+    PaymentID = execute_payment(InvoiceID, PaymentParams, Client),
+    Chargeback = hg_client_invoicing:create_chargeback(InvoiceID, PaymentID, CBParams, Client),
+    {InvoiceID, PaymentID, SettlementID, Chargeback}.
