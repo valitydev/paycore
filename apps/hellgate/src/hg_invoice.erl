@@ -303,9 +303,11 @@ namespace() ->
 init(Invoice, _Machine) ->
     UnmarshalledInvoice = unmarshal_invoice(Invoice),
     Changes = [?invoice_created(UnmarshalledInvoice)],
+    St = #st{invoice = UnmarshalledInvoice},
+    _ = log_changes(Changes, St),
     #{
         events => [Changes],
-        action => set_invoice_timer(idle, #st{invoice = UnmarshalledInvoice}),
+        action => set_invoice_timer(idle, St),
         auxst => #{}
     }.
 
