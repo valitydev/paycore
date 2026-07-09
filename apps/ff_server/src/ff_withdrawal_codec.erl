@@ -173,6 +173,20 @@ marshal(session_event, {finished, Result}) ->
     {finished, #wthd_SessionFinished{result = marshal(session_result, Result)}};
 marshal(session_result, success) ->
     {succeeded, #wthd_SessionSucceeded{}};
+marshal(session_result, {success, SuccessInfo}) when is_list(SuccessInfo) ->
+    SessionData = lists:foldl(
+        fun
+            ({_, undefined}, Acc) ->
+                Acc;
+            ({trx_info, TrxInfo}, Acc) ->
+                Acc#wthd_SessionSucceeded{trx_info = marshal(transaction_info, TrxInfo)};
+            ({changed_body, ChangedBody}, Acc) ->
+                Acc#wthd_SessionSucceeded{changed_body = marshal(cash, ChangedBody)}
+        end,
+        #wthd_SessionSucceeded{},
+        SuccessInfo
+    ),
+    {succeeded, SessionData};
 marshal(session_result, {success, TransactionInfo}) ->
     %% for backward compatibility with events stored in DB - take TransactionInfo here.
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
@@ -298,12 +312,22 @@ unmarshal(session_event, #wthd_SessionChange{id = ID, payload = {started, #wthd_
 unmarshal(session_event, #wthd_SessionChange{id = ID, payload = {finished, Finished}}) ->
     #wthd_SessionFinished{result = Result} = Finished,
     {session_finished, {unmarshal(id, ID), unmarshal(session_result, Result)}};
-unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = undefined}}) ->
+unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = undefined, changed_body = undefined}}) ->
     success;
-unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = TransactionInfo}}) ->
-    %% for backward compatibility with events stored in DB - take TransactionInfo here.
-    %% @see ff_adapter_withdrawal:rebind_transaction_info/1
-    {success, unmarshal(transaction_info, TransactionInfo)};
+unmarshal(
+    session_result,
+    {succeeded, #wthd_SessionSucceeded{trx_info = TransactionInfo, changed_body = ChangedBody}}
+) ->
+    SessionData = maps:to_list(
+        genlib_map:compact(#{
+            trx_info => maybe_unmarshal(transaction_info, TransactionInfo),
+            changed_body => maybe_unmarshal(cash, ChangedBody)
+        })
+    ),
+    {success, SessionData};
+%% for backward compatibility with events stored in DB - take TransactionInfo here.
+%% @see ff_adapter_withdrawal:rebind_transaction_info/1
+%{success, unmarshal(transaction_info, TransactionInfo)};
 unmarshal(session_result, {failed, #wthd_SessionFailed{failure = Failure}}) ->
     {failed, ff_codec:unmarshal(failure, Failure)};
 unmarshal(transaction_info, TrxInfo) ->

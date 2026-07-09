@@ -51,6 +51,15 @@ marshal(change, {finished, SessionResult}) ->
     {finished, marshal(session_result, SessionResult)};
 marshal(change, {callback, CallbackChange}) ->
     {callback, marshal(callback_change, CallbackChange)};
+marshal(change, {changed_body, BodyChange}) ->
+    #{
+        old_body := OldBody,
+        new_body := NewBody
+    } = BodyChange,
+    {changed_body, #wthd_session_BodyChange{
+        old_body = marshal(cash, OldBody),
+        new_body = marshal(cash, NewBody)
+    }};
 marshal(session, Session) ->
     #{
         id := SessionID,
@@ -183,6 +192,11 @@ unmarshal(change, {callback, #wthd_session_CallbackChange{tag = Tag, payload = P
     {callback, #{
         tag => unmarshal(string, Tag),
         payload => unmarshal(callback_event, Payload)
+    }};
+unmarshal(change, {changed_body, #wthd_session_BodyChange{old_body = OldBody, new_body = NewBody}}) ->
+    {changed_body, #{
+        old_body => unmarshal(cash, OldBody),
+        new_body => unmarshal(cash, NewBody)
     }};
 unmarshal(session, #wthd_session_Session{
     id = SessionID,

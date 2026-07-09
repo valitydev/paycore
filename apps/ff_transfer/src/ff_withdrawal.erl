@@ -24,7 +24,8 @@
     metadata => metadata(),
     external_id => id(),
     validation => withdrawal_validation(),
-    contact_info => contact_info()
+    contact_info => contact_info(),
+    changed_body => body()
 }.
 
 -opaque withdrawal() :: #{
@@ -689,6 +690,7 @@ deduce_activity(Withdrawal) ->
         p_transfer => p_transfer_status(Withdrawal),
         validation => withdrawal_validation_status(Withdrawal),
         session => get_current_session_status(Withdrawal),
+        %% TODO changed_body
         status => status(Withdrawal),
         limit_check => limit_check_processing_status(Withdrawal),
         active_adjustment => ff_adjustment_utils:is_active(adjustments_index(Withdrawal))
@@ -1835,12 +1837,16 @@ apply_event_({p_transfer, Ev}, T) ->
     Tr = ff_postings_transfer:apply_event(Ev, p_transfer(T)),
     R = ff_withdrawal_route_attempt_utils:update_current_p_transfer(Tr, attempts(T)),
     update_attempts(R, T);
-apply_event_({session_started, SessionID}, T) ->
+apply_event_({session_started, SessionID}, T0) ->
+    %% clear changed_body from previous session
+    T = maps:without([changed_body], T0),
     Session = #{id => SessionID},
     Attempts = attempts(T),
     R = ff_withdrawal_route_attempt_utils:update_current_session(Session, Attempts),
     update_attempts(R, T);
-apply_event_({session_finished, {SessionID, Result}}, T) ->
+apply_event_({session_finished, {SessionID, Result}}, T0) ->
+    %% maybe update changed_body
+    T = set_changed_body(Result, T0),
     Attempts = attempts(T),
     Session = ff_withdrawal_route_attempt_utils:get_current_session(Attempts),
     SessionID = maps:get(id, Session),
@@ -1860,6 +1866,16 @@ apply_event_({validation, {Part, ValidationResult}}, T) ->
     T#{validation => Validates#{Part => [ValidationResult | PartValidations]}};
 apply_event_({adjustment, _Ev} = Event, T) ->
     apply_adjustment_event(Event, T).
+
+set_changed_body({success, SuccessInfo}, WithdrawalState) when is_list(SuccessInfo) ->
+    case lists:keyfind(changed_body, 1, SuccessInfo) of
+        {_, ChangedBody} ->
+            WithdrawalState#{changed_body => ChangedBody};
+        _ ->
+            WithdrawalState
+    end;
+set_changed_body(_, WithdrawalState) ->
+    WithdrawalState.
 
 -spec make_state(withdrawal()) -> withdrawal_state().
 make_state(#{route := Route} = T) ->
