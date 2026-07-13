@@ -3736,15 +3736,13 @@ merge_adjustment_change(?adjustment_created(Adjustment), undefined) ->
 merge_adjustment_change(?adjustment_status_changed(Status), Adjustment) ->
     Adjustment#domain_InvoicePaymentAdjustment{status = Status}.
 
+apply_adjustment_effects(?adjustment_transaction_info(Trx), St) ->
+    set_trx(Trx, St);
 apply_adjustment_effects(Adjustment, St) ->
     apply_adjustment_effect(
         status,
         Adjustment,
-        apply_adjustment_effect(
-            transaction_info,
-            Adjustment,
-            apply_adjustment_effect(cashflow, Adjustment, St)
-        )
+        apply_adjustment_effect(cashflow, Adjustment, St)
     ).
 
 apply_adjustment_effect(status, ?adjustment_target_status(Status), St = #st{payment = Payment}) ->
@@ -3764,13 +3762,6 @@ apply_adjustment_effect(status, ?adjustment_target_status(Status), St = #st{paym
             }
     end;
 apply_adjustment_effect(status, #domain_InvoicePaymentAdjustment{}, St) ->
-    St;
-apply_adjustment_effect(transaction_info, ?adjustment_transaction_info(Trx), St) ->
-    set_trx(Trx, St);
-apply_adjustment_effect(transaction_info, #domain_InvoicePaymentAdjustment{}, St) ->
-    St;
-apply_adjustment_effect(cashflow, ?adjustment_transaction_info(_), St) ->
-    %% Keep existing cash flow intact for transaction info adjustments.
     St;
 apply_adjustment_effect(cashflow, Adjustment, St) ->
     set_cashflow(get_adjustment_cashflow(Adjustment), St).
