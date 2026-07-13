@@ -80,6 +80,7 @@
 -export([payment_adjustment_failed_from_captured/1]).
 -export([payment_adjustment_change_amount_and_captured/1]).
 -export([payment_adjustment_change_amount_and_refund_all/1]).
+-export([payment_adjustment_transaction_info_success/1]).
 -export([status_adjustment_of_partial_refunded_payment/1]).
 -export([registered_payment_adjustment_success/1]).
 -export([invalid_payment_w_deprived_party/1]).
@@ -351,6 +352,7 @@ groups() ->
             payment_adjustment_failed_from_captured,
             payment_adjustment_change_amount_and_captured,
             payment_adjustment_change_amount_and_refund_all,
+            payment_adjustment_transaction_info_success,
             status_adjustment_of_partial_refunded_payment,
             registered_payment_adjustment_success
         ]},
@@ -691,6 +693,7 @@ init_per_testcase(Name, C) when
     Name == payment_adjustment_failed_from_captured;
     Name == payment_adjustment_change_amount_and_captured;
     Name == payment_adjustment_change_amount_and_refund_all;
+    Name == payment_adjustment_transaction_info_success;
     Name == registered_payment_adjustment_success
 ->
     Revision = hg_domain:head(),
@@ -3233,6 +3236,40 @@ payment_adjustment_change_amount_and_refund_all(C) ->
         MrcAmountFixed,
         maps:get(own_amount, SysAccount2) - maps:get(own_amount, SysAccount1)
     ).
+
+-spec payment_adjustment_transaction_info_success(config()) -> test_return().
+payment_adjustment_transaction_info_success(C) ->
+    Client = cfg(client, C),
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 100000, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    NewTrx = ?trx_info(<<"adjusted-trx-id">>, #{<<"rrn">> => <<"adjusted-rrn">>}),
+    AdjustmentParams = make_transaction_info_adjustment_params(NewTrx, AdjReason = <<"fix trx">>),
+    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    ?invalid_payment_status(?pending()) =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams, Client),
+    PaymentID = await_payment_started(InvoiceID, PaymentID, Client),
+    {_CF, _Route} = await_payment_cash_flow(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
+    PaymentID = await_payment_process_finish(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+    #payproc_InvoicePayment{last_transaction_info = OriginalTrx} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(#domain_TransactionInfo{}, OriginalTrx),
+    ?assertNotEqual(NewTrx, OriginalTrx),
+    CashFlowBefore = get_payment_cashflow_mapped(InvoiceID, PaymentID, Client),
+    AdjustmentID = execute_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams, Client),
+    #domain_InvoicePaymentAdjustment{
+        reason = AdjReason,
+        state =
+            {transaction_info, #domain_InvoicePaymentAdjustmentTransactionInfoState{
+                scenario = #domain_InvoicePaymentAdjustmentTransactionInfo{trx = NewTrx}
+            }},
+        new_cash_flow = [],
+        old_cash_flow_inverse = []
+    } = hg_client_invoicing:get_payment_adjustment(InvoiceID, PaymentID, AdjustmentID, Client),
+    #payproc_InvoicePayment{last_transaction_info = NewTrx} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertEqual(CashFlowBefore, get_payment_cashflow_mapped(InvoiceID, PaymentID, Client)).
 
 -spec status_adjustment_of_partial_refunded_payment(config()) -> test_return().
 status_adjustment_of_partial_refunded_payment(C) ->
@@ -8096,6 +8133,15 @@ make_status_adjustment_params(Status, Reason) ->
         scenario =
             {status_change, #domain_InvoicePaymentAdjustmentStatusChange{
                 target_status = Status
+            }}
+    }.
+
+make_transaction_info_adjustment_params(Trx, Reason) ->
+    #payproc_InvoicePaymentAdjustmentParams{
+        reason = Reason,
+        scenario =
+            {transaction_info, #domain_InvoicePaymentAdjustmentTransactionInfo{
+                trx = Trx
             }}
     }.
 

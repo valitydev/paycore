@@ -196,6 +196,7 @@
 -type adjustment_params() :: dmsl_payproc_thrift:'InvoicePaymentAdjustmentParams'().
 -type adjustment_state() :: dmsl_domain_thrift:'InvoicePaymentAdjustmentState'().
 -type adjustment_status_change() :: dmsl_domain_thrift:'InvoicePaymentAdjustmentStatusChange'().
+-type adjustment_transaction_info() :: dmsl_domain_thrift:'InvoicePaymentAdjustmentTransactionInfo'().
 -type target() :: dmsl_domain_thrift:'TargetInvoicePaymentStatus'().
 -type session_target_type() :: 'processed' | 'captured' | 'cancelled' | 'refunded'.
 -type risk_score() :: hg_inspector:risk_score().
@@ -1398,7 +1399,9 @@ create_adjustment(Timestamp, Params, St, Opts) ->
         {cash_flow, #domain_InvoicePaymentAdjustmentCashFlow{domain_revision = DomainRevision}} ->
             create_cash_flow_adjustment(Timestamp, Params, DomainRevision, St, Opts);
         {status_change, Change} ->
-            create_status_adjustment(Timestamp, Params, Change, St, Opts)
+            create_status_adjustment(Timestamp, Params, Change, St, Opts);
+        {transaction_info, Change} ->
+            create_transaction_info_adjustment(Timestamp, Params, Change, St)
     end.
 
 -spec create_cash_flow_adjustment(
@@ -1493,6 +1496,35 @@ create_status_adjustment(Timestamp, Params, Change, St, Opts) ->
         DomainRevision,
         OldCashFlow,
         NewCashFlow,
+        AdjState,
+        [],
+        St
+    ).
+
+-spec create_transaction_info_adjustment(
+    hg_datetime:timestamp(),
+    adjustment_params(),
+    adjustment_transaction_info(),
+    st()
+) -> {adjustment(), result()}.
+create_transaction_info_adjustment(Timestamp, Params, Change, St) ->
+    #domain_InvoicePaymentAdjustmentTransactionInfo{} = Change,
+    #domain_InvoicePayment{
+        status = Status,
+        domain_revision = DomainRevision
+    } = get_payment(St),
+    ok = assert_adjustment_payment_status(Status),
+    AdjState =
+        {transaction_info, #domain_InvoicePaymentAdjustmentTransactionInfoState{
+            scenario = Change
+        }},
+    %% Transaction info adjustment does not affect cash flow.
+    construct_adjustment(
+        Timestamp,
+        Params,
+        DomainRevision,
+        [],
+        [],
         AdjState,
         [],
         St
@@ -1758,6 +1790,13 @@ get_adjustment_cashflow(#domain_InvoicePaymentAdjustment{new_cash_flow = Cashflo
     state =
         {status_change, #domain_InvoicePaymentAdjustmentStatusChangeState{
             scenario = #domain_InvoicePaymentAdjustmentStatusChange{target_status = Status}
+        }}
+}).
+
+-define(adjustment_transaction_info(Trx), #domain_InvoicePaymentAdjustment{
+    state =
+        {transaction_info, #domain_InvoicePaymentAdjustmentTransactionInfoState{
+            scenario = #domain_InvoicePaymentAdjustmentTransactionInfo{trx = Trx}
         }}
 }).
 
@@ -3697,6 +3736,8 @@ merge_adjustment_change(?adjustment_created(Adjustment), undefined) ->
 merge_adjustment_change(?adjustment_status_changed(Status), Adjustment) ->
     Adjustment#domain_InvoicePaymentAdjustment{status = Status}.
 
+apply_adjustment_effects(?adjustment_transaction_info(Trx), St) ->
+    set_trx(Trx, St);
 apply_adjustment_effects(Adjustment, St) ->
     apply_adjustment_effect(
         status,
