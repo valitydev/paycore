@@ -24,10 +24,12 @@ handle_function('ProcessWithdrawal', {Withdrawal, InternalState, Options}, _Cont
     #{intent := Intent} = ProcessResult,
     NewState = maps:get(next_state, ProcessResult, undefined),
     TransactionInfo = maps:get(transaction_info, ProcessResult, undefined),
+    NewBody = maps:get(new_body, ProcessResult, undefined),
     {ok, #wthd_provider_ProcessResult{
         intent = encode_intent(Intent),
         next_state = encode_state(NewState),
-        trx = encode_trx(TransactionInfo)
+        trx = encode_trx(TransactionInfo),
+        new_body = encode_body(NewBody)
     }};
 handle_function('GetQuote', {QuoteParams, Options}, _Context, Opts) ->
     Handler = get_handler(Opts),
@@ -45,11 +47,13 @@ handle_function('HandleCallback', {Callback, Withdrawal, InternalState, Options}
     #{intent := Intent, response := Response} = CallbackResult,
     NewState = maps:get(next_state, CallbackResult, undefined),
     TransactionInfo = maps:get(transaction_info, CallbackResult, undefined),
+    NewBody = maps:get(new_body, CallbackResult, undefined),
     {ok, #wthd_provider_CallbackResult{
         intent = encode_intent(Intent),
         next_state = encode_state(NewState),
         response = encode_callback_response(Response),
-        trx = encode_trx(TransactionInfo)
+        trx = encode_trx(TransactionInfo),
+        new_body = encode_body(NewBody)
     }}.
 
 %%
@@ -155,6 +159,14 @@ encode_quote(#{
 
 encode_callback_response(#{payload := Payload}) ->
     #wthd_provider_CallbackResponse{payload = Payload}.
+
+encode_body(undefined) ->
+    undefined;
+encode_body({Amount, SymCode}) ->
+    #wthd_provider_Cash{
+        amount = Amount,
+        currency = ct_domain:currency_data(SymCode)
+    }.
 
 get_handler(Opts) ->
     proplists:get_value(handler, Opts, ff_ct_provider).
