@@ -87,7 +87,8 @@ marshal_withdrawal_state(WithdrawalState, Context) ->
         metadata = marshal(ctx, ff_withdrawal:metadata(WithdrawalState)),
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(WithdrawalState)),
         withdrawal_validation = maybe_marshal(withdrawal_validation, ff_withdrawal:validation(WithdrawalState)),
-        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState))
+        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState)),
+        new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState))
     }.
 
 -spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_thrift:'Event'().
@@ -129,6 +130,11 @@ marshal(change, {adjustment, #{id := ID, payload := Payload}}) ->
     }};
 marshal(change, {validation, {Part, ValidationResult}}) when Part =:= sender; Part =:= receiver ->
     {validation, {Part, marshal(validation_result, ValidationResult)}};
+marshal(change, {body_changed, #{old_body := OldBody, new_body := NewBody}}) ->
+    {body_changed, #wthd_BodyChange{
+        old_body = marshal(cash, OldBody),
+        new_body = marshal(cash, NewBody)
+    }};
 marshal(validation_result, {personal, #{validation_id := ValidationID, token := Token, validation_status := Status}}) ->
     {
         personal,
@@ -173,20 +179,6 @@ marshal(session_event, {finished, Result}) ->
     {finished, #wthd_SessionFinished{result = marshal(session_result, Result)}};
 marshal(session_result, success) ->
     {succeeded, #wthd_SessionSucceeded{}};
-marshal(session_result, {success, SuccessInfo}) when is_list(SuccessInfo) ->
-    SessionData = lists:foldl(
-        fun
-            ({_, undefined}, Acc) ->
-                Acc;
-            ({trx_info, TrxInfo}, Acc) ->
-                Acc#wthd_SessionSucceeded{trx_info = marshal(transaction_info, TrxInfo)};
-            ({changed_body, ChangedBody}, Acc) ->
-                Acc#wthd_SessionSucceeded{changed_body = marshal(cash, ChangedBody)}
-        end,
-        #wthd_SessionSucceeded{},
-        SuccessInfo
-    ),
-    {succeeded, SessionData};
 marshal(session_result, {success, TransactionInfo}) ->
     %% for backward compatibility with events stored in DB - take TransactionInfo here.
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
@@ -269,6 +261,11 @@ unmarshal(change, {adjustment, Change}) ->
     }};
 unmarshal(change, {validation, {Part, ValidationResult}}) when Part =:= sender; Part =:= receiver ->
     {validation, {Part, unmarshal(validation_result, ValidationResult)}};
+unmarshal(change, {body_changed, #wthd_BodyChange{old_body = OldBody, new_body = NewBody}}) ->
+    {body_changed, #{
+        old_body => unmarshal(cash, OldBody),
+        new_body => unmarshal(cash, NewBody)
+    }};
 unmarshal(validation_result, {personal, Validation}) ->
     {personal, #{
         validation_id => unmarshal(id, Validation#wthd_PersonalDataValidationResult.validation_id),
@@ -312,22 +309,12 @@ unmarshal(session_event, #wthd_SessionChange{id = ID, payload = {started, #wthd_
 unmarshal(session_event, #wthd_SessionChange{id = ID, payload = {finished, Finished}}) ->
     #wthd_SessionFinished{result = Result} = Finished,
     {session_finished, {unmarshal(id, ID), unmarshal(session_result, Result)}};
-unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = undefined, changed_body = undefined}}) ->
+unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = undefined}}) ->
     success;
-unmarshal(
-    session_result,
-    {succeeded, #wthd_SessionSucceeded{trx_info = TransactionInfo, changed_body = ChangedBody}}
-) ->
-    SessionData = maps:to_list(
-        genlib_map:compact(#{
-            trx_info => maybe_unmarshal(transaction_info, TransactionInfo),
-            changed_body => maybe_unmarshal(cash, ChangedBody)
-        })
-    ),
-    {success, SessionData};
-%% for backward compatibility with events stored in DB - take TransactionInfo here.
-%% @see ff_adapter_withdrawal:rebind_transaction_info/1
-%{success, unmarshal(transaction_info, TransactionInfo)};
+unmarshal(session_result, {succeeded, #wthd_SessionSucceeded{trx_info = TransactionInfo}}) ->
+    %% for backward compatibility with events stored in DB - take TransactionInfo here.
+    %% @see ff_adapter_withdrawal:rebind_transaction_info/1
+    {success, unmarshal(transaction_info, TransactionInfo)};
 unmarshal(session_result, {failed, #wthd_SessionFailed{failure = Failure}}) ->
     {failed, ff_codec:unmarshal(failure, Failure)};
 unmarshal(transaction_info, TrxInfo) ->

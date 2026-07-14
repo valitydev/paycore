@@ -45,7 +45,7 @@
     result => session_result(),
     % For validate outstanding TransactionsInfo
     transaction_info => transaction_info(),
-    changed_body => body()
+    new_body => body()
 }.
 
 -type session() :: #{
@@ -58,19 +58,13 @@
 
 -type transaction_info() :: ff_adapter_withdrawal:transaction_info().
 -type body() :: ff_accounting:body().
--type session_result() ::
-    success
-    | {success, transaction_info()}
-    | {success, success_info()}
-    | {failed, ff_adapter_withdrawal:failure()}.
+-type session_result() :: success | {success, transaction_info()} | {failed, ff_adapter_withdrawal:failure()}.
 -type status() :: active | {finished, success | {failed, ff_adapter_withdrawal:failure()}}.
 -type party_id() :: ff_party:id().
-
--type success_info() :: [success_info_unit()].
-
--type success_info_unit() ::
-    {trx_info, transaction_info()}
-    | {changed_body, body()}.
+-type session_data() :: #{
+    result := session_result(),
+    new_body => body()
+}.
 
 -type event() ::
     {created, session()}
@@ -128,6 +122,7 @@
 -export_type([process_callback_error/0]).
 -export_type([process_result/0]).
 -export_type([action/0]).
+-export_type([session_data/0]).
 
 %%
 %% Internal types
@@ -198,16 +193,14 @@ apply_event_({next_state, AdapterState}, Session) ->
     Session#{adapter_state => AdapterState};
 apply_event_({transaction_bound, TransactionInfo}, Session) ->
     Session#{transaction_info => TransactionInfo};
-apply_event_({changed_body, #{new_body := NewBody}}, Session) ->
-    Session#{changed_body => NewBody};
+apply_event_({body_changed, #{new_body := NewBody}}, Session) ->
+    Session#{new_body => NewBody};
 apply_event_({finished, success = Result}, Session) ->
-    Session1 = Session#{status => {finished, success}},
-    set_session_result_(Result, Session1);
+    Session#{status => {finished, success}, result => Result};
 apply_event_({finished, {success, TransactionInfo} = Result}, Session) ->
     %% for backward compatibility with events stored in DB - take TransactionInfo here.
     %% @see ff_adapter_withdrawal:rebind_transaction_info/1
-    Session1 = Session#{status => {finished, success}, transaction_info => TransactionInfo},
-    set_session_result_(Result, Session1);
+    Session#{status => {finished, success}, result => Result, transaction_info => TransactionInfo};
 apply_event_({finished, {failed, _} = Result} = Status, Session) ->
     Session#{status => Status, result => Result};
 apply_event_({callback, _Ev} = WrappedEvent, Session) ->
@@ -215,20 +208,15 @@ apply_event_({callback, _Ev} = WrappedEvent, Session) ->
     Callbacks1 = ff_withdrawal_callback_utils:apply_event(WrappedEvent, Callbacks0),
     set_callbacks_index(Callbacks1, Session).
 
-set_session_result_(success, #{changed_body := ChangedBody} = Session) ->
-    Session#{result => {success, [{changed_body, ChangedBody}]}};
-set_session_result_(success = Result, Session) ->
-    Session#{result => Result};
-set_session_result_({success, TrxInfo}, #{changed_body := ChangedBody} = Session) ->
-    Session#{result => {success, [{changed_body, ChangedBody}, {trx_info, TrxInfo}]}};
-set_session_result_({success, _TrxInfo} = Result, Session) ->
-    Session#{result => Result}.
-
 -spec process_session(session_state()) -> process_result().
-process_session(#{status := {finished, _}, id := ID, result := Result, withdrawal := Withdrawal}) ->
+process_session(#{status := {finished, _}, id := ID, result := Result, withdrawal := Withdrawal} = St) ->
     % Session has finished, it should notify the withdrawal machine about the fact
     WithdrawalID = ff_adapter_withdrawal:id(Withdrawal),
-    case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, Result}) of
+    SessionData = genlib_map:compact(#{
+        result => Result,
+        new_body => maps:get(new_body, St, undefined)
+    }),
+    case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, SessionData}) of
         ok ->
             {suspend, []};
         {error, failed} ->
@@ -256,7 +244,7 @@ process_session(#{status := active, withdrawal := Withdrawal, route := Route} = 
     #{intent := Intent} = ProcessResult,
     Events0 = process_next_state(ProcessResult, [], ASt),
     Events1 = process_transaction_info(ProcessResult, Events0, SessionState),
-    Events2 = process_changed_body(ProcessResult, Events1, Withdrawal),
+    Events2 = process_new_body(ProcessResult, Events1, Withdrawal),
     process_adapter_intent(Intent, SessionState, Events2).
 
 process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) ->
@@ -265,9 +253,9 @@ process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) -
 process_transaction_info(_, Events, _Session) ->
     Events.
 
-process_changed_body(#{changed_body := NewBody}, Events, #{cash := OldBody} = _Withdrawal) ->
-    Events ++ [{changed_body, #{old_body => OldBody, new_body => NewBody}}];
-process_changed_body(_Result, Events, _Withdrawal) ->
+process_new_body(#{new_body := NewBody}, Events, #{cash := OldBody} = _Withdrawal) ->
+    Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}];
+process_new_body(_Result, Events, _Withdrawal) ->
     Events.
 
 %% Only one static TransactionInfo within one session
@@ -322,7 +310,7 @@ do_process_callback(CallbackParams, Callback, Session) ->
     Events0 = ff_withdrawal_callback_utils:process_response(Response, Callback),
     Events1 = process_next_state(HandleCallbackResult, Events0, AdapterState),
     Events2 = process_transaction_info(HandleCallbackResult, Events1, Session),
-    Events3 = process_changed_body(HandleCallbackResult, Events2, Withdrawal),
+    Events3 = process_new_body(HandleCallbackResult, Events2, Withdrawal),
     {ok, {Response, process_adapter_intent(Intent, Session, Events3)}}.
 
 make_session_finish_params(Session) ->

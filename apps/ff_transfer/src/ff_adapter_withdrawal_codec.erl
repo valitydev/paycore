@@ -289,27 +289,27 @@ unmarshal(process_result, #wthd_provider_ProcessResult{
     intent = Intent,
     next_state = NextState,
     trx = TransactionInfo,
-    changed_body = ChangedBody
+    new_body = NewBody
 }) ->
     genlib_map:compact(#{
         intent => unmarshal(intent, Intent),
         next_state => maybe_unmarshal(adapter_state, NextState),
         transaction_info => maybe_unmarshal(transaction_info, TransactionInfo),
-        changed_body => maybe_unmarshal(body, ChangedBody)
+        new_body => maybe_unmarshal(body, NewBody)
     });
 unmarshal(callback_result, #wthd_provider_CallbackResult{
     intent = Intent,
     next_state = NextState,
     response = Response,
     trx = TransactionInfo,
-    changed_body = ChangedBody
+    new_body = NewBody
 }) ->
     genlib_map:compact(#{
         intent => unmarshal(intent, Intent),
         response => unmarshal(callback_response, Response),
         next_state => maybe_unmarshal(adapter_state, NextState),
         transaction_info => maybe_unmarshal(transaction_info, TransactionInfo),
-        changed_body => maybe_unmarshal(body, ChangedBody)
+        new_body => maybe_unmarshal(body, NewBody)
     });
 unmarshal(callback_response, #wthd_provider_CallbackResponse{payload = Payload}) ->
     #{payload => Payload};
