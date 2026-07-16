@@ -1,0 +1,23 @@
+{application, limiter, [
+    {description, "Proto limiter service"},
+    {vsn, "1.0.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        prometheus,
+        prometheus_cowboy,
+        scoper,  % should be before any scoper event handler usage
+        woody,
+        limiter_proto,
+        liminator_proto,
+        xrates_proto,
+        erl_health,
+        dmt_client,
+        opentelemetry_api,
+        opentelemetry_exporter,
+        opentelemetry
+    ]},
+    {mod, {limiter, []}},
+    {env, []}
+]}.
