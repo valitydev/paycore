@@ -40,7 +40,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: "/opt/dmt/bin/dmt ping"
+      test: ["CMD", "/opt/dmt/bin/dmt", "ping"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -54,19 +54,24 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: "/opt/bender/bin/bender ping"
+      test: ["CMD", "/opt/bender/bin/bender", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
 
   limiter:
-    image: ghcr.io/valitydev/limiter:sha-67cf0b7
-    command: /opt/limiter/bin/limiter foreground
+    image: paycore:local-dev
+    build:
+      context: .
+      args:
+        - OTP_VERSION
+        - THRIFT_VERSION
+    command: ["/opt/limiter/bin/limiter", "foreground"]
     depends_on:
       liminator:
         condition: service_healthy
     healthcheck:
-      test: "/opt/limiter/bin/limiter ping"
+      test: ["CMD", "/opt/limiter/bin/limiter", "ping"]
       interval: 5s
       timeout: 1s
       retries: 20
@@ -106,7 +111,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: "curl http://localhost:8022/actuator/health"
+      test: ["CMD", "curl", "http://localhost:8022/actuator/health"]
       interval: 5s
       timeout: 1s
       retries: 20
@@ -124,7 +129,7 @@ services:
       shumway:
         condition: service_started
     healthcheck:
-      test: "/opt/party-management/bin/party-management ping"
+      test: ["CMD", "/opt/party-management/bin/party-management", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -138,7 +143,7 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: "/opt/cs/bin/cs ping"
+      test: ["CMD", "/opt/cs/bin/cs", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
