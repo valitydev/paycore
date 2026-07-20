@@ -10,6 +10,7 @@
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_cashflow_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_transfer_thrift.hrl").
+-include_lib("ff_cth/include/ct_domain.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -294,14 +295,20 @@ create_withdrawal_ok_test(_C) ->
     ).
 
 -spec create_withdrawal_with_changed_body_test(config()) -> test_return().
-create_withdrawal_with_changed_body_test(_C) ->
+create_withdrawal_with_changed_body_test(C) ->
     Cash = make_cash({1357, <<"RUB">>}),
     Ctx = ct_objects:build_default_ctx(),
+    LimitsRev = ct_helper:cfg('$limits_domain_revision', C),
     #{
         party_id := PartyID,
         wallet_id := WalletID,
-        destination_id := DestinationID
+        destination_id := DestinationID,
+        withdrawal_id := PreviousWithdrawalID
     } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+
+    PreviousWithdrawal = get_withdrawal(PreviousWithdrawalID),
+    Limit0 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, PreviousWithdrawal, C),
+
     WithdrawalID = genlib:bsuuid(),
     ExternalID = genlib:bsuuid(),
     Context = ff_entity_context_codec:marshal(#{<<"NS">> => #{}}),
@@ -334,6 +341,10 @@ create_withdrawal_with_changed_body_test(_C) ->
         ?posting({wallet, receiver_destination}, {system, subagent}, 125),
         ?posting({wallet, sender_settlement}, {wallet, receiver_destination}, 1246)
     ] = lists:sort(Postings),
+
+    Withdrawal = get_withdrawal(WithdrawalID),
+    Limit1 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, Withdrawal, C),
+    ?assertEqual(1246, Limit1 - Limit0),
 
     Range = {undefined, undefined},
     EncodedRange = ff_codec:marshal(event_range, Range),

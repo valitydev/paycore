@@ -70,6 +70,7 @@
     {created, session()}
     | {next_state, ff_adapter:state()}
     | {transaction_bound, transaction_info()}
+    | {body_changed, #{old_body := body(), new_body := body()}}
     | {finished, session_result()}
     | wrapped_callback_event().
 
@@ -244,7 +245,7 @@ process_session(#{status := active, withdrawal := Withdrawal, route := Route} = 
     #{intent := Intent} = ProcessResult,
     Events0 = process_next_state(ProcessResult, [], ASt),
     Events1 = process_transaction_info(ProcessResult, Events0, SessionState),
-    Events2 = process_new_body(ProcessResult, Events1, Withdrawal),
+    Events2 = process_new_body(ProcessResult, Events1, SessionState),
     process_adapter_intent(Intent, SessionState, Events2).
 
 process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) ->
@@ -253,9 +254,19 @@ process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) -
 process_transaction_info(_, Events, _Session) ->
     Events.
 
-process_new_body(#{new_body := NewBody}, Events, #{cash := OldBody} = _Withdrawal) ->
-    Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}];
-process_new_body(_Result, Events, _Withdrawal) ->
+process_new_body(#{new_body := NewBody}, Events, #{new_body := PreviousBody} = _SessionState) when
+    NewBody =:= PreviousBody
+->
+    %% body already updated
+    Events;
+process_new_body(#{new_body := NewBody}, Events, #{withdrawal := #{cash := OldBody}} = _SessionState) ->
+    case OldBody < NewBody of
+        true ->
+            erlang:error({new_body_is_big, NewBody, OldBody});
+        false ->
+            Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}]
+    end;
+process_new_body(_Result, Events, _SessionState) ->
     Events.
 
 %% Only one static TransactionInfo within one session

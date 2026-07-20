@@ -27,7 +27,8 @@ init_per_suite(Config) ->
             {limit_config, limiter_mk_config_object_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID2)},
             {limit_config, limiter_mk_config_object_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID3)},
             {limit_config, limiter_mk_config_object_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID4)},
-            {limit_config, limiter_mk_config_object_num(?LIMIT_TURNOVER_NUM_SENDER_ID1, SenderScopes)}
+            {limit_config, limiter_mk_config_object_num(?LIMIT_TURNOVER_NUM_SENDER_ID1, SenderScopes)},
+            {limit_config, limiter_mk_config_object_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999)}
         ],
         dmt_client:create_author(genlib:unique(), genlib:unique())
     ),
@@ -63,6 +64,8 @@ maybe_uninitialized_limit(LimitID, {exception, _}) ->
         description = undefined
     }.
 
+maybe_marshal_withdrawal(undefined) ->
+    undefined;
 maybe_marshal_withdrawal(#wthd_domain_Withdrawal{} = Withdrawal) ->
     Withdrawal;
 maybe_marshal_withdrawal(Withdrawal) ->

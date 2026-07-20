@@ -89,6 +89,7 @@
     | {validation, {sender | receiver, validation_result()}}
     | {session_started, session_id()}
     | {session_finished, {session_id(), session_result()}}
+    | {body_changed, #{old_body := body(), new_body := body()}}
     | {status_changed, status()}
     | wrapped_adjustment_event().
 
@@ -313,6 +314,7 @@
 -type activity() ::
     routing
     | p_transfer_start
+    | p_transfer_recreate
     | p_transfer_prepare
     | session_starting
     | session_sleeping
@@ -744,7 +746,7 @@ do_pending_activity(#{
 }) ->
     p_transfer_cancel;
 do_pending_activity(#{p_transfer := cancelled, session := succeeded, is_body_changed := true}) ->
-    p_transfer_start;
+    p_transfer_recreate;
 do_pending_activity(#{p_transfer := prepared, session := succeeded, is_body_changed := true}) ->
     p_transfer_commit;
 do_pending_activity(#{p_transfer := committed, session := succeeded}) ->
@@ -764,13 +766,31 @@ do_process_transfer(routing, Withdrawal) ->
     process_routing(Withdrawal);
 do_process_transfer(p_transfer_start, Withdrawal) ->
     process_p_transfer_creation(Withdrawal);
+do_process_transfer(p_transfer_recreate, Withdrawal) ->
+    %% route limits already rolled back when p_transfer was cancelled
+    %% new route limits with new amount are required
+    Route = route(Withdrawal),
+    DomainRevision = final_domain_revision(Withdrawal),
+    IterWithMultiplication = ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal)) * 1000,
+    {Varset, _Context} = make_routing_varset_and_context(Withdrawal),
+    {ok, #domain_ProvisionTermSet{
+        wallet = #domain_WalletProvisionTerms{
+            withdrawals = #domain_WithdrawalProvisionTerms{
+                turnover_limit = SelectorTurnoverLimits
+            }
+        }
+    }} = compute_provider_terminal_terms(Route, Varset, DomainRevision),
+    TurnoverLimits = ff_limiter:get_turnover_limits(SelectorTurnoverLimits),
+    WithdrawalWithNewBody = Withdrawal#{body => final_body(Withdrawal)},
+    ok = ff_limiter:hold_withdrawal_limits(TurnoverLimits, WithdrawalWithNewBody, Route, IterWithMultiplication),
+    process_p_transfer_creation(Withdrawal);
 do_process_transfer(p_transfer_prepare, Withdrawal) ->
     ok = do_rollback_routing([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:prepare(Tr),
     {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(p_transfer_commit, Withdrawal) ->
-    ok = commit_routes_limits([route(Withdrawal)], Withdrawal),
+    ok = commit_routes_limits([route(Withdrawal)], Withdrawal#{body => final_body(Withdrawal)}),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:commit(Tr),
     DomainRevision = final_domain_revision(Withdrawal),
@@ -862,7 +882,15 @@ rollback_routes_limits(Routes, Varset, Context) ->
     ff_withdrawal_routing:rollback_routes_limits(Routes, Varset, Context).
 
 commit_routes_limits(Routes, Withdrawal) ->
-    {Varset, Context} = make_routing_varset_and_context(Withdrawal),
+    {Varset, Context0} = make_routing_varset_and_context(Withdrawal),
+    %% if body was changed then iteration value needs to be updated
+    Context =
+        case is_body_changed(Withdrawal) of
+            true ->
+                update_context_iteration(1000, Context0);
+            false ->
+                Context0
+        end,
     ff_withdrawal_routing:commit_routes_limits(Routes, Varset, Context).
 
 make_routing_varset_and_context(Withdrawal) ->
@@ -887,6 +915,9 @@ make_routing_varset_and_context(Withdrawal) ->
         iteration => ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal))
     },
     {build_party_varset(VarsetParams), Context}.
+
+update_context_iteration(Multiplicator, #{iteration := Iter} = Context) ->
+    Context#{iteration => Iter * Multiplicator}.
 
 -spec validate_quote_route(route(), quote_state()) -> {ok, valid} | {error, InconsistentQuote} when
     InconsistentQuote :: {inconsistent_quote_route, {provider_id, provider_id()} | {terminal_id, terminal_id()}}.
@@ -995,8 +1026,8 @@ construct_p_transfer_id(Withdrawal) ->
     Attempt =
         case is_body_changed(Withdrawal) of
             true ->
-                %% add offset for new casflow
-                Attempt0 + 100;
+                %% ID for new casflow with multiplication
+                Attempt0 * 1000;
             false ->
                 Attempt0
         end,
@@ -1063,7 +1094,7 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
 
     Resource = destination_resource(Withdrawal),
     VarsetParams = genlib_map:compact(#{
-        body => body(Withdrawal),
+        body => Body,
         wallet_id => WalletID,
         wallet => Wallet,
         party_id => party_id(Withdrawal),
