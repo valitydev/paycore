@@ -64,8 +64,6 @@ maybe_uninitialized_limit(LimitID, {exception, _}) ->
         description = undefined
     }.
 
-maybe_marshal_withdrawal(undefined) ->
-    undefined;
 maybe_marshal_withdrawal(#wthd_domain_Withdrawal{} = Withdrawal) ->
     Withdrawal;
 maybe_marshal_withdrawal(Withdrawal) ->
