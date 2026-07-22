@@ -9,6 +9,7 @@
 -type id() :: binary().
 
 -define(ACTUAL_FORMAT_VERSION, 4).
+-define(BODY_CHANGED_ATTEMPT_MULTIPLIER, 1000).
 
 -opaque withdrawal_state() :: #{
     id := id(),
@@ -771,7 +772,8 @@ do_process_transfer(p_transfer_recreate, Withdrawal) ->
     %% new route limits with new amount are required
     Route = route(Withdrawal),
     DomainRevision = final_domain_revision(Withdrawal),
-    IterWithMultiplication = ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal)) * 1000,
+    IterWithMultiplication =
+        ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal)) * ?BODY_CHANGED_ATTEMPT_MULTIPLIER,
     {Varset, _Context} = make_routing_varset_and_context(Withdrawal),
     {ok, #domain_ProvisionTermSet{
         wallet = #domain_WalletProvisionTerms{
@@ -887,7 +889,7 @@ commit_routes_limits(Routes, Withdrawal) ->
     Context =
         case is_body_changed(Withdrawal) of
             true ->
-                update_context_iteration(1000, Context0);
+                update_context_iteration(?BODY_CHANGED_ATTEMPT_MULTIPLIER, Context0);
             false ->
                 Context0
         end,
@@ -1026,8 +1028,8 @@ construct_p_transfer_id(Withdrawal) ->
     Attempt =
         case is_body_changed(Withdrawal) of
             true ->
-                %% ID for new casflow with multiplication
-                Attempt0 * 1000;
+                %% ID for new cashflow with multiplication
+                Attempt0 * ?BODY_CHANGED_ATTEMPT_MULTIPLIER;
             false ->
                 Attempt0
         end,

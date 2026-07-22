@@ -260,14 +260,25 @@ process_new_body(#{new_body := NewBody}, Events, #{new_body := PreviousBody} = _
     %% body already updated
     Events;
 process_new_body(#{new_body := NewBody}, Events, #{withdrawal := #{cash := OldBody}} = _SessionState) ->
-    case OldBody < NewBody of
-        true ->
-            erlang:error({new_body_is_big, NewBody, OldBody});
-        false ->
-            Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}]
+    case validate_new_body(OldBody, NewBody) of
+        ok ->
+            Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}];
+        unchanged ->
+            Events
     end;
 process_new_body(_Result, Events, _SessionState) ->
     Events.
+
+validate_new_body({Amount, Currency}, {Amount, Currency}) ->
+    unchanged;
+validate_new_body({OldAmount, Currency}, {NewAmount, Currency}) when
+    is_integer(NewAmount), NewAmount > 0, NewAmount < OldAmount
+->
+    ok;
+validate_new_body(OldBody, NewBody) ->
+    %% Adapter may have already paid out; do not finish session as business
+    %% failure (that can trigger route retry). Hard-fail like trx mismatch.
+    erlang:error({invalid_new_body, NewBody, OldBody}).
 
 %% Only one static TransactionInfo within one session
 
@@ -321,7 +332,7 @@ do_process_callback(CallbackParams, Callback, Session) ->
     Events0 = ff_withdrawal_callback_utils:process_response(Response, Callback),
     Events1 = process_next_state(HandleCallbackResult, Events0, AdapterState),
     Events2 = process_transaction_info(HandleCallbackResult, Events1, Session),
-    Events3 = process_new_body(HandleCallbackResult, Events2, Withdrawal),
+    Events3 = process_new_body(HandleCallbackResult, Events2, Session),
     {ok, {Response, process_adapter_intent(Intent, Session, Events3)}}.
 
 make_session_finish_params(Session) ->
