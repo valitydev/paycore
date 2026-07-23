@@ -536,6 +536,14 @@ domain_config(Config, Options) ->
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 33)
                 ),
                 delegate(
+                    condition(cost_in, {1357, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 41)
+                ),
+                delegate(
+                    condition(cost_in, {1246, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 41)
+                ),
+                delegate(
                     {condition,
                         {payment_tool,
                             {bank_card, #domain_BankCardCondition{
@@ -736,6 +744,13 @@ domain_config(Config, Options) ->
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 33),
             {candidates, [
                 candidate({constant, true}, ?trm(3300))
+            ]}
+        ),
+
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 41),
+            {candidates, [
+                candidate({constant, true}, ?trm(4100))
             ]}
         ),
 
@@ -1251,6 +1266,17 @@ domain_config(Config, Options) ->
                 }
             }
         ),
+
+        ct_domain:withdrawal_terminal(?trm(4100), ?prv(1), #domain_ProvisionTermSet{
+            wallet = #domain_WalletProvisionTerms{
+                withdrawals = #domain_WithdrawalProvisionTerms{
+                    turnover_limit =
+                        {value, [
+                            ?trnvrlimit(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, 1000000000, Config)
+                        ]}
+                }
+            }
+        }),
 
         ct_domain:currency(?cur(<<"RUB">>)),
         ct_domain:currency(?cur(<<"USD">>)),

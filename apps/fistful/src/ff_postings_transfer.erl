@@ -175,6 +175,9 @@ cancel(#{status := Status}) ->
 -spec apply_event(event(), ff_maybe:'maybe'(transfer())) -> transfer().
 apply_event({created, Transfer}, undefined) ->
     Transfer;
+apply_event({created, Transfer}, #{status := cancelled}) ->
+    %% transfer must be recreated when withdrawal body changed
+    Transfer;
 apply_event({status_changed, S}, Transfer) ->
     Transfer#{status => S}.
 

@@ -44,7 +44,8 @@
     callbacks => callbacks_index(),
     result => session_result(),
     % For validate outstanding TransactionsInfo
-    transaction_info => transaction_info()
+    transaction_info => transaction_info(),
+    new_body => body()
 }.
 
 -type session() :: #{
@@ -56,14 +57,20 @@
 }.
 
 -type transaction_info() :: ff_adapter_withdrawal:transaction_info().
+-type body() :: ff_accounting:body().
 -type session_result() :: success | {success, transaction_info()} | {failed, ff_adapter_withdrawal:failure()}.
 -type status() :: active | {finished, success | {failed, ff_adapter_withdrawal:failure()}}.
 -type party_id() :: ff_party:id().
+-type session_data() :: #{
+    result := session_result(),
+    new_body => body()
+}.
 
 -type event() ::
     {created, session()}
     | {next_state, ff_adapter:state()}
     | {transaction_bound, transaction_info()}
+    | {body_changed, #{old_body := body(), new_body := body()}}
     | {finished, session_result()}
     | wrapped_callback_event().
 
@@ -116,6 +123,7 @@
 -export_type([process_callback_error/0]).
 -export_type([process_result/0]).
 -export_type([action/0]).
+-export_type([session_data/0]).
 
 %%
 %% Internal types
@@ -186,6 +194,8 @@ apply_event_({next_state, AdapterState}, Session) ->
     Session#{adapter_state => AdapterState};
 apply_event_({transaction_bound, TransactionInfo}, Session) ->
     Session#{transaction_info => TransactionInfo};
+apply_event_({body_changed, #{new_body := NewBody}}, Session) ->
+    Session#{new_body => NewBody};
 apply_event_({finished, success = Result}, Session) ->
     Session#{status => {finished, success}, result => Result};
 apply_event_({finished, {success, TransactionInfo} = Result}, Session) ->
@@ -200,10 +210,15 @@ apply_event_({callback, _Ev} = WrappedEvent, Session) ->
     set_callbacks_index(Callbacks1, Session).
 
 -spec process_session(session_state()) -> process_result().
-process_session(#{status := {finished, _}, id := ID, result := Result, withdrawal := Withdrawal}) ->
+process_session(#{status := {finished, _}, id := ID, result := Result, withdrawal := Withdrawal} = St) ->
     % Session has finished, it should notify the withdrawal machine about the fact
     WithdrawalID = ff_adapter_withdrawal:id(Withdrawal),
-    case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, Result}) of
+    SessionData = genlib_map:compact(#{
+        result => Result,
+        %% propagate body change only on success; failed session may retry another route
+        new_body => session_new_body_for_notify(Result, St)
+    }),
+    case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, SessionData}) of
         ok ->
             {suspend, []};
         {error, failed} ->
@@ -231,13 +246,44 @@ process_session(#{status := active, withdrawal := Withdrawal, route := Route} = 
     #{intent := Intent} = ProcessResult,
     Events0 = process_next_state(ProcessResult, [], ASt),
     Events1 = process_transaction_info(ProcessResult, Events0, SessionState),
-    process_adapter_intent(Intent, SessionState, Events1).
+    Events2 = process_new_body(ProcessResult, Events1, SessionState),
+    process_adapter_intent(Intent, SessionState, Events2).
 
 process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) ->
     ok = assert_transaction_info(TrxInfo, transaction_info(SessionState)),
     Events ++ [{transaction_bound, TrxInfo}];
 process_transaction_info(_, Events, _Session) ->
     Events.
+
+process_new_body(#{new_body := NewBody}, Events, #{withdrawal := #{cash := OriginalBody}} = SessionState) ->
+    %% validate against current effective body (previous change or original cash)
+    CurrentBody = maps:get(new_body, SessionState, OriginalBody),
+    case validate_new_body(CurrentBody, NewBody) of
+        ok ->
+            Events ++ [{body_changed, #{old_body => CurrentBody, new_body => NewBody}}];
+        unchanged ->
+            Events
+    end;
+process_new_body(_Result, Events, _SessionState) ->
+    Events.
+
+session_new_body_for_notify(success, St) ->
+    maps:get(new_body, St, undefined);
+session_new_body_for_notify({success, _TransactionInfo}, St) ->
+    maps:get(new_body, St, undefined);
+session_new_body_for_notify(_FailedResult, _St) ->
+    undefined.
+
+validate_new_body({Amount, Currency}, {Amount, Currency}) ->
+    unchanged;
+validate_new_body({OldAmount, Currency}, {NewAmount, Currency}) when
+    is_integer(NewAmount), NewAmount > 0, NewAmount < OldAmount
+->
+    ok;
+validate_new_body(OldBody, NewBody) ->
+    %% Adapter may have already paid out; do not finish session as business
+    %% failure (that can trigger route retry). Hard-fail like trx mismatch.
+    erlang:error({invalid_new_body, NewBody, OldBody}).
 
 %% Only one static TransactionInfo within one session
 
@@ -291,7 +337,8 @@ do_process_callback(CallbackParams, Callback, Session) ->
     Events0 = ff_withdrawal_callback_utils:process_response(Response, Callback),
     Events1 = process_next_state(HandleCallbackResult, Events0, AdapterState),
     Events2 = process_transaction_info(HandleCallbackResult, Events1, Session),
-    {ok, {Response, process_adapter_intent(Intent, Session, Events2)}}.
+    Events3 = process_new_body(HandleCallbackResult, Events2, Session),
+    {ok, {Response, process_adapter_intent(Intent, Session, Events3)}}.
 
 make_session_finish_params(Session) ->
     {_Adapter, AdapterOpts} = get_adapter_with_opts(route(Session)),
@@ -382,3 +429,36 @@ create_adapter_withdrawal(
 -spec set_callbacks_index(callbacks_index(), session_state()) -> session_state().
 set_callbacks_index(Callbacks, Session) ->
     Session#{callbacks => Callbacks}.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec session_new_body_for_notify_test() -> _.
+session_new_body_for_notify_test() ->
+    St = #{new_body => {50, <<"RUB">>}},
+    ?assertEqual({50, <<"RUB">>}, session_new_body_for_notify(success, St)),
+    ?assertEqual({50, <<"RUB">>}, session_new_body_for_notify({success, #{id => <<"trx">>}}, St)),
+    ?assertEqual(undefined, session_new_body_for_notify({failed, #{code => <<"x">>}}, St)).
+
+-spec process_new_body_validates_against_current_body_test() -> _.
+process_new_body_validates_against_current_body_test() ->
+    SessionState = #{
+        withdrawal => #{cash => {100, <<"RUB">>}},
+        new_body => {80, <<"RUB">>}
+    },
+    ?assertEqual(
+        [{body_changed, #{old_body => {80, <<"RUB">>}, new_body => {50, <<"RUB">>}}}],
+        process_new_body(#{new_body => {50, <<"RUB">>}}, [], SessionState)
+    ),
+    ?assertEqual(
+        [],
+        process_new_body(#{new_body => {80, <<"RUB">>}}, [], SessionState)
+    ),
+    ?assertError(
+        {invalid_new_body, {90, <<"RUB">>}, {80, <<"RUB">>}},
+        process_new_body(#{new_body => {90, <<"RUB">>}}, [], SessionState)
+    ).
+
+-endif.
