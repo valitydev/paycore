@@ -166,7 +166,8 @@
 
 -type adjustment_change() ::
     {change_status, status()}
-    | {change_cash_flow, domain_revision()}.
+    | {change_cash_flow, domain_revision()}
+    | {change_body, body()}.
 
 -type start_adjustment_error() ::
     invalid_withdrawal_status_error()
@@ -175,6 +176,7 @@
     | {invalid_cash_flow_change,
         {already_has_domain_revision, domain_revision()}
         | {unavailable_status, status()}}
+    | invalid_body_change_error()
     | ff_adjustment:create_error().
 
 -type unknown_adjustment_error() :: ff_adjustment_utils:unknown_adjustment_error().
@@ -185,6 +187,10 @@
 
 -type invalid_withdrawal_status_error() ::
     {invalid_withdrawal_status, status()}.
+
+-type invalid_body_change_error() ::
+    {invalid_body_change, {already_has_body, body()}}
+    | {invalid_body_change, {invalid_operation_amount, body()}}.
 
 -type action() :: prg_action:t().
 
@@ -629,8 +635,13 @@ is_current_session(SessionID, Withdrawal) ->
 
 %% Internals
 
-body_changed_events(#{new_body := NewBody}, #{body := OldBody}) ->
-    [{body_changed, #{new_body => NewBody, old_body => OldBody}}];
+body_changed_events(#{new_body := NewBody}, Withdrawal) ->
+    case final_body(Withdrawal) of
+        NewBody ->
+            [];
+        OldBody ->
+            [{body_changed, #{new_body => NewBody, old_body => OldBody}}]
+    end;
 body_changed_events(_, _) ->
     [].
 
@@ -770,11 +781,13 @@ do_process_transfer(p_transfer_start, Withdrawal) ->
 do_process_transfer(p_transfer_recreate, Withdrawal) ->
     %% route limits already rolled back when p_transfer was cancelled
     %% new route limits with new amount are required
+    WithdrawalWithNewBody = Withdrawal#{body => final_body(Withdrawal)},
     Route = route(Withdrawal),
     DomainRevision = final_domain_revision(Withdrawal),
     IterWithMultiplication =
         ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal)) * ?BODY_CHANGED_ATTEMPT_MULTIPLIER,
-    {Varset, _Context} = make_routing_varset_and_context(Withdrawal),
+    %% terms/limits selectors may depend on cost — use the changed body
+    {Varset, _Context} = make_routing_varset_and_context(WithdrawalWithNewBody),
     {ok, #domain_ProvisionTermSet{
         wallet = #domain_WalletProvisionTerms{
             withdrawals = #domain_WithdrawalProvisionTerms{
@@ -783,7 +796,6 @@ do_process_transfer(p_transfer_recreate, Withdrawal) ->
         }
     }} = compute_provider_terminal_terms(Route, Varset, DomainRevision),
     TurnoverLimits = ff_limiter:get_turnover_limits(SelectorTurnoverLimits),
-    WithdrawalWithNewBody = Withdrawal#{body => final_body(Withdrawal)},
     ok = ff_limiter:hold_withdrawal_limits(TurnoverLimits, WithdrawalWithNewBody, Route, IterWithMultiplication),
     process_p_transfer_creation(Withdrawal);
 do_process_transfer(p_transfer_prepare, Withdrawal) ->
@@ -1544,7 +1556,8 @@ validate_adjustment_start(Params, Withdrawal) ->
         valid = unwrap(validate_no_pending_adjustment(Withdrawal)),
         valid = unwrap(validate_withdrawal_finish(Withdrawal)),
         valid = unwrap(validate_status_change(Params, Withdrawal)),
-        valid = unwrap(validate_domain_revision_change(Params, Withdrawal))
+        valid = unwrap(validate_domain_revision_change(Params, Withdrawal)),
+        valid = unwrap(validate_body_change(Params, Withdrawal))
     end).
 
 -spec validate_withdrawal_finish(withdrawal_state()) ->
@@ -1635,6 +1648,28 @@ validate_current_status({failed, _Failure} = Status) ->
 validate_current_status(Status) ->
     {error, {unavailable_status, Status}}.
 
+-spec validate_body_change(adjustment_params(), withdrawal_state()) ->
+    {ok, valid}
+    | {error, invalid_body_change_error()}.
+validate_body_change(#{change := {change_body, NewBody}}, Withdrawal) ->
+    do(fun() ->
+        valid = unwrap(invalid_body_change, validate_new_body(NewBody, final_body(Withdrawal)))
+    end);
+validate_body_change(_Params, _Withdrawal) ->
+    {ok, valid}.
+
+-spec validate_new_body(body(), body()) ->
+    {ok, valid}
+    | {error, {already_has_body, body()} | {invalid_operation_amount, body()}}.
+validate_new_body({Amount, Currency}, {Amount, Currency}) ->
+    {error, {already_has_body, {Amount, Currency}}};
+validate_new_body({NewAmount, Currency}, {OldAmount, Currency}) when
+    is_integer(NewAmount), NewAmount > 0, NewAmount < OldAmount
+->
+    {ok, valid};
+validate_new_body(NewBody, _OldBody) ->
+    {error, {invalid_operation_amount, NewBody}}.
+
 %% Adjustment helpers
 
 -spec apply_adjustment_event(wrapped_adjustment_event(), withdrawal_state()) -> withdrawal_state().
@@ -1665,7 +1700,9 @@ make_adjustment_change({change_status, NewStatus}, Withdrawal) ->
     CurrentStatus = status(Withdrawal),
     make_change_status_params(CurrentStatus, NewStatus, Withdrawal);
 make_adjustment_change({change_cash_flow, NewDomainRevision}, Withdrawal) ->
-    make_change_cash_flow_params(NewDomainRevision, Withdrawal).
+    make_change_cash_flow_params(NewDomainRevision, Withdrawal);
+make_adjustment_change({change_body, NewBody}, Withdrawal) ->
+    make_change_body_params(NewBody, Withdrawal).
 
 -spec make_change_status_params(status(), status(), withdrawal_state()) -> ff_adjustment:changes().
 make_change_status_params(succeeded, {failed, _} = NewStatus, Withdrawal) ->
@@ -1712,6 +1749,27 @@ make_change_cash_flow_params(NewDomainRevision, Withdrawal) ->
         }
     }.
 
+-spec make_change_body_params(body(), withdrawal_state()) -> ff_adjustment:changes().
+make_change_body_params(NewBody, #{status := {failed, _}}) ->
+    #{
+        new_body => #{
+            new_body => NewBody
+        }
+    };
+make_change_body_params(NewBody, #{status := succeeded} = Withdrawal) ->
+    CurrentCashFlow = effective_final_cash_flow(Withdrawal),
+    %% body_changed is not applied yet; inject new body before CF recalculation
+    NewCashFlow = make_final_cash_flow(Withdrawal#{new_body => NewBody}),
+    #{
+        new_body => #{
+            new_body => NewBody
+        },
+        new_cash_flow => #{
+            old_cash_flow_inverted => ff_cash_flow:inverse(CurrentCashFlow),
+            new_cash_flow => NewCashFlow
+        }
+    }.
+
 -spec process_adjustment(withdrawal_state()) -> process_result().
 process_adjustment(Withdrawal) ->
     #{
@@ -1719,7 +1777,7 @@ process_adjustment(Withdrawal) ->
         events := Events0,
         changes := Changes
     } = ff_adjustment_utils:process_adjustments(adjustments_index(Withdrawal)),
-    Events1 = Events0 ++ handle_adjustment_changes(Changes),
+    Events1 = Events0 ++ handle_adjustment_changes(Changes, Withdrawal),
     handle_child_result({Action, Events1}, Withdrawal).
 
 -spec process_route_change(withdrawal_state(), fail_type()) -> process_result().
@@ -1818,16 +1876,27 @@ do_process_route_change(Routes, Withdrawal, Reason) ->
             {timeout, Events}
     end.
 
--spec handle_adjustment_changes(ff_adjustment:changes()) -> [event()].
-handle_adjustment_changes(Changes) ->
-    StatusChange = maps:get(new_status, Changes, undefined),
-    handle_adjustment_status_change(StatusChange).
+-spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
+handle_adjustment_changes(Changes, Withdrawal) ->
+    handle_adjustment_status_change(maps:get(new_status, Changes, undefined)) ++
+        handle_adjustment_body_change(maps:get(new_body, Changes, undefined), Withdrawal).
 
 -spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined) -> [event()].
 handle_adjustment_status_change(undefined) ->
     [];
 handle_adjustment_status_change(#{new_status := Status}) ->
     [{status_changed, Status}].
+
+-spec handle_adjustment_body_change(ff_adjustment:body_change() | undefined, withdrawal_state()) -> [event()].
+handle_adjustment_body_change(undefined, _Withdrawal) ->
+    [];
+handle_adjustment_body_change(#{new_body := NewBody}, Withdrawal) ->
+    case final_body(Withdrawal) of
+        NewBody ->
+            [];
+        OldBody ->
+            [{body_changed, #{old_body => OldBody, new_body => NewBody}}]
+    end.
 
 -spec save_adjustable_info(event(), withdrawal_state()) -> withdrawal_state().
 save_adjustable_info({p_transfer, {status_changed, committed}}, Withdrawal) ->
@@ -1911,8 +1980,8 @@ apply_event_({p_transfer, Ev}, T) ->
             T1
     end;
 apply_event_({session_started, SessionID}, T0) ->
-    %% clear new_body from previous session
-    T = maps:without([new_body], T0),
+    %% clear body-change leftovers from a previous session before starting a new one
+    T = maps:without([new_body, p_transfer_rebuild_needed], T0),
     Session = #{id => SessionID},
     Attempts = attempts(T),
     R = ff_withdrawal_route_attempt_utils:update_current_session(Session, Attempts),

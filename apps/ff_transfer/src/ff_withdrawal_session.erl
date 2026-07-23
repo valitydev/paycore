@@ -215,7 +215,8 @@ process_session(#{status := {finished, _}, id := ID, result := Result, withdrawa
     WithdrawalID = ff_adapter_withdrawal:id(Withdrawal),
     SessionData = genlib_map:compact(#{
         result => Result,
-        new_body => maps:get(new_body, St, undefined)
+        %% propagate body change only on success; failed session may retry another route
+        new_body => session_new_body_for_notify(Result, St)
     }),
     case ff_withdrawal_machine:notify(WithdrawalID, {session_finished, ID, SessionData}) of
         ok ->
@@ -254,20 +255,24 @@ process_transaction_info(#{transaction_info := TrxInfo}, Events, SessionState) -
 process_transaction_info(_, Events, _Session) ->
     Events.
 
-process_new_body(#{new_body := NewBody}, Events, #{new_body := PreviousBody} = _SessionState) when
-    NewBody =:= PreviousBody
-->
-    %% body already updated
-    Events;
-process_new_body(#{new_body := NewBody}, Events, #{withdrawal := #{cash := OldBody}} = _SessionState) ->
-    case validate_new_body(OldBody, NewBody) of
+process_new_body(#{new_body := NewBody}, Events, #{withdrawal := #{cash := OriginalBody}} = SessionState) ->
+    %% validate against current effective body (previous change or original cash)
+    CurrentBody = maps:get(new_body, SessionState, OriginalBody),
+    case validate_new_body(CurrentBody, NewBody) of
         ok ->
-            Events ++ [{body_changed, #{old_body => OldBody, new_body => NewBody}}];
+            Events ++ [{body_changed, #{old_body => CurrentBody, new_body => NewBody}}];
         unchanged ->
             Events
     end;
 process_new_body(_Result, Events, _SessionState) ->
     Events.
+
+session_new_body_for_notify(success, St) ->
+    maps:get(new_body, St, undefined);
+session_new_body_for_notify({success, _TransactionInfo}, St) ->
+    maps:get(new_body, St, undefined);
+session_new_body_for_notify(_FailedResult, _St) ->
+    undefined.
 
 validate_new_body({Amount, Currency}, {Amount, Currency}) ->
     unchanged;
@@ -424,3 +429,36 @@ create_adapter_withdrawal(
 -spec set_callbacks_index(callbacks_index(), session_state()) -> session_state().
 set_callbacks_index(Callbacks, Session) ->
     Session#{callbacks => Callbacks}.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec session_new_body_for_notify_test() -> _.
+session_new_body_for_notify_test() ->
+    St = #{new_body => {50, <<"RUB">>}},
+    ?assertEqual({50, <<"RUB">>}, session_new_body_for_notify(success, St)),
+    ?assertEqual({50, <<"RUB">>}, session_new_body_for_notify({success, #{id => <<"trx">>}}, St)),
+    ?assertEqual(undefined, session_new_body_for_notify({failed, #{code => <<"x">>}}, St)).
+
+-spec process_new_body_validates_against_current_body_test() -> _.
+process_new_body_validates_against_current_body_test() ->
+    SessionState = #{
+        withdrawal => #{cash => {100, <<"RUB">>}},
+        new_body => {80, <<"RUB">>}
+    },
+    ?assertEqual(
+        [{body_changed, #{old_body => {80, <<"RUB">>}, new_body => {50, <<"RUB">>}}}],
+        process_new_body(#{new_body => {50, <<"RUB">>}}, [], SessionState)
+    ),
+    ?assertEqual(
+        [],
+        process_new_body(#{new_body => {80, <<"RUB">>}}, [], SessionState)
+    ),
+    ?assertError(
+        {invalid_new_body, {90, <<"RUB">>}, {80, <<"RUB">>}},
+        process_new_body(#{new_body => {90, <<"RUB">>}}, [], SessionState)
+    ).
+
+-endif.

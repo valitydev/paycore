@@ -27,7 +27,8 @@
 -type changes() :: #{
     new_cash_flow => cash_flow_change(),
     new_status => status_change(),
-    new_domain_revision => #{new_domain_revision := domain_revision()}
+    new_domain_revision => #{new_domain_revision := domain_revision()},
+    new_body => body_change()
 }.
 
 -type cash_flow_change() :: #{
@@ -37,6 +38,10 @@
 
 -type status_change() :: #{
     new_status := target_status()
+}.
+
+-type body_change() :: #{
+    new_body := body()
 }.
 
 -type status() ::
@@ -56,6 +61,7 @@
 -export_type([changes/0]).
 -export_type([cash_flow_change/0]).
 -export_type([status_change/0]).
+-export_type([body_change/0]).
 -export_type([status/0]).
 -export_type([adjustment/0]).
 -export_type([params/0]).
@@ -90,6 +96,7 @@
 %% Internal types
 
 -type target_status() :: term().
+-type body() :: ff_cash:cash().
 -type final_cash_flow() :: ff_cash_flow:final_cash_flow().
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type action() :: prg_action:t().

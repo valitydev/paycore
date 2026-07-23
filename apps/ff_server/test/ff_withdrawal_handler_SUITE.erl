@@ -44,6 +44,9 @@
 -export([create_adjustment_unavailable_status_error_test/1]).
 -export([create_adjustment_already_has_status_error_test/1]).
 -export([create_adjustment_already_has_data_revision_error_test/1]).
+-export([create_adjustment_already_has_body_error_test/1]).
+-export([create_adjustment_invalid_operation_amount_error_test/1]).
+-export([create_adjustment_change_body_ok_test/1]).
 -export([withdrawal_state_content_test/1]).
 -export([trace_withdrawal_test/1]).
 -export([create_withdrawal_with_changed_body_test/1]).
@@ -92,6 +95,9 @@ groups() ->
             create_adjustment_unavailable_status_error_test,
             create_adjustment_already_has_status_error_test,
             create_adjustment_already_has_data_revision_error_test,
+            create_adjustment_already_has_body_error_test,
+            create_adjustment_invalid_operation_amount_error_test,
+            create_adjustment_change_body_ok_test,
             withdrawal_state_content_test
         ]}
     ].
@@ -843,6 +849,73 @@ create_adjustment_already_has_data_revision_error_test(_C) ->
         domain_revision = DomainRevision
     },
     ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_already_has_body_error_test(config()) -> test_return().
+create_adjustment_already_has_body_error_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    Body = make_cash({100, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = genlib:bsuuid(),
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = Body
+            }}
+    },
+    Result = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedError = #wthd_AlreadyHasBody{
+        body = Body
+    },
+    ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_invalid_operation_amount_error_test(config()) -> test_return().
+create_adjustment_invalid_operation_amount_error_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    Body = make_cash({150, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = genlib:bsuuid(),
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = Body
+            }}
+    },
+    Result = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedError = #fistful_InvalidOperationAmount{
+        amount = Body
+    },
+    ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_change_body_ok_test(config()) -> test_return().
+create_adjustment_change_body_ok_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    AdjustmentID = genlib:bsuuid(),
+    NewBody = make_cash({50, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = AdjustmentID,
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = NewBody
+            }}
+    },
+    {ok, AdjustmentState} = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedAdjustment = get_adjustment(WithdrawalID, AdjustmentID),
+    ?assertEqual(AdjustmentID, AdjustmentState#wthd_adj_AdjustmentState.id),
+    ?assertEqual(
+        ff_withdrawal_adjustment_codec:marshal(changes_plan, ff_adjustment:changes_plan(ExpectedAdjustment)),
+        AdjustmentState#wthd_adj_AdjustmentState.changes_plan
+    ),
+    ?assertMatch(
+        #wthd_adj_ChangesPlan{
+            new_body = #wthd_adj_BodyChangePlan{new_body = NewBody},
+            new_cash_flow = #wthd_adj_CashFlowChangePlan{}
+        },
+        AdjustmentState#wthd_adj_AdjustmentState.changes_plan
+    ).
 
 -spec withdrawal_state_content_test(config()) -> test_return().
 withdrawal_state_content_test(_C) ->
