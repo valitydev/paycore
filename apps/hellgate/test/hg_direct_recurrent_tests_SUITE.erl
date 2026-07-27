@@ -226,7 +226,7 @@ second_recurrent_payment_success_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -271,7 +271,7 @@ register_parent_payment_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -294,7 +294,7 @@ another_party_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     ExpectedError = #payproc_InvalidRecurrentParentPayment{details = <<"Parent payment refer to another party">>},
     {error, ExpectedError} = start_payment(Invoice2ID, Payment2Params, Client).
 
@@ -310,7 +310,7 @@ same_party_different_shops_test(C) ->
     SecondShopConfigRef = cfg(second_shop_config_ref, C),
     Invoice2ID = start_invoice(SecondShopConfigRef, <<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -329,7 +329,7 @@ not_recurring_first_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     ExpectedError = #payproc_InvalidRecurrentParentPayment{details = <<"Parent payment has no recurrent token">>},
     {error, ExpectedError} = start_payment(Invoice2ID, Payment2Params, Client).
 
@@ -344,7 +344,7 @@ cancelled_first_payment_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -366,7 +366,7 @@ not_exists_invoice_test(C) ->
     Client = cfg(client, C),
     InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(<<"not_exists">>, <<"not_exists">>),
-    PaymentParams = make_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    PaymentParams = make_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     ExpectedError = #payproc_InvalidRecurrentParentPayment{details = <<"Parent invoice not found">>},
     {error, ExpectedError} = start_payment(InvoiceID, PaymentParams, Client).
 
@@ -375,7 +375,7 @@ not_exists_payment_test(C) ->
     Client = cfg(client, C),
     InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(InvoiceID, <<"not_exists">>),
-    PaymentParams = make_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    PaymentParams = make_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     ExpectedError = #payproc_InvalidRecurrentParentPayment{details = <<"Parent payment not found">>},
     {error, ExpectedError} = start_payment(InvoiceID, PaymentParams, Client).
 
@@ -448,7 +448,7 @@ customer_id_stored_test(C) ->
     %% Child recurrent payment inherits customer_id from parent — not passed explicitly
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     #payproc_InvoicePayment{
@@ -487,7 +487,7 @@ different_customer_id_test(C) ->
     %% Child recurrent payment with different CustomerB should be rejected
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    BaseParams = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    BaseParams = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     Payment2Params = BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerB},
     {error, #payproc_InvalidRecurrentParentPayment{details = <<"Customer ID mismatch with parent">>}} =
         start_payment(Invoice2ID, Payment2Params, Client).
@@ -525,7 +525,7 @@ cascade_tokens_filter_success_test(C) ->
     %% finds cascade tokens saved by first payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -568,7 +568,7 @@ cascade_recurrent_payment_success_test(C) ->
     %% Step 4: Routing picks from candidates filtered by tokens; ?prv(1) fails, cascades to ?prv(2)
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
@@ -607,11 +607,11 @@ recurrent_no_customer_bankcard_lookup_test(C) ->
     Payment1Params = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, Payment1ID} = start_payment(Invoice1ID, Payment1Params, Client),
     Payment1ID = await_payment_capture(Invoice1ID, Payment1ID, Client),
-    %% Step 2: Child recurrent payment, also NO customer_id
+    %% Step 2: Child recurrent (make_recurrent=false), also NO customer_id
     %% System should find BankCard by bank_card_token and load cascade tokens
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     %% Verify: payment succeeded, no customer_id
@@ -654,7 +654,7 @@ new_client_old_card_cascade_test(C) ->
     %% prv(1) fails, cascades to prv(2)
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     %% Verify: cascade succeeded via ?prv(2)/?trm(2)
@@ -679,7 +679,7 @@ cascade_exhaustion_test(C) ->
     %% Step 3: Recurrent payment should exhaust cascade and fail
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     %% Await payment failure
     Pattern = [
@@ -723,7 +723,7 @@ cascade_routing_filter_test(C) ->
     %% Step 4: Recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     %% Verify: routed to prv(3)/trm(3) — prv(2) was excluded by routing despite having a token
