@@ -226,7 +226,7 @@ second_recurrent_payment_success_test(C) ->
     %% second recurrent payment
     Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
+    Payment2Params = make_recurrent_payment_params(true, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {ok, Payment2ID} = start_payment(Invoice2ID, Payment2Params, Client),
     Payment2ID = await_payment_capture(Invoice2ID, Payment2ID, Client),
     ?invoice_state(
