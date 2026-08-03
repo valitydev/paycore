@@ -50,7 +50,10 @@ marshal(changes_plan, Plan) ->
     #wthd_adj_ChangesPlan{
         new_cash_flow = maybe_marshal(cash_flow_change_plan, maps:get(new_cash_flow, Plan, undefined)),
         new_status = maybe_marshal(status_change_plan, maps:get(new_status, Plan, undefined)),
-        new_domain_revision = maybe_marshal(domain_revision_change_plan, maps:get(new_domain_revision, Plan, undefined))
+        new_domain_revision = maybe_marshal(
+            domain_revision_change_plan, maps:get(new_domain_revision, Plan, undefined)
+        ),
+        new_body = maybe_marshal(body_change_plan, maps:get(new_body, Plan, undefined))
     };
 marshal(cash_flow_change_plan, Plan) ->
     OldCashFlow = ff_cash_flow_codec:marshal(final_cash_flow, maps:get(old_cash_flow_inverted, Plan)),
@@ -67,13 +70,21 @@ marshal(domain_revision_change_plan, Plan) ->
     #wthd_adj_DataRevisionChangePlan{
         new_domain_revision = ff_codec:marshal(domain_revision, maps:get(new_domain_revision, Plan))
     };
+marshal(body_change_plan, Plan) ->
+    #wthd_adj_BodyChangePlan{
+        new_body = marshal(cash, maps:get(new_body, Plan))
+    };
 marshal(change_request, {change_status, Status}) ->
     {change_status, #wthd_adj_ChangeStatusRequest{
         new_status = ff_withdrawal_status_codec:marshal(status, Status)
     }};
 marshal(change_request, {change_cash_flow, DomainRevision}) ->
-    {change_status, #wthd_adj_ChangeCashFlowRequest{
+    {change_cash_flow, #wthd_adj_ChangeCashFlowRequest{
         domain_revision = ff_codec:marshal(domain_revision, DomainRevision)
+    }};
+marshal(change_request, {change_body, NewBody}) ->
+    {change_body, #wthd_adj_ChangeBodyRequest{
+        new_body = marshal(cash, NewBody)
     }};
 marshal(T, V) ->
     ff_codec:marshal(T, V).
@@ -111,7 +122,8 @@ unmarshal(changes_plan, Plan) ->
         new_status => maybe_unmarshal(status_change_plan, Plan#wthd_adj_ChangesPlan.new_status),
         new_domain_revision => maybe_unmarshal(
             domain_revision_change_plan, Plan#wthd_adj_ChangesPlan.new_domain_revision
-        )
+        ),
+        new_body => maybe_unmarshal(body_change_plan, Plan#wthd_adj_ChangesPlan.new_body)
     });
 unmarshal(cash_flow_change_plan, Plan) ->
     OldCashFlow = Plan#wthd_adj_CashFlowChangePlan.old_cash_flow_inverted,
@@ -130,12 +142,18 @@ unmarshal(domain_revision_change_plan, Plan) ->
     #{
         new_domain_revision => ff_codec:unmarshal(domain_revision, DomainRevision)
     };
+unmarshal(body_change_plan, Plan) ->
+    #{
+        new_body => unmarshal(cash, Plan#wthd_adj_BodyChangePlan.new_body)
+    };
 unmarshal(change_request, {change_status, Request}) ->
     Status = Request#wthd_adj_ChangeStatusRequest.new_status,
     {change_status, ff_withdrawal_status_codec:unmarshal(status, Status)};
 unmarshal(change_request, {change_cash_flow, Request}) ->
     DomainRevision = Request#wthd_adj_ChangeCashFlowRequest.domain_revision,
     {change_cash_flow, ff_codec:unmarshal(domain_revision, DomainRevision)};
+unmarshal(change_request, {change_body, Request}) ->
+    {change_body, unmarshal(cash, Request#wthd_adj_ChangeBodyRequest.new_body)};
 unmarshal(T, V) ->
     ff_codec:unmarshal(T, V).
 
@@ -197,7 +215,8 @@ adjustment_codec_test() ->
         new_status => #{
             new_status => succeeded
         },
-        new_domain_revision => #{new_domain_revision => 123}
+        new_domain_revision => #{new_domain_revision => 123},
+        new_body => #{new_body => {50, <<"RUB">>}}
     },
 
     Adjustment = #{
@@ -220,6 +239,16 @@ adjustment_codec_test() ->
         {p_transfer, {created, Transfer}},
         {status_changed, pending}
     ],
-    ?assertEqual(Changes, [unmarshal(change, marshal(change, C)) || C <- Changes]).
+    ?assertEqual(Changes, [unmarshal(change, marshal(change, C)) || C <- Changes]),
+
+    ChangeRequests = [
+        {change_status, succeeded},
+        {change_cash_flow, 123},
+        {change_body, {50, <<"RUB">>}}
+    ],
+    ?assertEqual(
+        ChangeRequests,
+        [unmarshal(change_request, marshal(change_request, R)) || R <- ChangeRequests]
+    ).
 
 -endif.

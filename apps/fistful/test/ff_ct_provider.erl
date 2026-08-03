@@ -123,6 +123,13 @@ process_withdrawal(#{contact_info := #{email := <<"fail_it@mymail.com">>}}, Stat
         intent => {finish, {failed, #{code => <<"email_error">>}}},
         next_state => State
     }};
+process_withdrawal(#{body := #wthd_provider_Cash{amount = 1357}}, State, _Options) ->
+    %% change body scenario
+    {ok, #{
+        intent => {finish, {success, ?TRX_INFO}},
+        next_state => State,
+        new_body => {1246, <<"RUB">>}
+    }};
 process_withdrawal(#{auth_data := #{sender := <<"SenderToken">>, receiver := <<"ReceiverToken">>}}, State, _Options) ->
     {ok, #{
         intent => {finish, {success, ?TRX_INFO}},

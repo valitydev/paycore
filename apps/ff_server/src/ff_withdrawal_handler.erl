@@ -176,5 +176,13 @@ handle_function_('CreateAdjustment', {ID, MarshaledParams}, _Opts) ->
         {error, {invalid_cash_flow_change, {already_has_domain_revision, DomainRevision}}} ->
             woody_error:raise(business, #wthd_AlreadyHasDataRevision{
                 domain_revision = ff_withdrawal_codec:marshal(domain_revision, DomainRevision)
+            });
+        {error, {invalid_body_change, {already_has_body, Body}}} ->
+            woody_error:raise(business, #wthd_AlreadyHasBody{
+                body = ff_codec:marshal(cash, Body)
+            });
+        {error, {invalid_body_change, {invalid_operation_amount, Body}}} ->
+            woody_error:raise(business, #fistful_InvalidOperationAmount{
+                amount = ff_codec:marshal(cash, Body)
             })
     end.

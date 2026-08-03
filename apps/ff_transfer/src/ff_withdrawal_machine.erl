@@ -43,7 +43,7 @@
     ff_withdrawal:start_adjustment_error()
     | unknown_withdrawal_error().
 
--type notify_args() :: {session_finished, session_id(), session_result()}.
+-type notify_args() :: {session_finished, session_id(), session_data()}.
 -type notify_error() ::
     notfound
     | failed
@@ -53,7 +53,7 @@
     | term().
 
 -type session_id() :: ff_withdrawal_session:id().
--type session_result() :: ff_withdrawal_session:session_result().
+-type session_data() :: ff_withdrawal_session:session_data().
 
 -export_type([id/0]).
 -export_type([st/0]).
@@ -195,9 +195,9 @@ process_repair(Scenario, Machine) ->
     ff_machine_lib:process_repair(?MODULE, Machine, Scenario).
 
 -spec process_notification(notify_args(), machine()) -> prg_result().
-process_notification({session_finished, SessionID, SessionResult}, Machine) ->
+process_notification({session_finished, SessionID, SessionData}, Machine) ->
     Withdrawal = prg_machine:collapse(?MODULE, Machine),
-    case ff_withdrawal:finalize_session(SessionID, SessionResult, Withdrawal) of
+    case ff_withdrawal:finalize_session(SessionID, SessionData, Withdrawal) of
         {ok, Result} ->
             ff_machine_lib:to_prg_result(Result);
         {error, Reason} ->

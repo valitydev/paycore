@@ -9,6 +9,8 @@
 -include_lib("fistful_proto/include/fistful_fistful_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_cashflow_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_transfer_thrift.hrl").
+-include_lib("ff_cth/include/ct_domain.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -42,13 +44,23 @@
 -export([create_adjustment_unavailable_status_error_test/1]).
 -export([create_adjustment_already_has_status_error_test/1]).
 -export([create_adjustment_already_has_data_revision_error_test/1]).
+-export([create_adjustment_already_has_body_error_test/1]).
+-export([create_adjustment_invalid_operation_amount_error_test/1]).
+-export([create_adjustment_change_body_ok_test/1]).
 -export([withdrawal_state_content_test/1]).
 -export([trace_withdrawal_test/1]).
+-export([create_withdrawal_with_changed_body_test/1]).
 
 -type config() :: ct_helper:config().
 -type test_case_name() :: ct_helper:test_case_name().
 -type group_name() :: ct_helper:group_name().
 -type test_return() :: _ | no_return().
+
+-define(posting(Source, Destination, Amount), #cashflow_FinalCashFlowPosting{
+    source = #cashflow_FinalCashFlowAccount{account_type = Source},
+    destination = #cashflow_FinalCashFlowAccount{account_type = Destination},
+    volume = #fistful_base_Cash{amount = Amount}
+}).
 
 -spec all() -> [test_case_name() | {group, group_name()}].
 all() ->
@@ -66,6 +78,7 @@ groups() ->
             create_withdrawal_and_get_session_ok_test,
 
             create_withdrawal_ok_test,
+            create_withdrawal_with_changed_body_test,
             create_withdrawal_fail_email_test,
             create_cashlimit_validation_error_test,
             create_currency_validation_error_test,
@@ -82,6 +95,9 @@ groups() ->
             create_adjustment_unavailable_status_error_test,
             create_adjustment_already_has_status_error_test,
             create_adjustment_already_has_data_revision_error_test,
+            create_adjustment_already_has_body_error_test,
+            create_adjustment_invalid_operation_amount_error_test,
+            create_adjustment_change_body_ok_test,
             withdrawal_state_content_test
         ]}
     ].
@@ -283,6 +299,122 @@ create_withdrawal_ok_test(_C) ->
         {succeeded, _},
         FinalWithdrawalState#wthd_WithdrawalState.status
     ).
+
+-spec create_withdrawal_with_changed_body_test(config()) -> test_return().
+create_withdrawal_with_changed_body_test(C) ->
+    Cash = make_cash({1357, <<"RUB">>}),
+    Ctx = ct_objects:build_default_ctx(),
+    LimitsRev = ct_helper:cfg('$limits_domain_revision', C),
+    #{
+        party_id := PartyID,
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        withdrawal_id := PreviousWithdrawalID
+    } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+
+    PreviousWithdrawal = get_withdrawal(PreviousWithdrawalID),
+    Limit0 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, PreviousWithdrawal, C),
+
+    WithdrawalID = genlib:bsuuid(),
+    ExternalID = genlib:bsuuid(),
+    Context = ff_entity_context_codec:marshal(#{<<"NS">> => #{}}),
+    Metadata = ff_entity_context_codec:marshal(#{<<"metadata">> => #{<<"some key">> => <<"some data">>}}),
+    ContactInfo = #fistful_base_ContactInfo{
+        phone_number = <<"1234567890">>,
+        email = <<"test@mail.com">>
+    },
+    Params = #wthd_WithdrawalParams{
+        id = WithdrawalID,
+        party_id = PartyID,
+        wallet_id = WalletID,
+        destination_id = DestinationID,
+        body = Cash,
+        metadata = Metadata,
+        external_id = ExternalID,
+        contact_info = ContactInfo
+    },
+    {ok, _WithdrawalState} = call_withdrawal('Create', {Params, Context}),
+    %% Adapter will change amount on 1246
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+    {ok, #wthd_WithdrawalState{
+        effective_final_cash_flow = #cashflow_FinalCashFlow{postings = Postings},
+        new_body = #fistful_base_Cash{amount = NewAmount}
+    }} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
+    ?assertEqual(1246, NewAmount),
+    [
+        ?posting({system, settlement}, {provider, settlement}, 10),
+        ?posting({wallet, receiver_destination}, {system, settlement}, 125),
+        ?posting({wallet, receiver_destination}, {system, subagent}, 125),
+        ?posting({wallet, sender_settlement}, {wallet, receiver_destination}, 1246)
+    ] = lists:sort(Postings),
+
+    Withdrawal = get_withdrawal(WithdrawalID),
+    Limit1 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, Withdrawal, C),
+    ?assertEqual(1246, Limit1 - Limit0),
+
+    Range = {undefined, undefined},
+    EncodedRange = ff_codec:marshal(event_range, Range),
+    {ok, Events} = call_withdrawal('GetEvents', {WithdrawalID, EncodedRange}),
+    [
+        #wthd_Event{change = {created, _}},
+        #wthd_Event{change = {status_changed, _}},
+        #wthd_Event{change = {resource, _}},
+        #wthd_Event{change = {route, _}},
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {created, _}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {created, _}}}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {prepared, _}}}
+                }}
+        },
+        #wthd_Event{change = {limit_check, _}},
+        #wthd_Event{change = {session, _}},
+        #wthd_Event{change = {session, _}},
+        #wthd_Event{change = {body_changed, _}},
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {cancelled, _}}}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {created, _}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {created, _}}}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {prepared, _}}}
+                }}
+        },
+        #wthd_Event{
+            change =
+                {transfer, #wthd_TransferChange{
+                    payload = {status_changed, #transfer_StatusChange{status = {committed, _}}}
+                }}
+        },
+        #wthd_Event{change = {status_changed, _}}
+    ] = Events,
+    ok.
 
 -spec trace_withdrawal_test(config()) -> test_return().
 trace_withdrawal_test(_C) ->
@@ -717,6 +849,73 @@ create_adjustment_already_has_data_revision_error_test(_C) ->
         domain_revision = DomainRevision
     },
     ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_already_has_body_error_test(config()) -> test_return().
+create_adjustment_already_has_body_error_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    Body = make_cash({100, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = genlib:bsuuid(),
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = Body
+            }}
+    },
+    Result = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedError = #wthd_AlreadyHasBody{
+        body = Body
+    },
+    ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_invalid_operation_amount_error_test(config()) -> test_return().
+create_adjustment_invalid_operation_amount_error_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    Body = make_cash({150, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = genlib:bsuuid(),
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = Body
+            }}
+    },
+    Result = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedError = #fistful_InvalidOperationAmount{
+        amount = Body
+    },
+    ?assertEqual({exception, ExpectedError}, Result).
+
+-spec create_adjustment_change_body_ok_test(config()) -> test_return().
+create_adjustment_change_body_ok_test(_C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    AdjustmentID = genlib:bsuuid(),
+    NewBody = make_cash({50, <<"RUB">>}),
+    Params = #wthd_adj_AdjustmentParams{
+        id = AdjustmentID,
+        change =
+            {change_body, #wthd_adj_ChangeBodyRequest{
+                new_body = NewBody
+            }}
+    },
+    {ok, AdjustmentState} = call_withdrawal('CreateAdjustment', {WithdrawalID, Params}),
+    ExpectedAdjustment = get_adjustment(WithdrawalID, AdjustmentID),
+    ?assertEqual(AdjustmentID, AdjustmentState#wthd_adj_AdjustmentState.id),
+    ?assertEqual(
+        ff_withdrawal_adjustment_codec:marshal(changes_plan, ff_adjustment:changes_plan(ExpectedAdjustment)),
+        AdjustmentState#wthd_adj_AdjustmentState.changes_plan
+    ),
+    ?assertMatch(
+        #wthd_adj_ChangesPlan{
+            new_body = #wthd_adj_BodyChangePlan{new_body = NewBody},
+            new_cash_flow = #wthd_adj_CashFlowChangePlan{}
+        },
+        AdjustmentState#wthd_adj_AdjustmentState.changes_plan
+    ).
 
 -spec withdrawal_state_content_test(config()) -> test_return().
 withdrawal_state_content_test(_C) ->

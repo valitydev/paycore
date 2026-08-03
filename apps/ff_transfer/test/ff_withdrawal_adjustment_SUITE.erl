@@ -29,6 +29,13 @@
 -export([adjustment_can_not_change_domain_revision_to_same/1]).
 -export([adjustment_can_not_change_domain_revision_with_failed_status/1]).
 -export([adjustment_can_change_domain_revision_test/1]).
+-export([adjustment_fail_change_body_succeed_test/1]).
+-export([adjustment_can_change_body_on_succeeded_test/1]).
+-export([adjustment_change_cash_flow_then_change_body_test/1]).
+-export([adjustment_change_body_then_change_cash_flow_test/1]).
+-export([adjustment_can_not_change_body_to_same/1]).
+-export([adjustment_can_not_increase_body/1]).
+-export([adjustment_can_not_change_body_on_pending/1]).
 
 %% Internal types
 
@@ -65,10 +72,17 @@ groups() ->
             no_pending_withdrawal_adjustments_test,
             unknown_withdrawal_test,
             adjustment_can_not_change_domain_revision_to_same,
-            adjustment_can_not_change_domain_revision_with_failed_status
+            adjustment_can_not_change_domain_revision_with_failed_status,
+            adjustment_fail_change_body_succeed_test,
+            adjustment_can_change_body_on_succeeded_test,
+            adjustment_can_not_change_body_to_same,
+            adjustment_can_not_increase_body,
+            adjustment_can_not_change_body_on_pending
         ]},
         {non_parallel, [], [
-            adjustment_can_change_domain_revision_test
+            adjustment_can_change_domain_revision_test,
+            adjustment_change_cash_flow_then_change_body_test,
+            adjustment_change_body_then_change_cash_flow_test
         ]}
     ].
 
@@ -377,6 +391,149 @@ adjustment_can_change_domain_revision_test(C) ->
     ?assertEqual(?FINAL_BALANCE(StartProviderAmount + 5, <<"RUB">>), get_provider_balance(ProviderID, DomainRevision)),
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
     ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)).
+
+-spec adjustment_fail_change_body_succeed_test(config()) -> test_return().
+adjustment_fail_change_body_succeed_test(C) ->
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)),
+    _ = process_adjustment(WithdrawalID, #{
+        change => {change_status, {failed, #{code => <<"test">>}}}
+    }),
+    ?assertEqual(?FINAL_BALANCE(100, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_destination_balance(DestinationID)),
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_body, {50, <<"RUB">>}}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertMatch({failed, _}, get_withdrawal_status(WithdrawalID)),
+    ?assertEqual(?FINAL_BALANCE(100, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_destination_balance(DestinationID)),
+    _ = process_adjustment(WithdrawalID, #{
+        change => {change_status, succeeded}
+    }),
+    ?assertEqual(succeeded, get_withdrawal_status(WithdrawalID)),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)).
+
+-spec adjustment_can_change_body_on_succeeded_test(config()) -> test_return().
+adjustment_can_change_body_on_succeeded_test(C) ->
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)),
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_body, {50, <<"RUB">>}}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(succeeded, get_withdrawal_status(WithdrawalID)),
+    Plan = ff_adjustment:changes_plan(get_adjustment(WithdrawalID, AdjustmentID)),
+    ?assertMatch(#{new_body := #{new_body := {50, <<"RUB">>}}, new_cash_flow := #{}}, Plan),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)).
+
+-spec adjustment_change_cash_flow_then_change_body_test(config()) -> test_return().
+adjustment_change_cash_flow_then_change_body_test(C) ->
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    _OtherWalletToChangeDomain = ct_objects:create_wallet(
+        PartyID, <<"RUB">>, #domain_TermSetHierarchyRef{id = 1}, #domain_PaymentInstitutionRef{id = 1}
+    ),
+    _ = process_adjustment(WithdrawalID, #{
+        change => {change_cash_flow, ct_domain_config:head()}
+    }),
+    ?assertEqual(succeeded, get_withdrawal_status(WithdrawalID)),
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_body, {50, <<"RUB">>}}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)).
+
+-spec adjustment_change_body_then_change_cash_flow_test(config()) -> test_return().
+adjustment_change_body_then_change_cash_flow_test(C) ->
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    _ = process_adjustment(WithdrawalID, #{
+        change => {change_body, {50, <<"RUB">>}}
+    }),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)),
+    _OtherWalletToChangeDomain = ct_objects:create_wallet(
+        PartyID, <<"RUB">>, #domain_TermSetHierarchyRef{id = 1}, #domain_PaymentInstitutionRef{id = 1}
+    ),
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_cash_flow, ct_domain_config:head()}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)).
+
+-spec adjustment_can_not_change_body_to_same(config()) -> test_return().
+adjustment_can_not_change_body_to_same(C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    Result = ff_withdrawal_machine:start_adjustment(WithdrawalID, #{
+        id => genlib:bsuuid(),
+        change => {change_body, {100, <<"RUB">>}}
+    }),
+    ?assertMatch({error, {invalid_body_change, {already_has_body, {100, <<"RUB">>}}}}, Result).
+
+-spec adjustment_can_not_increase_body(config()) -> test_return().
+adjustment_can_not_increase_body(C) ->
+    #{
+        withdrawal_id := WithdrawalID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    Result = ff_withdrawal_machine:start_adjustment(WithdrawalID, #{
+        id => genlib:bsuuid(),
+        change => {change_body, {150, <<"RUB">>}}
+    }),
+    ?assertMatch({error, {invalid_body_change, {invalid_operation_amount, {150, <<"RUB">>}}}}, Result).
+
+-spec adjustment_can_not_change_body_on_pending(config()) -> test_return().
+adjustment_can_not_change_body_on_pending(C) ->
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    {ok, Events0} = ff_withdrawal:create(#{
+        id => genlib:bsuuid(),
+        wallet_id => WalletID,
+        destination_id => DestinationID,
+        party_id => PartyID,
+        body => {100, <<"RUB">>}
+    }),
+    Withdrawal1 = lists:foldl(fun ff_withdrawal:apply_event/2, undefined, Events0),
+    Result = ff_withdrawal:start_adjustment(
+        #{
+            id => genlib:bsuuid(),
+            change => {change_body, {50, <<"RUB">>}}
+        },
+        Withdrawal1
+    ),
+    ?assertMatch({error, {invalid_withdrawal_status, pending}}, Result).
 
 %% Utils
 

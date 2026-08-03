@@ -9,6 +9,7 @@
 -export([create_wallet/5]).
 
 -export([currency/1]).
+-export([currency_data/1]).
 -export([category/3]).
 -export([payment_method/1]).
 -export([payment_system/2]).
@@ -164,46 +165,41 @@ withdrawal_terminal(?trm(ID) = Ref, ?prv(ProviderID) = ProviderRef, TermSet) ->
         }
     }}.
 
+-spec currency_data(SymCode :: binary()) -> dmsl_domain_thrift:'Currency'().
+currency_data(<<"EUR">> = SymCode) ->
+    #domain_Currency{
+        name = <<"Europe"/utf8>>,
+        numeric_code = 978,
+        symbolic_code = SymCode,
+        exponent = 2
+    };
+currency_data(<<"RUB">> = SymCode) ->
+    #domain_Currency{
+        name = <<"Яussian Яuble"/utf8>>,
+        numeric_code = 643,
+        symbolic_code = SymCode,
+        exponent = 2
+    };
+currency_data(<<"USD">> = SymCode) ->
+    #domain_Currency{
+        name = <<"U$ Dollar">>,
+        numeric_code = 840,
+        symbolic_code = SymCode,
+        exponent = 2
+    };
+currency_data(<<"BTC">> = SymCode) ->
+    #domain_Currency{
+        name = <<"Bitcoin">>,
+        numeric_code = 999,
+        symbolic_code = SymCode,
+        exponent = 10
+    }.
+
 -spec currency(?DTP('CurrencyRef')) -> object().
-currency(?cur(<<"EUR">> = SymCode) = Ref) ->
+currency(?cur(SymCode) = Ref) ->
     {currency, #domain_CurrencyObject{
         ref = Ref,
-        data = #domain_Currency{
-            name = <<"Europe"/utf8>>,
-            numeric_code = 978,
-            symbolic_code = SymCode,
-            exponent = 2
-        }
-    }};
-currency(?cur(<<"RUB">> = SymCode) = Ref) ->
-    {currency, #domain_CurrencyObject{
-        ref = Ref,
-        data = #domain_Currency{
-            name = <<"Яussian Яuble"/utf8>>,
-            numeric_code = 643,
-            symbolic_code = SymCode,
-            exponent = 2
-        }
-    }};
-currency(?cur(<<"USD">> = SymCode) = Ref) ->
-    {currency, #domain_CurrencyObject{
-        ref = Ref,
-        data = #domain_Currency{
-            name = <<"U$ Dollar">>,
-            numeric_code = 840,
-            symbolic_code = SymCode,
-            exponent = 2
-        }
-    }};
-currency(?cur(<<"BTC">> = SymCode) = Ref) ->
-    {currency, #domain_CurrencyObject{
-        ref = Ref,
-        data = #domain_Currency{
-            name = <<"Bitcoin">>,
-            numeric_code = 999,
-            symbolic_code = SymCode,
-            exponent = 10
-        }
+        data = currency_data(SymCode)
     }}.
 
 -spec category(?DTP('CategoryRef'), binary(), ?DTP('CategoryType')) -> object().

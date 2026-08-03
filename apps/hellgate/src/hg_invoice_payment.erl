@@ -800,9 +800,11 @@ check_risk_score(_RiskScore) ->
 get_routing_predestination(#domain_InvoicePayment{make_recurrent = true}) ->
     recurrent_payment;
 get_routing_predestination(#domain_InvoicePayment{payer = ?payment_resource_payer()}) ->
+    payment;
+%% Cascade recurrent payments go through full routing (filtered by tokens)
+%% instead of a predefined parent route, so they need an explicit predestination.
+get_routing_predestination(#domain_InvoicePayment{payer = ?recurrent_payer()}) ->
     payment.
-
-% Other payers has predefined routes
 
 log_route_choice_meta(#{choice_meta := ChoiceMeta}, Revision) ->
     Metadata = hg_routing:get_logger_metadata(ChoiceMeta, Revision),

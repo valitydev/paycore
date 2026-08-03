@@ -87,7 +87,8 @@ marshal_withdrawal_state(WithdrawalState, Context) ->
         metadata = marshal(ctx, ff_withdrawal:metadata(WithdrawalState)),
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(WithdrawalState)),
         withdrawal_validation = maybe_marshal(withdrawal_validation, ff_withdrawal:validation(WithdrawalState)),
-        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState))
+        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState)),
+        new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState))
     }.
 
 -spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_thrift:'Event'().
@@ -129,6 +130,11 @@ marshal(change, {adjustment, #{id := ID, payload := Payload}}) ->
     }};
 marshal(change, {validation, {Part, ValidationResult}}) when Part =:= sender; Part =:= receiver ->
     {validation, {Part, marshal(validation_result, ValidationResult)}};
+marshal(change, {body_changed, #{old_body := OldBody, new_body := NewBody}}) ->
+    {body_changed, #wthd_BodyChange{
+        old_body = marshal(cash, OldBody),
+        new_body = marshal(cash, NewBody)
+    }};
 marshal(validation_result, {personal, #{validation_id := ValidationID, token := Token, validation_status := Status}}) ->
     {
         personal,
@@ -255,6 +261,11 @@ unmarshal(change, {adjustment, Change}) ->
     }};
 unmarshal(change, {validation, {Part, ValidationResult}}) when Part =:= sender; Part =:= receiver ->
     {validation, {Part, unmarshal(validation_result, ValidationResult)}};
+unmarshal(change, {body_changed, #wthd_BodyChange{old_body = OldBody, new_body = NewBody}}) ->
+    {body_changed, #{
+        old_body => unmarshal(cash, OldBody),
+        new_body => unmarshal(cash, NewBody)
+    }};
 unmarshal(validation_result, {personal, Validation}) ->
     {personal, #{
         validation_id => unmarshal(id, Validation#wthd_PersonalDataValidationResult.validation_id),
