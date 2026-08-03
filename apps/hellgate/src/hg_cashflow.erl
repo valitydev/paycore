@@ -85,10 +85,7 @@ compute_postings(CF, Context, AccountMap, Opts) ->
         ?final_posting(
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
-            hg_currency_converter:maybe_reverse_convert_cash(
-                ExchangeContext,
-                compute_volume(Volume, Context, ExchangeContext)
-            ),
+            compute_volume(Volume, Context, ExchangeContext),
             Details,
             ExchangeContext
         )
@@ -178,15 +175,12 @@ revert_details(Details) ->
 compute_volume(Volume, Context) ->
     compute_volume(Volume, Context, undefined).
 
-%% convert volume calculation result into the terminal currency
-%% for correct calculation of product post
 compute_volume(?fixed(Cash), _Context, ExchangeContext) ->
-    hg_currency_converter:maybe_convert_cash(ExchangeContext, Cash);
-compute_volume(?share(P, Q, Of, RoundingMethod), Context, ExchangeContext) ->
-    hg_currency_converter:maybe_convert_cash(
-        ExchangeContext,
-        compute_parts_of(P, Q, resolve_constant(Of, Context), RoundingMethod)
-    );
+    %% if posting currency differs from payment currency
+    %% needs re-convert it into payment currency
+    hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, Cash);
+compute_volume(?share(P, Q, Of, RoundingMethod), Context, _ExchangeContext) ->
+    compute_parts_of(P, Q, resolve_constant(Of, Context), RoundingMethod);
 compute_volume(?product(Fun, CVs) = CV0, Context, ExchangeContext) ->
     case ordsets:size(CVs) of
         N when N > 0 ->
@@ -209,7 +203,7 @@ compute_parts_of(P, Q, #domain_Cash{amount = Amount} = Cash, RoundingMethod) ->
 compute_product(Fun, [CV | CVRest], CV0, Context, ExchangeContext) ->
     lists:foldl(
         fun(CVN, CVMin) -> compute_product(Fun, CVN, CVMin, CV0, Context, ExchangeContext) end,
-        compute_volume(CV, Context),
+        compute_volume(CV, Context, ExchangeContext),
         CVRest
     ).
 
