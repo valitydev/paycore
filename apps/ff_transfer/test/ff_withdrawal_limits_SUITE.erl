@@ -271,14 +271,14 @@ limit_overflow(C) ->
 -spec limit_hold_currency_error(config()) -> test_return().
 limit_hold_currency_error(C) ->
     mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_InvalidOperationCurrency{currency = <<"RUB">>, expected_currency = <<"KEK">>}}
+        {error, #limiter_InvalidOperationCurrency{currency = <<"RUB">>, expected_currency = <<"KEK">>}}
     end),
     limit_hold_error(C).
 
 -spec limit_hold_operation_error(config()) -> test_return().
 limit_hold_operation_error(C) ->
     mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_OperationContextNotSupported{
+        {error, #limiter_OperationContextNotSupported{
             context_type = {withdrawal_processing, #limiter_LimitContextTypeWithdrawalProcessing{}}
         }}
     end),
@@ -287,14 +287,14 @@ limit_hold_operation_error(C) ->
 -spec limit_hold_paytool_error(config()) -> test_return().
 limit_hold_paytool_error(C) ->
     mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
+        {error, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
     end),
     limit_hold_error(C).
 
 -spec limit_hold_error_two_routes_failure(config()) -> test_return().
 limit_hold_error_two_routes_failure(C) ->
     mock_limiter_trm_call(?trm(2000), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
+        {error, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
     end),
     %% See `?ruleset(?PAYINST1_ROUTING_POLICIES + 18)` with two candidates in `ct_payment_system:domain_config/1`.
     Cash = {901000, <<"RUB">>},

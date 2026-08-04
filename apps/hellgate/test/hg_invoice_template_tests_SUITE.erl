@@ -80,6 +80,7 @@ init_per_suite(C) ->
     % _ = dbg:p(all, c),
     % _ = dbg:tpl({'woody_client', '_', '_'}, x),
     {Apps, Ret} = hg_ct_helper:start_apps([
+        limiter,
         woody,
         scoper,
         dmt_client,

@@ -69,6 +69,7 @@ do_setup(Options0, C0) ->
 
 start_processing_apps(Options) ->
     {StartedApps, _StartupCtx} = ct_helper:start_apps([
+        limiter,
         {epg_connector, [
             {databases, epg_databases()},
             {pools, epg_pools()}
@@ -201,7 +202,6 @@ services(Options) ->
         accounter => "http://shumway:8022/accounter",
         partymgmt => "http://party-management:8022/v1/processing/partymgmt",
         binbase => "http://localhost:8222/binbase",
-        limiter => "http://limiter:8022/v1/limiter",
         party_config => "http://party-management:8022/v1/processing/partymgmt"
     },
     maps:get(services, Options, Default).

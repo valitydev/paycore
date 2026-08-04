@@ -302,7 +302,7 @@ hold_with_disabled_exchange(C) ->
     Currency = <<"USD">>,
     Cost = ?cash(10000, Currency),
     Context = ?payproc_ctx_invoice(Cost),
-    {exception, #limiter_InvalidOperationCurrency{currency = Currency, expected_currency = ConfiguredCurrency}} =
+    {error, #limiter_InvalidOperationCurrency{currency = Currency, expected_currency = ConfiguredCurrency}} =
         lim_client:hold(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec rollback_with_wrong_currency(config()) -> _.
@@ -314,7 +314,7 @@ rollback_with_wrong_currency(C) ->
     Currency = <<"USD">>,
     Cost = ?cash(10000, Currency),
     Context = ?payproc_ctx_invoice(Cost),
-    {exception, #limiter_InvalidOperationCurrency{currency = Currency, expected_currency = ConfiguredCurrency}} =
+    {error, #limiter_InvalidOperationCurrency{currency = Currency, expected_currency = ConfiguredCurrency}} =
         lim_client:rollback(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec hold_with_wrong_operation_context(config()) -> _.
@@ -324,7 +324,7 @@ hold_with_wrong_operation_context(C) ->
     {ID, Version} = configure_limit(?time_range_month(), ?global(), C),
     Cost = ?cash(10000),
     Context = ?wthdproc_ctx_withdrawal(Cost),
-    {exception, #limiter_OperationContextNotSupported{
+    {error, #limiter_OperationContextNotSupported{
         context_type = {withdrawal_processing, #limiter_LimitContextTypeWithdrawalProcessing{}}
     }} =
         lim_client:hold(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
@@ -336,7 +336,7 @@ rollback_with_wrong_operation_context(C) ->
     {ID, Version} = configure_limit(?time_range_month(), ?global(), C),
     Cost = ?cash(10000),
     Context = ?wthdproc_ctx_withdrawal(Cost),
-    {exception, #limiter_OperationContextNotSupported{
+    {error, #limiter_OperationContextNotSupported{
         context_type = {withdrawal_processing, #limiter_LimitContextTypeWithdrawalProcessing{}}
     }} =
         lim_client:rollback(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
@@ -348,7 +348,7 @@ hold_with_wrong_payment_tool(C) ->
     {ID, Version} = configure_limit(?time_range_week(), ?scopes([?scope_payment_tool()]), ?turnover_metric_number(), C),
     NotSupportedPaymentTool = {crypto_currency, #domain_CryptoCurrencyRef{id = <<"wow;so-cryptic;much-hidden">>}},
     Context = ?payproc_ctx_payment(?invoice_payment(?cash(10000), ?cash(10000), NotSupportedPaymentTool)),
-    {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"crypto_currency">>}} =
+    {error, #limiter_PaymentToolNotSupported{payment_tool = <<"crypto_currency">>}} =
         lim_client:hold(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec rollback_with_wrong_payment_tool(config()) -> _.
@@ -358,7 +358,7 @@ rollback_with_wrong_payment_tool(C) ->
     {ID, Version} = configure_limit(?time_range_week(), ?scopes([?scope_payment_tool()]), ?turnover_metric_number(), C),
     NotSupportedPaymentTool = {crypto_currency, #domain_CryptoCurrencyRef{id = <<"wow;so-cryptic;much-hidden">>}},
     Context = ?payproc_ctx_payment(?invoice_payment(?cash(10000), ?cash(10000), NotSupportedPaymentTool)),
-    {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"crypto_currency">>}} =
+    {error, #limiter_PaymentToolNotSupported{payment_tool = <<"crypto_currency">>}} =
         lim_client:rollback(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec get_limit_ok(config()) -> _.
@@ -379,7 +379,7 @@ get_limit_notfound(C) ->
     Version = 0,
     Context = ?payproc_ctx_invoice(?cash(0)),
     ?assertEqual(
-        {exception, #limiter_LimitNotFound{}},
+        {error, #limiter_LimitNotFound{}},
         lim_client:get(<<"NOSUCHLIMITID">>, Version, Context, ?config(client, C))
     ).
 
@@ -439,7 +439,7 @@ commit_inexistent_hold_fails(C) ->
     % NOTE
     % We do not expect `LimitChangeNotFound` here because we no longer reconcile with accounter
     % before requesting him to hold / commit.
-    {exception, #base_InvalidRequest{}} =
+    {error, #base_InvalidRequest{}} =
         lim_client:commit(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec partial_commit_inexistent_hold_fails(config()) -> _.
@@ -449,7 +449,7 @@ partial_commit_inexistent_hold_fails(C) ->
     % NOTE
     % We do not expect `LimitChangeNotFound` here because we no longer reconcile with accounter
     % before requesting him to hold / commit.
-    {exception, #base_InvalidRequest{}} =
+    {error, #base_InvalidRequest{}} =
         lim_client:commit(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C)).
 
 -spec commit_multirange_limit_ok(config()) -> _.
@@ -736,8 +736,7 @@ hold_with_scope_notfound(Scopes, Context, C) ->
     {ID, Version} = configure_limit(?time_range_month(), ?scopes(Scopes), C),
     ?assertException(
         error,
-        {woody_error,
-            {external, result_unexpected, <<"error:{unknown_error,{lim_turnover_processor,notfound}}", _/binary>>}},
+        {unknown_error, {lim_turnover_processor, notfound}},
         lim_client:hold(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C))
     ).
 
@@ -757,9 +756,7 @@ hold_with_scope_unsupported(Scopes, C) ->
         end,
     ?assertException(
         error,
-        {woody_error,
-            {external, result_unexpected,
-                <<"error:{unknown_error,{lim_turnover_processor,{unsupported,bank_card}}}", _/binary>>}},
+        {unknown_error, {lim_turnover_processor, {unsupported, bank_card}}},
         lim_client:hold(?LIMIT_CHANGE(ID, Version), Context, ?config(client, C))
     ).
 
@@ -926,7 +923,7 @@ batch_commit_more_ok(C) ->
         end,
     Request = construct_request(C),
     ok = hold_and_assert_batch(1000, Request, Context, C),
-    {exception, #base_InvalidRequest{errors = [<<"OperationNotFound">>]}} = lim_client:commit_batch(
+    {error, #base_InvalidRequest{errors = [<<"OperationNotFound">>]}} = lim_client:commit_batch(
         Request, Context, ?config(client, C)
     ).
 
@@ -969,7 +966,7 @@ batch_commit_negative_more_ok(C) ->
         end,
     Request = construct_request(C),
     ok = hold_and_assert_batch(-1000, Request, Context, C),
-    {exception, #base_InvalidRequest{errors = [<<"OperationNotFound">>]}} = lim_client:commit_batch(
+    {error, #base_InvalidRequest{errors = [<<"OperationNotFound">>]}} = lim_client:commit_batch(
         Request, Context, ?config(client, C)
     ).
 

@@ -18,7 +18,7 @@ services:
         condition: service_healthy
       party-management:
         condition: service_healthy
-      limiter:
+      liminator:
         condition: service_healthy
       shumway:
         condition: service_started
@@ -58,23 +58,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  limiter:
-    image: paycore:local-dev
-    build:
-      context: .
-      args:
-        - OTP_VERSION
-        - THRIFT_VERSION
-    command: ["/opt/limiter/bin/limiter", "foreground"]
-    depends_on:
-      liminator:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "/opt/limiter/bin/limiter", "ping"]
-      interval: 5s
-      timeout: 1s
-      retries: 20
 
   shumway:
     image: ghcr.io/valitydev/shumway:sha-d198581
