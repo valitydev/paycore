@@ -17,6 +17,8 @@
 
 %% TODO Retire limproto use in API
 
+-export_type([exception/0]).
+
 -type exception() ::
     limproto_limiter_thrift:'LimitNotFound'()
     | limproto_limiter_thrift:'LimitChangeNotFound'()

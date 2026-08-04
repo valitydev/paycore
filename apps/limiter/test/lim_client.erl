@@ -32,7 +32,7 @@ new() ->
     woody_context:new().
 
 -spec get(limit_id(), limit_version(), limit_context(), client()) ->
-    {ok, limit()} | {error, woody_error:business_error()} | no_return().
+    {ok, limit()} | {error, limiter:exception()} | no_return().
 get(LimitID, Version, Context, Client) ->
     LimitRequest = construct_request(#limiter_LimitChange{id = LimitID, version = Version}),
     case limiter:get_values(LimitRequest, Context, Client) of
@@ -44,7 +44,7 @@ get(LimitID, Version, Context, Client) ->
             Exception
     end.
 
--spec hold(limit_change(), limit_context(), client()) -> ok | {exception, woody_error:business_error()} | no_return().
+-spec hold(limit_change(), limit_context(), client()) -> ok | {error, limiter:exception()} | no_return().
 hold(#limiter_LimitChange{} = LimitChange, Context, Client) ->
     LimitRequest = construct_request(LimitChange),
     case limiter:hold_batch(LimitRequest, Context, Client) of
@@ -54,39 +54,39 @@ hold(#limiter_LimitChange{} = LimitChange, Context, Client) ->
             Exception
     end.
 
--spec commit(limit_change(), limit_context(), client()) -> ok | {exception, woody_error:business_error()} | no_return().
+-spec commit(limit_change(), limit_context(), client()) -> ok | {error, limiter:exception()} | no_return().
 commit(#limiter_LimitChange{} = LimitChange, Context, Client) ->
     LimitRequest = construct_request(LimitChange),
     limiter:commit_batch(LimitRequest, Context, Client).
 
 -spec rollback(limit_change(), limit_context(), client()) ->
-    ok | {exception, woody_error:business_error()} | no_return().
+    ok | {error, limiter:exception()} | no_return().
 rollback(#limiter_LimitChange{} = LimitChange, Context, Client) ->
     LimitRequest = construct_request(LimitChange),
     limiter:rollback_batch(LimitRequest, Context, Client).
 
 -spec get_values(limit_request(), limit_context(), client()) ->
-    {ok, [limit()]} | {error, woody_error:business_error()} | no_return().
+    {ok, [limit()]} | {error, limiter:exception()} | no_return().
 get_values(LimitRequest, Context, Client) ->
     limiter:get_values(LimitRequest, Context, Client).
 
 -spec get_batch(limit_request(), limit_context(), client()) ->
-    {ok, [limit()]} | {error, woody_error:business_error()} | no_return().
+    {ok, [limit()]} | {error, limiter:exception()} | no_return().
 get_batch(LimitRequest, Context, Client) ->
     limiter:get_batch(LimitRequest, Context, Client).
 
 -spec hold_batch(limit_request(), limit_context(), client()) ->
-    {ok, [limit()]} | {error, woody_error:business_error()} | no_return().
+    {ok, [limit()]} | {error, limiter:exception()} | no_return().
 hold_batch(LimitRequest, Context, Client) ->
     limiter:hold_batch(LimitRequest, Context, Client).
 
 -spec commit_batch(limit_request(), limit_context(), client()) ->
-    ok | {error, woody_error:business_error()} | no_return().
+    ok | {error, limiter:exception()} | no_return().
 commit_batch(LimitRequest, Context, Client) ->
     limiter:commit_batch(LimitRequest, Context, Client).
 
 -spec rollback_batch(limit_request(), limit_context(), client()) ->
-    ok | {error, woody_error:business_error()} | no_return().
+    ok | {error, limiter:exception()} | no_return().
 rollback_batch(LimitRequest, Context, Client) ->
     limiter:rollback_batch(LimitRequest, Context, Client).
 
