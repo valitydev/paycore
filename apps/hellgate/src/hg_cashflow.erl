@@ -32,8 +32,9 @@
 -type shop_config_ref() :: dmsl_domain_thrift:'ShopConfigRef'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type route() :: hg_route:payment_route().
+-type exchange_context() :: hg_invoice_payment:exchange_context().
 -type options() :: #{
-    exchange_context => hg_invoice_payment:exchange_context()
+    exchange_context => exchange_context()
 }.
 
 %%
@@ -43,6 +44,7 @@
 -export([revert/1]).
 
 -export([compute_volume/2]).
+-export([compute_volume/3]).
 
 -export([get_partial_remainders/1]).
 
@@ -175,6 +177,7 @@ revert_details(Details) ->
 compute_volume(Volume, Context) ->
     compute_volume(Volume, Context, undefined).
 
+-spec compute_volume(cash_volume(), context(), exchange_context() | undefined) -> cash() | no_return().
 compute_volume(?fixed(Cash), _Context, ExchangeContext) ->
     %% if posting currency differs from payment currency
     %% needs re-convert it into payment currency
@@ -285,22 +288,22 @@ modify_remainder(#domain_FinalCashFlowAccount{account_type = AccountType}, ?cash
 
 compute_volume_test() ->
     Cash = ?cash(100, <<"RUB">>),
-    ?assertEqual(Cash, compute_volume(?fixed(Cash), #{})),
+    ?assertEqual(Cash, compute_volume(?fixed(Cash), #{}, undefined)),
     ?assertEqual(
         ?cash(1, <<"RUB">>),
-        compute_volume(?share(1, 100, operation_amount, undefined), #{operation_amount => Cash})
+        compute_volume(?share(1, 100, operation_amount, undefined), #{operation_amount => Cash}, undefined)
     ),
     ?assertEqual(
         Cash,
-        compute_volume(?product(min_of, [?fixed(Cash), ?fixed(?cash(200, <<"RUB">>))]), #{})
+        compute_volume(?product(min_of, [?fixed(Cash), ?fixed(?cash(200, <<"RUB">>))]), #{}, undefined)
     ),
     ?assertEqual(
         Cash,
-        compute_volume(?product(max_of, [?fixed(Cash), ?fixed(?cash(50, <<"RUB">>))]), #{})
+        compute_volume(?product(max_of, [?fixed(Cash), ?fixed(?cash(50, <<"RUB">>))]), #{}, undefined)
     ),
     ?assertEqual(
         ?cash(200, <<"RUB">>),
-        compute_volume(?product(sum_of, [?fixed(Cash), ?fixed(Cash)]), #{})
+        compute_volume(?product(sum_of, [?fixed(Cash), ?fixed(Cash)]), #{}, undefined)
     ).
 
 -endif.
