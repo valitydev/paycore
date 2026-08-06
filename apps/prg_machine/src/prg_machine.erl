@@ -555,6 +555,7 @@ map_client_error(_Type, _NS, Error) ->
 -define(TEST_NS, env_test_ns).
 -define(TEST_FF_NS, 'ff/env_test_ns').
 -define(TABLE, prg_machine_dispatch).
+-define(TEST_TIMEOUT, 5000).
 
 -spec test() -> _.
 
@@ -596,7 +597,7 @@ context_binding_scopes_process(Scope) ->
             hellgate -> ?TEST_NS;
             fistful -> ?TEST_FF_NS
         end,
-    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS, handling_timeout => 5000})),
+    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS, handling_timeout => ?TEST_TIMEOUT})),
     ?assertEqual([{context_bound, Scope}], prg_machine_env_mock_context:events()).
 
 -spec setup_env_hook_test() -> ok.
@@ -683,7 +684,7 @@ collapse_survives_non_map_aux_state() ->
 
 -spec business_exception_then_signal_does_not_corrupt_aux_state() -> _.
 business_exception_then_signal_does_not_corrupt_aux_state() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
     Process0 = #{
         process_id => <<"invoice-exception-test">>,
         last_event_id => 0,
@@ -717,7 +718,7 @@ business_exception_then_signal_does_not_corrupt_aux_state() ->
 
 -spec notify_noop_omits_aux_state() -> _.
 notify_noop_omits_aux_state() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
     AuxBin = prg_machine_aux_state_test_handler:marshal_aux_state(#{model => initialized}),
     Process = #{
         process_id => <<"notify-test">>,
@@ -746,7 +747,7 @@ lookup_unknown_namespace_returns_error() ->
 
 -spec process_unknown_namespace_returns_error() -> _.
 process_unknown_namespace_returns_error() ->
-    Opts = #{ns => unknown_ns, handling_timeout => 5000},
+    Opts = #{ns => unknown_ns, handling_timeout => ?TEST_TIMEOUT},
     Process = #{
         process_id => <<"unknown-ns-test">>,
         last_event_id => 0,
@@ -760,7 +761,7 @@ process_unknown_namespace_returns_error() ->
 
 -spec process_crash_conforms_progressor_exception() -> _.
 process_crash_conforms_progressor_exception() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
     Process = #{
         process_id => <<"crash-test">>,
         last_event_id => 0,
