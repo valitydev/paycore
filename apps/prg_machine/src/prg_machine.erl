@@ -52,7 +52,7 @@
 
 -type process_options() :: #{
     ns := namespace(),
-    default_handling_timeout => timeout()
+    handling_timeout := timeout()
 }.
 
 -export_type([
@@ -299,17 +299,15 @@ process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
             {error, Exception}
     end.
 
-%% Default woody deadline (30s, configurable per namespace via opts), restoring the
-%% old hg_progressor behaviour (hg_woody_service_wrapper:ensure_woody_deadline_set/2).
--define(DEFAULT_HANDLING_TIMEOUT, 30000).
-
 ensure_deadline_set(WoodyCtx, Opts) ->
+    Timeout = maps:get(handling_timeout, Opts),
+    MaxDeadline = woody_deadline:from_timeout(Timeout),
     case woody_context:get_deadline(WoodyCtx) of
         undefined ->
-            Timeout = maps:get(default_handling_timeout, Opts, ?DEFAULT_HANDLING_TIMEOUT),
-            woody_context:set_deadline(woody_deadline:from_timeout(Timeout), WoodyCtx);
-        _Set ->
-            WoodyCtx
+            woody_context:set_deadline(MaxDeadline, WoodyCtx);
+        Deadline ->
+            %% deadline must not exceed the value process_step_timeout from namespace options
+            woody_context:set_deadline(min(Deadline, MaxDeadline), WoodyCtx)
     end.
 
 %% Event-sourcing
@@ -598,7 +596,7 @@ context_binding_scopes_process(Scope) ->
             hellgate -> ?TEST_NS;
             fistful -> ?TEST_FF_NS
         end,
-    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS})),
+    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS, handling_timeout => 5000})),
     ?assertEqual([{context_bound, Scope}], prg_machine_env_mock_context:events()).
 
 -spec setup_env_hook_test() -> ok.
@@ -685,7 +683,7 @@ collapse_survives_non_map_aux_state() ->
 
 -spec business_exception_then_signal_does_not_corrupt_aux_state() -> _.
 business_exception_then_signal_does_not_corrupt_aux_state() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
     Process0 = #{
         process_id => <<"invoice-exception-test">>,
         last_event_id => 0,
@@ -719,7 +717,7 @@ business_exception_then_signal_does_not_corrupt_aux_state() ->
 
 -spec notify_noop_omits_aux_state() -> _.
 notify_noop_omits_aux_state() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
     AuxBin = prg_machine_aux_state_test_handler:marshal_aux_state(#{model => initialized}),
     Process = #{
         process_id => <<"notify-test">>,
@@ -748,7 +746,7 @@ lookup_unknown_namespace_returns_error() ->
 
 -spec process_unknown_namespace_returns_error() -> _.
 process_unknown_namespace_returns_error() ->
-    Opts = #{ns => unknown_ns},
+    Opts = #{ns => unknown_ns, handling_timeout => 5000},
     Process = #{
         process_id => <<"unknown-ns-test">>,
         last_event_id => 0,
@@ -762,7 +760,7 @@ process_unknown_namespace_returns_error() ->
 
 -spec process_crash_conforms_progressor_exception() -> _.
 process_crash_conforms_progressor_exception() ->
-    Opts = #{ns => ?AUX_STATE_TEST_NS},
+    Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => 5000},
     Process = #{
         process_id => <<"crash-test">>,
         last_event_id => 0,
