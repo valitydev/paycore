@@ -109,3 +109,15 @@ Managing parties involved in payment processing.
 We widelly use Thrift to define RPC protocols.
 So it needs to have [our Thrift compiler](https://github.com/rbkmoney/thrift) in PATH to build this service.
 The recommended way to achieve this is by using our [build image](https://github.com/rbkmoney/image-build-erlang).
+
+# Party management client
+
+Клиент для сервиса PartyManagement. Спецификацию сервиса можно найти в rbkmoney/damsel в proto/payment_processing.thrift.
+
+## API
+
+Низкоуровневый thrift интерфес предоставляется модулем `party_client_thrift`. Его функции принимают и возвращают thrift объекты.
+
+Более erlang-like интерфес будет предоставляться модулем `party_client`. Его функции должны принимать и возвращать не thrift объекты, а обычные map, абстрагируя пользователей библиотеки от транспортного протокола. На данный момент этот интерфейс не реализован.
+
+Большая часть функций библиотеки ожидает в аргументах получить клиент и текущий контекст. Клиент представляет собой объект, с параметрами для запуска служебных процессов и обращения к ним, ожидается что он будет создан единожды. Контекст описывает текущее окружение, хранит информацию о пользователе, woody context и т.д.

@@ -1,0 +1,18 @@
+{application, party_client, [
+    {description, "PartyManagement client"},
+    {vsn, "1.0.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        genlib,
+        damsel,
+        prometheus,
+        woody
+    ]},
+    {env, [
+        {services, #{
+            party_management => "http://party-management:8022/v1/processing/partymgmt"
+        }}
+    ]}
+]}.
