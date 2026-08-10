@@ -99,3 +99,13 @@ $ make wdeps-test
 ## Служебные лимиты
 
 Нужно уметь _ограничивать_ максимальное _ожидаемое_ количество тех или иных объектов, превышение которого может негативно влиять на качество обслуживания системы. Например, мы можем считать количество _выводов_ одним участником неограниченным, однако при этом неограниченное количество созданных _личностей_ мы совершенно не ожидаем. В этом случае возможно будет разумно ограничить их количество сверху труднодостижимой для подавляющего большинства планкой, например, в 1000 объектов. В идеале подобное должно быть точечно конфигурируемым.
+
+# Party Management
+
+Managing parties involved in payment processing.
+
+## Building
+
+We widelly use Thrift to define RPC protocols.
+So it needs to have [our Thrift compiler](https://github.com/rbkmoney/thrift) in PATH to build this service.
+The recommended way to achieve this is by using our [build image](https://github.com/rbkmoney/image-build-erlang).

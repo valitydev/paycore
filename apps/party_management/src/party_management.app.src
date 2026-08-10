@@ -1,0 +1,34 @@
+{application, party_management, [
+    {description,
+        "Party management things"
+    },
+    {vsn, "1"},
+    {registered, []},
+    {mod, {party_management, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        genlib,
+        pm_proto,
+        cowboy,
+        prometheus,
+        prometheus_cowboy,
+        woody,
+        scoper,  % should be before any scoper event handler usage
+        gproc,
+        dmt_client,
+        payproc_errors,
+        erl_health,
+        cache,
+        opentelemetry_api,
+        opentelemetry_exporter,
+        opentelemetry
+    ]},
+    {env, []},
+    {modules, []},
+    {maintainers, [
+        "Andrey Mayorov <a.mayorov@rbkmoney.com>"
+    ]},
+    {licenses, []},
+    {links, ["https://github.com/rbkmoney/party_management"]}
+]}.
