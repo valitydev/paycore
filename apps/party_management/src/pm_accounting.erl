@@ -40,10 +40,8 @@ create_account(CurrencyCode) ->
 
 -spec create_account(currency_code(), binary() | undefined) -> account_id().
 create_account(CurrencyCode, Description) ->
-    case call_accounter('CreateAccount', {construct_prototype(CurrencyCode, Description)}) of
-        {ok, Result} ->
-            Result
-    end.
+    {ok, Result} = call_accounter('CreateAccount', {construct_prototype(CurrencyCode, Description)}),
+    Result.
 
 -spec do_get_account(account_id()) -> thrift_account().
 do_get_account(AccountID) ->

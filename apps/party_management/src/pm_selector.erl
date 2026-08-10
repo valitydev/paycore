@@ -169,11 +169,11 @@ bin_data_allow_test() ->
             bank_name = <<"bank_name">>
         }
     }),
-    CondFun = fun(PS, BN) ->
+    CondFun = fun(PaymentSystem, BN) ->
         {any_of, [
             {condition,
                 {bin_data, #domain_BinDataCondition{
-                    payment_system = PS,
+                    payment_system = PaymentSystem,
                     bank_name = BN
                 }}}
         ]}

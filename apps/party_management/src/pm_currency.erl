@@ -12,7 +12,7 @@
 -type shop() :: dmsl_domain_thrift:'ShopConfig'().
 
 -spec validate_currency(currency(), shop()) -> ok.
-validate_currency(Currency, Shop = #domain_ShopConfig{}) ->
+validate_currency(Currency, #domain_ShopConfig{} = Shop) ->
     validate_currency_(Currency, get_shop_currency(Shop)).
 
 validate_currency_(Currency, Currency) ->

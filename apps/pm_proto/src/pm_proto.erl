@@ -26,5 +26,5 @@ get_service_spec(Name) ->
     get_service_spec(Name, #{}).
 
 -spec get_service_spec(Name :: atom(), Opts :: #{namespace => binary()}) -> service_spec().
-get_service_spec(Name = party_management, #{}) ->
+get_service_spec(party_management = Name, #{}) ->
     {?VERSION_PREFIX ++ "/processing/partymgmt", get_service(Name)}.

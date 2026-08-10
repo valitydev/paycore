@@ -158,7 +158,7 @@ init({PartyRef, ApiClient}) ->
     }}.
 
 -spec handle_call(term(), callref(), state()) -> {reply, term(), state()} | {noreply, state()}.
-handle_call({call, Function, ArgsIn}, _From, St = #state{client = Client}) ->
+handle_call({call, Function, ArgsIn}, _From, #state{client = Client} = St) ->
     Args = lists:map(
         fun
             (Fun) when is_function(Fun, 1) -> Fun(St);

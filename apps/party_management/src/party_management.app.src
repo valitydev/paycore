@@ -1,7 +1,5 @@
 {application, party_management, [
-    {description,
-        "Party management things"
-    },
+    {description, "Party management things"},
     {vsn, "1"},
     {registered, []},
     {mod, {party_management, []}},
@@ -14,7 +12,8 @@
         prometheus,
         prometheus_cowboy,
         woody,
-        scoper,  % should be before any scoper event handler usage
+        % should be before any scoper event handler usage
+        scoper,
         gproc,
         dmt_client,
         payproc_errors,

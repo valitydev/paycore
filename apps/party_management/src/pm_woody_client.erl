@@ -20,7 +20,7 @@
 }.
 
 -spec new(woody:url() | opts()) -> client().
-new(Opts = #{url := _}) ->
+new(#{url := _} = Opts) ->
     EventHandlerOpts = genlib_app:env(party_management, scoper_event_handler_options, #{}),
     maps:merge(
         #{

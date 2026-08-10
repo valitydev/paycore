@@ -16,8 +16,6 @@ services:
         condition: service_healthy
       dmt:
         condition: service_healthy
-      party-management:
-        condition: service_healthy
       limiter:
         condition: service_healthy
       shumway:
@@ -111,24 +109,6 @@ services:
       timeout: 1s
       retries: 20
 
-  party-management:
-    image: ghcr.io/valitydev/party-management:sha-e3fe0dc
-    command: /opt/party-management/bin/party-management foreground
-    volumes:
-      - ./test/party-management/sys.config:/opt/party-management/releases/0.1/sys.config
-    depends_on:
-      db:
-        condition: service_healthy
-      dmt:
-        condition: service_started
-      shumway:
-        condition: service_started
-    healthcheck:
-      test: "/opt/party-management/bin/party-management ping"
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   cubasty:
     image: ghcr.io/valitydev/cubasty:sha-f94b6a0-epic-fix_matched
     volumes:
@@ -147,7 +127,7 @@ services:
     image: postgres:17
     command: -c 'max_connections=1000'
     environment:
-      POSTGRES_MULTIPLE_DATABASES: "hellgate,fistful,bender,dmt,party_management,shumway,liminator,customer_storage"
+      POSTGRES_MULTIPLE_DATABASES: "hellgate,fistful,bender,dmt,shumway,liminator,customer_storage"
       POSTGRES_PASSWORD: "postgres"
     volumes:
       - ./test/postgres/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d

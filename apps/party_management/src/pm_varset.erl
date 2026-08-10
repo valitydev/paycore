@@ -62,7 +62,7 @@ decode_varset(#payproc_Varset{} = Varset, VS) ->
 
 prepare_payment_tool_var(_PaymentMethodRef, PaymentTool) when PaymentTool /= undefined ->
     PaymentTool;
-prepare_payment_tool_var(PaymentMethodRef = #domain_PaymentMethodRef{}, _PaymentTool) ->
+prepare_payment_tool_var(#domain_PaymentMethodRef{} = PaymentMethodRef, _PaymentTool) ->
     pm_payment_tool:create_from_method(PaymentMethodRef);
 prepare_payment_tool_var(undefined, undefined) ->
     undefined.

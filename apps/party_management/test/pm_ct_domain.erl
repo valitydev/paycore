@@ -17,7 +17,7 @@ upsert(Revision, NewObject) when not is_list(NewObject) ->
     upsert(Revision, [NewObject]);
 upsert(Revision, NewObjects) ->
     Commit = lists:foldl(
-        fun(NewObject = {Tag, {_ObjectName, Ref, NewData}}, Ops) ->
+        fun({Tag, {_ObjectName, Ref, NewData}} = NewObject, Ops) ->
             case pm_domain:find(Revision, {Tag, Ref}) of
                 NewData ->
                     Ops;
