@@ -37,6 +37,7 @@
 %% Public interface
 
 -export([get/1]).
+-export([get/2]).
 -export([get_payment/2]).
 -export([get_payment_opts/1]).
 -export([create/6]).
@@ -102,7 +103,11 @@
 
 -spec get(prg_machine:id()) -> {ok, st()} | {error, prg_machine:get_error()}.
 get(ID) ->
-    case prg_machine:get(?NS, ID) of
+    get(ID, #{}).
+
+-spec get(prg_machine:id(), prg_machine:request_options()) -> {ok, st()} | {error, prg_machine:get_error()}.
+get(ID, Opts) ->
+    case prg_machine:get(?NS, ID, #{direction => forward}, Opts) of
         {ok, Machine} ->
             {ok, prg_machine:collapse(?MODULE, Machine)};
         Error ->

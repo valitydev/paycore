@@ -297,7 +297,10 @@ start_app(epg_connector = AppName) ->
 start_app(progressor = AppName) ->
     {
         start_app(AppName, [
-            {call_wait_timeout, 20},
+            %% Uncomment this when cache enabled on prod
+            %{post_init_hooks, [
+            %    {prg_pg_cache, start, [#{default_db => {[invoice], "hellgate_cache"}}]}
+            %]},
             {defaults, #{
                 storage => #{
                     client => prg_pg_backend,
@@ -325,6 +328,16 @@ start_app(progressor = AppName) ->
                         client => prg_machine,
                         options => #{
                             ns => invoice
+                        }
+                    },
+                    storage => #{
+                        client => prg_pg_backend,
+                        options => #{
+                            %% Uncomment this when cache enabled on prod
+                            %cache => enabled,
+                            pool => default_pool,
+                            front_pool => default_front_pool,
+                            scan_pool => default_scan_pool
                         }
                     },
                     worker_pool_size => 150

@@ -55,6 +55,10 @@
     handling_timeout := timeout()
 }.
 
+-type request_options() :: #{
+    use_cache => boolean()
+}.
+
 -export_type([
     namespace/0,
     id/0,
@@ -73,7 +77,8 @@
     repair_error/0,
     signal/0,
     result/0,
-    process_options/0
+    process_options/0,
+    request_options/0
 ]).
 
 %% Domain behaviour
@@ -108,6 +113,7 @@
 -export([repair/3]).
 -export([get/2]).
 -export([get/3]).
+-export([get/4]).
 -export([get_history/2]).
 -export([get_history/4]).
 -export([get_history/5]).
@@ -164,7 +170,7 @@ call(NS, ID, CallArgs) ->
 -spec call(namespace(), id(), call(), event_id() | undefined, non_neg_integer() | undefined, forward | backward) ->
     {ok, response()} | {error, notfound | failed | timeout | {unknown_namespace, namespace()} | term()}.
 call(NS, ID, CallArgs, After, Limit, Direction) ->
-    Req = request(NS, ID, CallArgs, encode_range(After, Limit, Direction)),
+    Req = request(NS, ID, CallArgs, encode_range(After, Limit, Direction), #{}),
     case progressor:call(Req) of
         {ok, Response} ->
             {ok, decode_term(Response)};
@@ -216,9 +222,13 @@ get(NS, ID) ->
 
 -spec get(namespace(), id(), history_range()) -> {ok, machine()} | {error, get_error()}.
 get(NS, ID, Range) ->
+    get(NS, ID, Range, #{}).
+
+-spec get(namespace(), id(), history_range(), request_options()) -> {ok, machine()} | {error, get_error()}.
+get(NS, ID, Range, Opts) ->
     case prg_machine_registry:lookup(NS) of
         {ok, Handler} ->
-            Req = request(NS, ID, undefined, Range),
+            Req = request(NS, ID, undefined, Range, Opts),
             case progressor:get(Req) of
                 {ok, Process} ->
                     {ok, unmarshal_machine(Handler, NS, Process)};
@@ -471,13 +481,14 @@ initial_model(_Handler, _AuxState) ->
 
 %% RPC / terms
 
-request(NS, ID, Args, Range) ->
+request(NS, ID, Args, Range, Opts) ->
     genlib_map:compact(#{
         ns => NS,
         id => ID,
         args => encode_term(Args),
         context => encode_rpc_context(),
-        range => Range
+        range => Range,
+        options => Opts
     }).
 
 encode_rpc_context() ->
