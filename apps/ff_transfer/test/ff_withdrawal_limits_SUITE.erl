@@ -105,7 +105,7 @@ init_per_testcase(Name, C0) when
         Name =:= limit_hold_error_two_routes_failure
 ->
     C1 = do_init_per_testcase(Name, C0),
-    meck:new(ff_woody_client, [no_link, passthrough]),
+    meck:new(limiter, [no_link, passthrough]),
     C1;
 init_per_testcase(Name, C0) ->
     do_init_per_testcase(Name, C0).
@@ -140,7 +140,7 @@ end_per_testcase(Name, C) when
         Name =:= limit_hold_paytool_error orelse
         Name =:= limit_hold_error_two_routes_failure
 ->
-    meck:unload(ff_woody_client),
+    meck:unload(limiter),
     do_end_per_testcase(Name, C);
 end_per_testcase(Name, C) ->
     do_end_per_testcase(Name, C).
@@ -270,15 +270,15 @@ limit_overflow(C) ->
 
 -spec limit_hold_currency_error(config()) -> test_return().
 limit_hold_currency_error(C) ->
-    mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_InvalidOperationCurrency{currency = <<"RUB">>, expected_currency = <<"KEK">>}}
+    mock_limiter_trm_hold_batch(?trm(1800), fun() ->
+        {error, #limiter_InvalidOperationCurrency{currency = <<"RUB">>, expected_currency = <<"KEK">>}}
     end),
     limit_hold_error(C).
 
 -spec limit_hold_operation_error(config()) -> test_return().
 limit_hold_operation_error(C) ->
-    mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_OperationContextNotSupported{
+    mock_limiter_trm_hold_batch(?trm(1800), fun() ->
+        {error, #limiter_OperationContextNotSupported{
             context_type = {withdrawal_processing, #limiter_LimitContextTypeWithdrawalProcessing{}}
         }}
     end),
@@ -286,15 +286,15 @@ limit_hold_operation_error(C) ->
 
 -spec limit_hold_paytool_error(config()) -> test_return().
 limit_hold_paytool_error(C) ->
-    mock_limiter_trm_hold_batch(?trm(1800), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
+    mock_limiter_trm_hold_batch(?trm(1800), fun() ->
+        {error, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
     end),
     limit_hold_error(C).
 
 -spec limit_hold_error_two_routes_failure(config()) -> test_return().
 limit_hold_error_two_routes_failure(C) ->
-    mock_limiter_trm_call(?trm(2000), fun(_LimitRequest, _Context) ->
-        {exception, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
+    mock_limiter_trm_hold_batch(?trm(2000), fun() ->
+        {error, #limiter_PaymentToolNotSupported{payment_tool = <<"unsupported paytool">>}}
     end),
     %% See `?ruleset(?PAYINST1_ROUTING_POLICIES + 18)` with two candidates in `ct_payment_system:domain_config/1`.
     Cash = {901000, <<"RUB">>},
@@ -316,28 +316,23 @@ limit_hold_error_two_routes_failure(C) ->
     Result = await_final_withdrawal_status(WithdrawalID),
     ?assertMatch({failed, #{code := <<"no_route_found">>}}, Result).
 
--define(LIMITER_REQUEST(Func, TerminalRef), {
-    {limproto_limiter_thrift, 'Limiter'},
-    Func,
-    {_LimitRequest, #limiter_LimitContext{
-        withdrawal_processing = #context_withdrawal_Context{
-            withdrawal = #context_withdrawal_Withdrawal{route = #base_Route{terminal = TerminalRef}}
-        }
-    }}
-}).
-
--define(MOCKED_LIMITER_FUNC(CallFunc, ExpectTerminalRef, ReturnFunc), fun
-    (limiter, {_, _, Args} = ?LIMITER_REQUEST(CallFunc, TerminalRef)) when TerminalRef =:= ExpectTerminalRef ->
-        apply(ReturnFunc, tuple_to_list(Args));
-    (Service, Request) ->
-        meck:passthrough([Service, Request])
+-define(MOCKED_LIMITER_FUNC(ExpectTerminalRef, ReturnFunc), fun
+    (
+        _LimitRequest,
+        #limiter_LimitContext{
+            withdrawal_processing = #context_withdrawal_Context{
+                withdrawal = #context_withdrawal_Withdrawal{route = #base_Route{terminal = TerminalRef}}
+            }
+        },
+        _WoodyCtx
+    ) when TerminalRef =:= ExpectTerminalRef ->
+        ReturnFunc();
+    (LimitRequest, Context, WoodyCtx) ->
+        meck:passthrough([LimitRequest, Context, WoodyCtx])
 end).
 
 mock_limiter_trm_hold_batch(ExpectTerminalRef, ReturnFunc) ->
-    ok = meck:expect(ff_woody_client, call, ?MOCKED_LIMITER_FUNC('HoldBatch', ExpectTerminalRef, ReturnFunc)).
-
-mock_limiter_trm_call(ExpectTerminalRef, ReturnFunc) ->
-    ok = meck:expect(ff_woody_client, call, ?MOCKED_LIMITER_FUNC(_, ExpectTerminalRef, ReturnFunc)).
+    ok = meck:expect(limiter, hold_batch, ?MOCKED_LIMITER_FUNC(ExpectTerminalRef, ReturnFunc)).
 
 limit_hold_error(C) ->
     Cash = {800800, <<"RUB">>},

@@ -153,6 +153,25 @@ start_app(bender_client = AppName) ->
         ]),
         #{}
     };
+start_app(limiter = AppName) ->
+    {
+        start_app_with(AppName, [
+            {service_clients, #{
+                liminator => #{
+                    url => <<"http://liminator:8022/liminator/v1">>
+                },
+                xrates => #{
+                    url => <<"http://xrates:8022/xrates">>
+                }
+            }},
+            {exchange_factors, #{
+                <<"DEFAULT">> => {1, 1},
+                <<"USD">> => {105, 100},
+                <<"EUR">> => {12, 10}
+            }}
+        ]),
+        #{}
+    };
 start_app({AppName, AppEnv}) ->
     {start_app_with(AppName, AppEnv), #{}};
 start_app(AppName) ->

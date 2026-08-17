@@ -163,13 +163,28 @@ start_app(hg_proto = AppName) ->
                         max_connections => 300
                     }
                 },
-                limiter => #{
-                    url => <<"http://limiter:8022/v1/limiter">>,
-                    transport_opts => #{}
-                },
                 rate_boss => <<"http://127.0.0.1:32022/test/exrates/dummy">>,
                 customer_management => <<"http://cubasty:8022/v1/customer/management">>,
                 bank_card_storage => <<"http://cubasty:8022/v1/customer/bank_card">>
+            }}
+        ]),
+        #{}
+    };
+start_app(limiter = AppName) ->
+    {
+        start_app(AppName, [
+            {service_clients, #{
+                liminator => #{
+                    url => <<"http://liminator:8022/liminator/v1">>
+                },
+                xrates => #{
+                    url => <<"http://xrates:8022/xrates">>
+                }
+            }},
+            {exchange_factors, #{
+                <<"DEFAULT">> => {1, 1},
+                <<"USD">> => {105, 100},
+                <<"EUR">> => {12, 10}
             }}
         ]),
         #{}

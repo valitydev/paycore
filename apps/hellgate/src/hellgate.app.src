@@ -25,6 +25,8 @@
         dmt_client,
         party_client,
         bender_client,
+        %% TODO Maybe rename to limiter_client
+        limiter,
         payproc_errors,
         erl_health,
         limiter_proto,

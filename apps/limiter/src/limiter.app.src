@@ -1,0 +1,17 @@
+{application, limiter, [
+    {description, "Limiter lib"},
+    {vsn, "1.0.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        woody,
+        limiter_proto,
+        liminator_proto,
+        xrates_proto,
+        erl_health,
+        dmt_client,
+        opentelemetry_api
+    ]},
+    {env, []}
+]}.

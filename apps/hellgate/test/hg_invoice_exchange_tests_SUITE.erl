@@ -59,6 +59,7 @@ groups() ->
 init_per_suite(C) ->
     CowboySpec = hg_dummy_provider:get_http_cowboy_spec(),
     {Apps, Ret} = hg_ct_helper:start_apps([
+        limiter,
         woody,
         scoper,
         dmt_client,
