@@ -37,12 +37,19 @@ handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
     WoodyContext = ensure_woody_deadline_set(WoodyContext0, Opts),
     {HandlerMod, HandlerOptions} = get_handler_opts(Handler),
     ok = op_context:save(op_context:key(fistful), create_context(WoodyContext, Opts)),
-    try
-        HandlerMod:handle_function(
-            Func,
-            Args,
-            HandlerOptions
-        )
+    F = fun() -> HandlerMod:handle_function(Func, Args, HandlerOptions) end,
+    try timer:tc(F) of
+        {DurationMicro, Result} ->
+            DurationMs = DurationMicro div 1000,
+            HandlerBin = erlang:atom_to_binary(HandlerMod),
+            FuncBin = erlang:atom_to_binary(Func),
+            Labels = [HandlerBin, FuncBin],
+            ok = prometheus_histogram:observe(
+                woody_wrapper_processing_duration_ms,
+                Labels,
+                DurationMs
+            ),
+            Result
     after
         op_context:cleanup(fistful)
     end.
