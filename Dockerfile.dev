@@ -13,7 +13,7 @@ RUN wget -q -O- "https://github.com/valitydev/thrift/releases/download/${THRIFT_
 ARG USER_UID=1000
 ARG USER_GID=1000
 RUN groupadd -g ${USER_GID} dev && \
-    useradd -m -s /bin/bash -u ${USER_UID} -g ${USER_GID} dev
+    useradd -m -l -s /bin/bash -u ${USER_UID} -g ${USER_GID} dev
 USER dev
 
 # Set env
