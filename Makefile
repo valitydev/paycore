@@ -20,6 +20,11 @@ DOCKERCOMPOSE_W_ENV = DEV_IMAGE_TAG=$(DEV_IMAGE_TAG) $(DOCKERCOMPOSE) -f compose
 REBAR ?= rebar3
 TEST_CONTAINER_NAME ?= testrunner
 
+# Run development containers as the current host user.
+# These values may be overridden through the environment or Makefile.env.
+HOST_UID ?= $(shell id -u)
+HOST_GID ?= $(shell id -g)
+
 all: compile
 
 .PHONY: dev-image clean-dev-image wc-shell test
@@ -36,7 +41,7 @@ ifneq ($(DEV_IMAGE_ID),)
 	rm .image.dev
 endif
 
-DOCKER_WC_OPTIONS := -v $(PWD):$(PWD) --workdir $(PWD)
+DOCKER_WC_OPTIONS := --user $(HOST_UID):$(HOST_GID) --env HOME=/tmp -v $(PWD):$(PWD) --workdir $(PWD)
 DOCKER_WC_EXTRA_OPTIONS ?= --rm
 DOCKER_RUN = $(DOCKER) run -t $(DOCKER_WC_OPTIONS) $(DOCKER_WC_EXTRA_OPTIONS)
 
@@ -52,7 +57,7 @@ wc-%: dev-image
 
 #  TODO docker compose down doesn't work yet
 wdeps-shell: dev-image
-	$(DOCKERCOMPOSE_RUN) $(TEST_CONTAINER_NAME) su; \
+	$(DOCKERCOMPOSE_RUN) $(TEST_CONTAINER_NAME) /bin/bash; \
 	$(DOCKERCOMPOSE_W_ENV) down
 
 # Pass CT_CASE through to container env
