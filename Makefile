@@ -67,8 +67,8 @@ wdeps-%: dev-image
 # Database tasks
 
 ifeq (db,$(firstword $(MAKECMDGOALS)))
-  DATABASE_NAME := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
-  $(eval $(DATABASE_NAME):;@:)
+	DATABASE_NAME := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+	$(eval $(DATABASE_NAME):;@:)
 endif
 
 db:

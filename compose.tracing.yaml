@@ -13,9 +13,6 @@ services:
   limiter:
     environment: *otlp_enabled
 
-  party-management:
-    environment: *otlp_enabled
-
   testrunner:
     environment:
       <<: *otlp_enabled
