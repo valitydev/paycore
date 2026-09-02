@@ -109,7 +109,7 @@ get_batch_limit_values(Context, TurnoverLimits, OperationIdSegments) ->
 
 -spec check_limits([turnover_limit()], invoice(), payment(), session() | undefined, route(), pos_integer()) ->
     {ok, [turnover_limit_value()]}
-    | {error, {limit_overflow, [binary()], [turnover_limit_value()]}}.
+    | {error, {limit_overflow, binary(), [turnover_limit_value()]}}.
 check_limits(TurnoverLimits, Invoice, Payment, Session, Route, Iter) ->
     Context = gen_limit_context(Invoice, Payment, Session, Route),
     Limits = get_limit_values(Context, TurnoverLimits, make_route_operation_segments(Invoice, Payment, Route, Iter)),
@@ -117,14 +117,13 @@ check_limits(TurnoverLimits, Invoice, Payment, Session, Route, Iter) ->
         ok = check_limits_(Limits, Context),
         {ok, Limits}
     catch
-        throw:limit_overflow ->
-            IDs = [T#domain_TurnoverLimit.ref#domain_LimitConfigRef.id || T <- TurnoverLimits],
-            {error, {limit_overflow, IDs, Limits}}
+        throw:{limit_overflow, LimitID} ->
+            {error, {limit_overflow, LimitID, Limits}}
     end.
 
 -spec check_shop_limits([turnover_limit()], party_config_ref(), shop_config_ref(), invoice(), payment()) ->
     ok
-    | {error, {limit_overflow, [binary()]}}.
+    | {error, {limit_overflow, binary()}}.
 check_shop_limits(TurnoverLimits, PartyConfigRef, ShopConfigRef, Invoice, Payment) ->
     Context = gen_limit_shop_context(Invoice, Payment),
     Limits = get_limit_values(
@@ -133,9 +132,8 @@ check_shop_limits(TurnoverLimits, PartyConfigRef, ShopConfigRef, Invoice, Paymen
     try
         check_limits_(Limits, Context)
     catch
-        throw:limit_overflow ->
-            IDs = [T#domain_TurnoverLimit.ref#domain_LimitConfigRef.id || T <- TurnoverLimits],
-            {error, {limit_overflow, IDs}}
+        throw:{limit_overflow, LimitID} ->
+            {error, {limit_overflow, LimitID}}
     end.
 
 make_shop_operation_segments(PartyConfigRef, ShopConfigRef, Invoice, Payment) ->
@@ -165,7 +163,7 @@ check_limits_([TurnoverLimitValue | TLVs], Context) ->
                 LimiterAmount,
                 UpperBoundary
             ]),
-            throw(limit_overflow)
+            throw({limit_overflow, LimitID})
     end.
 
 -spec hold_payment_limits([turnover_limit()], invoice(), payment(), session() | undefined, route(), pos_integer()) ->

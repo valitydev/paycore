@@ -257,7 +257,19 @@ limit_overflow(C) ->
     PreviousAmount = get_limit_amount(Cash, WalletID, DestinationID, ?LIMIT_TURNOVER_NUM_PAYTOOL_ID2, C),
     ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
     Result = await_final_withdrawal_status(WithdrawalID),
-    ?assertMatch({failed, #{code := <<"no_route_found">>}}, Result),
+    ?assertMatch(
+        {failed, #{
+            code := <<"no_route_found">>,
+            sub := #{
+                code := <<"limit_overflow">>,
+                sub := #{
+                    code := LimitID
+                }
+            }
+        }} when
+            is_binary(LimitID),
+        Result
+    ),
     %% we get final withdrawal status before we rollback limits so wait for it some amount of time
     ok = timer:sleep(500),
     Withdrawal = get_withdrawal(WithdrawalID),
