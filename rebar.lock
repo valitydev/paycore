@@ -117,7 +117,7 @@
   0},
  {<<"payproc_errors">>,
   {git,"https://github.com/valitydev/payproc-errors-erlang.git",
-       {ref,"8ae8586239ef68098398acf7eb8363d9ec3b3234"}},
+       {ref,"f09631ea4aad57cd9fe3ec52361eaf3dc5d25ba6"}},
   0},
  {<<"progressor">>,
   {git,"https://github.com/valitydev/progressor.git",

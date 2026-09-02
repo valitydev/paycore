@@ -1362,11 +1362,41 @@ payment_limit_overflow(C) ->
     ok = payproc_errors:match(
         'PaymentFailure',
         Failure,
-        fun({no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = LimitID}}}}) when
-            is_binary(LimitID)
-        ->
-            ok
+        fun
+            %% NOTE If LimitID doesn't match any existing atom, payproc_error
+            %% will translate static tuple representation using it as a
+            %% reason_code for closing sub failure.
+            %% Otherwise it becomes an unknown error. Though it does normally
+            %% translate into generic Failure+SubFailure structs in both cases.
+            %% See subsequent assertion.
+            ({no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = LimitID}}}}) when
+                is_binary(LimitID)
+            ->
+                ok;
+            (
+                {no_route_found,
+                    {rejected,
+                        {limit_overflow,
+                            {{unknown_error, LimitID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
+            ) when
+                is_binary(LimitID)
+            ->
+                ok
         end
+    ),
+    LimitID = genlib:unique(),
+    ?assertEqual(
+        payproc_errors:construct(
+            'PaymentFailure',
+            {no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = LimitID}}}}
+        ),
+        payproc_errors:construct(
+            'PaymentFailure',
+            {no_route_found,
+                {rejected,
+                    {limit_overflow,
+                        {{unknown_error, LimitID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
+        )
     ).
 
 -spec limit_hold_currency_error(config()) -> test_return().
