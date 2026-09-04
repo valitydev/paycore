@@ -224,7 +224,26 @@ payment_success(C) ->
     PayerSessionInfo = #domain_PayerSessionInfo{
         redirect_url = RedirectURL = <<"https://redirectly.io/merchant">>
     },
-    PaymentParams = (make_payment_params(?pmt_sys(<<"visa-ref">>)))#payproc_InvoicePaymentParams{
+    #payproc_InvoicePaymentParams{
+        payer =
+            {payment_resource,
+                #payproc_PaymentResourcePayerParams{
+                    resource = DisposablePaymentResource
+                } = ResourcePayerParams}
+    } = PaymentParams0 = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    ClientInfo = #domain_ClientInfo{
+        browser_info = #domain_BrowserInfo{},
+        device_info = #domain_DeviceInfo{},
+        peer_accept_header = <<"application/json">>,
+        peer_user_agent = <<"hackney/7.5.3">>
+    },
+    PaymentParams = PaymentParams0#payproc_InvoicePaymentParams{
+        payer =
+            {payment_resource, ResourcePayerParams#payproc_PaymentResourcePayerParams{
+                resource = DisposablePaymentResource#domain_DisposablePaymentResource{
+                    client_info = ClientInfo
+                }
+            }},
         payer_session_info = PayerSessionInfo,
         context = Context
     },
@@ -234,6 +253,7 @@ payment_success(C) ->
         ?invoice_w_status(?invoice_paid()),
         [PaymentSt = ?payment_state(Payment)]
     ) = hg_client_invoicing:get(InvoiceID, Client),
+    ?payment_w_client_info(ClientInfo) = Payment,
     ?payment_w_status(PaymentID, ?captured()) = Payment,
     ?payment_last_trx(Trx) = PaymentSt,
     ?assertMatch(

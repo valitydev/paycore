@@ -20,6 +20,14 @@
 -define(payment_w_status(Status), #domain_InvoicePayment{status = Status}).
 -define(payment_w_status(ID, Status), #domain_InvoicePayment{id = ID, status = Status}).
 -define(payment_w_changed_cost(ChangedCost), #domain_InvoicePayment{changed_cost = ChangedCost}).
+-define(payment_w_client_info(ClientInfo), #domain_InvoicePayment{
+    payer =
+        {payment_resource, #domain_PaymentResourcePayer{
+            resource = #domain_DisposablePaymentResource{
+                client_info = ClientInfo
+            }
+        }}
+}).
 -define(invoice_payment_refund(Cash, Status), #domain_InvoicePaymentRefund{cash = Cash, status = Status}).
 -define(trx_info(ID), #domain_TransactionInfo{id = ID}).
 -define(trx_info(ID, Extra), #domain_TransactionInfo{id = ID, extra = Extra}).
