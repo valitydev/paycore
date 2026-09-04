@@ -1369,18 +1369,14 @@ payment_limit_overflow(C) ->
             %% Otherwise it becomes an unknown error. Though it does normally
             %% translate into generic Failure+SubFailure structs in both cases.
             %% See subsequent assertion.
-            ({no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = LimitID}}}}) when
-                is_binary(LimitID)
-            ->
+            ({no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = ?LIMIT_ID}}}}) ->
                 ok;
             (
                 {no_route_found,
                     {rejected,
                         {limit_overflow,
-                            {{unknown_error, LimitID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
-            ) when
-                is_binary(LimitID)
-            ->
+                            {{unknown_error, ?LIMIT_ID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
+            ) ->
                 ok
         end
     ),

@@ -1969,8 +1969,8 @@ process_shop_limit_initialization(_Action, St) ->
     case check_shop_limits(Opts, St) of
         ok ->
             {next, {[?shop_limit_initiated()], timeout}};
-        {error, {limit_overflow = Error, LimitID}} ->
-            Failure = construct_shop_limit_failure(Error, LimitID),
+        {error, {limit_overflow = Error, LimitIDs}} ->
+            Failure = construct_shop_limit_failure(Error, LimitIDs),
             Events = [
                 ?shop_limit_initiated(),
                 ?payment_rollback_started(Failure)
@@ -1978,9 +1978,9 @@ process_shop_limit_initialization(_Action, St) ->
             {next, {Events, timeout}}
     end.
 
-construct_shop_limit_failure(limit_overflow, LimitID) ->
-    Error = mk_static_error([authorization_failed, shop_limit_exceeded, unknown, LimitID]),
-    Reason = genlib:format("Limit ~p overflowed", [LimitID]),
+construct_shop_limit_failure(limit_overflow, LimitIDs) ->
+    Error = mk_static_error([authorization_failed, shop_limit_exceeded, unknown, hd(LimitIDs)]),
+    Reason = genlib:format("Limits ~p overflowed", [LimitIDs]),
     {failure, payproc_errors:construct('PaymentFailure', Error, Reason)}.
 
 process_shop_limit_failure(_Action, #st{failure = Failure} = St) ->
@@ -2198,9 +2198,9 @@ construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) -
     %% NOTE For limit overflow subcode, we care only about the first rejected
     %% route in this code pass.
     %% See reason-tuple construction in `get_limit_overflow_routes/4`.
-    [{_PrvRef, _TrmRef, {'LimitOverflow', LimitID}} | _Rest] =
+    [{_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} | _Rest] =
         NormalizedRejectedRoutes = normalize_rejected_routes(RejectedRoutes),
-    construct_routing_failure([rejected, limit_overflow, LimitID], genlib:format(NormalizedRejectedRoutes));
+    construct_routing_failure([rejected, limit_overflow, hd(LimitIDs)], genlib:format(NormalizedRejectedRoutes));
 construct_routing_failure({rejected_routes, {_SubCode, RejectedRoutes}}) ->
     construct_routing_failure([forbidden], genlib:format(normalize_rejected_routes(RejectedRoutes)));
 construct_routing_failure({misconfiguration = Code, Details}) ->
@@ -2812,8 +2812,8 @@ get_limit_overflow_routes(Routes, VS, Iter, St) ->
             case hg_limiter:check_limits(TurnoverLimits, Invoice, Payment, Session, PaymentRoute, Iter) of
                 {ok, Limits} ->
                     {[Route | RoutesNoOverflowIn], RejectedIn, LimitsIn#{PaymentRoute => Limits}};
-                {error, {limit_overflow, LimitID, Limits}} ->
-                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', LimitID}, Route),
+                {error, {limit_overflow, LimitIDs}, Limits} ->
+                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', LimitIDs}, Route),
                     {RoutesNoOverflowIn, [RejectedRoute | RejectedIn], LimitsIn#{PaymentRoute => Limits}}
             end
         end,
