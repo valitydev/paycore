@@ -18,6 +18,7 @@
 -type turnover_limit_value() :: dmsl_payproc_thrift:'TurnoverLimitValue'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type shop_config_ref() :: dmsl_domain_thrift:'ShopConfigRef'().
+-type limit_id() :: dmsl_domain_thrift:'LimitConfigID'().
 
 -export_type([turnover_limit_value/0]).
 
@@ -109,34 +110,26 @@ get_batch_limit_values(Context, TurnoverLimits, OperationIdSegments) ->
 
 -spec check_limits([turnover_limit()], invoice(), payment(), session() | undefined, route(), pos_integer()) ->
     {ok, [turnover_limit_value()]}
-    | {error, {limit_overflow, [binary()], [turnover_limit_value()]}}.
+    | {error, {limit_overflow, nonempty_list(limit_id())}, [turnover_limit_value()]}.
 check_limits(TurnoverLimits, Invoice, Payment, Session, Route, Iter) ->
     Context = gen_limit_context(Invoice, Payment, Session, Route),
     Limits = get_limit_values(Context, TurnoverLimits, make_route_operation_segments(Invoice, Payment, Route, Iter)),
-    try
-        ok = check_limits_(Limits, Context),
-        {ok, Limits}
-    catch
-        throw:limit_overflow ->
-            IDs = [T#domain_TurnoverLimit.ref#domain_LimitConfigRef.id || T <- TurnoverLimits],
-            {error, {limit_overflow, IDs, Limits}}
+    case check_limits_(Limits) of
+        ok ->
+            {ok, Limits};
+        {error, Reason} ->
+            {error, Reason, Limits}
     end.
 
 -spec check_shop_limits([turnover_limit()], party_config_ref(), shop_config_ref(), invoice(), payment()) ->
     ok
-    | {error, {limit_overflow, [binary()]}}.
+    | {error, {limit_overflow, nonempty_list(limit_id())}}.
 check_shop_limits(TurnoverLimits, PartyConfigRef, ShopConfigRef, Invoice, Payment) ->
     Context = gen_limit_shop_context(Invoice, Payment),
     Limits = get_limit_values(
         Context, TurnoverLimits, make_shop_operation_segments(PartyConfigRef, ShopConfigRef, Invoice, Payment)
     ),
-    try
-        check_limits_(Limits, Context)
-    catch
-        throw:limit_overflow ->
-            IDs = [T#domain_TurnoverLimit.ref#domain_LimitConfigRef.id || T <- TurnoverLimits],
-            {error, {limit_overflow, IDs}}
-    end.
+    check_limits_(Limits).
 
 make_shop_operation_segments(PartyConfigRef, ShopConfigRef, Invoice, Payment) ->
     [
@@ -146,26 +139,30 @@ make_shop_operation_segments(PartyConfigRef, ShopConfigRef, Invoice, Payment) ->
         get_payment_id(Payment)
     ].
 
-check_limits_([], _) ->
-    ok;
-check_limits_([TurnoverLimitValue | TLVs], Context) ->
+check_limits_(LimitValues) ->
+    case lists:foldl(fun check_limit_/2, [], LimitValues) of
+        [] ->
+            ok;
+        LimitIDs ->
+            {error, {limit_overflow, ordsets:from_list(LimitIDs)}}
+    end.
+
+check_limit_(
     #payproc_TurnoverLimitValue{
-        limit = #domain_TurnoverLimit{
-            ref = ?ref(LimitID),
-            upper_boundary = UpperBoundary
-        },
-        value = LimiterAmount
-    } = TurnoverLimitValue,
-    case LimiterAmount =< UpperBoundary of
+        limit = #domain_TurnoverLimit{ref = ?ref(LimitID), upper_boundary = UpperBoundary},
+        value = LimitAmount
+    },
+    OverflownLimits
+) ->
+    case LimitAmount =< UpperBoundary of
         true ->
-            check_limits_(TLVs, Context);
+            OverflownLimits;
         false ->
-            logger:notice("Limit with id ~p overflowed, amount ~p upper boundary ~p", [
-                LimitID,
-                LimiterAmount,
-                UpperBoundary
-            ]),
-            throw(limit_overflow)
+            ok = logger:notice(
+                "Limit with id ~p overflowed, amount ~p upper boundary ~p",
+                [LimitID, LimitAmount, UpperBoundary]
+            ),
+            [LimitID | OverflownLimits]
     end.
 
 -spec hold_payment_limits([turnover_limit()], invoice(), payment(), session() | undefined, route(), pos_integer()) ->

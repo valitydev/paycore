@@ -1929,10 +1929,11 @@ build_failure({route_not_found, []}, _Withdrawal) ->
         code => <<"no_route_found">>
     };
 build_failure({route_not_found, RejectedRoutes}, _Withdrawal) ->
-    #{
+    genlib_map:compact(#{
         code => <<"no_route_found">>,
-        reason => genlib:format({rejected_routes, RejectedRoutes})
-    };
+        reason => genlib:format({rejected_routes, RejectedRoutes}),
+        sub => build_route_not_found_sub_failure(RejectedRoutes)
+    });
 build_failure({inconsistent_quote_route, {Type, FoundID}}, Withdrawal) ->
     Details =
         {inconsistent_quote_route, #{
@@ -1947,6 +1948,20 @@ build_failure(session, Withdrawal) ->
     Result = get_session_result(Withdrawal),
     {failed, Failure} = Result,
     Failure.
+
+-define(rejected_route(Reason), {_PrvRef, _TrmRef, Reason}).
+
+build_route_not_found_sub_failure([]) ->
+    undefined;
+%% NOTE If limit overflow reason present in any rejected route See reason-tuple
+%% construction in `ff_withdrawal_routing:validate_turnover_limits/4` and
+%% `ff_limiter:check_limits/4`.
+build_route_not_found_sub_failure([
+    ?rejected_route({terms_violation, {overflow, [{LimitID, _Amount, _Boundary} | _]}}) | _
+]) ->
+    #{code => <<"limit_overflow">>, sub => #{code => LimitID}};
+build_route_not_found_sub_failure([_H | Rest]) ->
+    build_route_not_found_sub_failure(Rest).
 
 get_quote_field(provider_id, #{route := Route}) ->
     ff_withdrawal_routing:get_provider(Route);
