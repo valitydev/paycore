@@ -304,11 +304,9 @@ process_refund_cashflow(Refund) ->
             {next, {Events, Action}};
         _ ->
             Failure =
-                {failure,
-                    payproc_errors:construct(
-                        'RefundFailure',
-                        {terms_violated, {insufficient_merchant_funds, #payproc_error_GeneralFailure{}}}
-                    )},
+                {failure, #domain_Failure{
+                    code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+                }},
             {next, {[?refund_rollback_started(Failure)], Action}}
     end.
 
@@ -484,12 +482,10 @@ check_retry_possibility(Failure, Refund) ->
     end.
 
 check_failure_type({failure, Failure}) ->
-    payproc_errors:match('RefundFailure', Failure, fun do_check_failure_type/1).
-
-do_check_failure_type({authorization_failed, {temporarily_unavailable, _}}) ->
-    transient;
-do_check_failure_type(_Failure) ->
-    fatal.
+    case Failure of
+        ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _)) -> transient;
+        _ -> fatal
+    end.
 
 get_actual_retry_strategy(Refund) ->
     hg_retry:skip_steps(get_initial_retry_strategy(), retry_attempts(Refund)).

@@ -653,13 +653,22 @@ end_per_suite(C) ->
 -define(system_to_external_fixed, ?fixed(20, <<"RUB">>)).
 -define(merchant_to_system_fixed, ?fixed(100, <<"RUB">>)).
 
--define(assertRouteNotFound(Failure, Sub, ReasonSubstring), begin
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({no_route_found, Sub}) -> ok end),
+-define(assertFailure(Failure, TupleMask), ?assertMatch(TupleMask, failure_to_tuple(Failure))).
+
+-define(assertFailure(Failure, TupleMask, ReasonSubstring), begin
+    FailureTuple = failure_to_tuple(Failure),
+    ?assertMatch(TupleMask, FailureTuple),
     Reason = Failure#domain_Failure.reason,
     ?assert(
         nomatch =/= binary:match(Reason, ReasonSubstring),
-        <<"Failure reason '", Reason/binary, "' for 'no_route_found' doesn't match '", ReasonSubstring/binary, "'">>
+        iolist_to_binary(
+            io_lib:format("Failure reason '~s' for '~p' doesn't match '~s'", [Reason, FailureTuple, ReasonSubstring])
+        )
     )
+end).
+
+-define(assertRouteNotFound(Failure, Sub, ReasonSubstring), begin
+    ?assertFailure(Failure, {no_route_found, Sub}, ReasonSubstring)
 end).
 
 -spec init_per_group(group_name(), config()) -> config().
@@ -1245,11 +1254,8 @@ payment_shop_limit_overflow(C) ->
     Failure = create_payment_shop_limit_overflow(
         PartyConfigRef, ShopConfigRef, PaymentAmount, Client, ?pmt_sys(<<"visa-ref">>)
     ),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun(
-        {authorization_failed, {shop_limit_exceeded, {unknown, _}}}
-    ) ->
-        ok
-    end).
+    %% TODO Replace with similar assert macro all other occurrences of payproc_errors:match/2
+    ?assertFailure(Failure, {authorization_failed, {shop_limit_exceeded, {unknown, _}}}).
 
 -spec payment_shop_limit_more_overflow(config()) -> test_return().
 payment_shop_limit_more_overflow(C) ->
@@ -1379,20 +1385,6 @@ payment_limit_overflow(C) ->
             ) ->
                 ok
         end
-    ),
-    LimitID = genlib:unique(),
-    ?assertEqual(
-        payproc_errors:construct(
-            'PaymentFailure',
-            {no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = LimitID}}}}
-        ),
-        payproc_errors:construct(
-            'PaymentFailure',
-            {no_route_found,
-                {rejected,
-                    {limit_overflow,
-                        {{unknown_error, LimitID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
-        )
     ).
 
 -spec limit_hold_currency_error(config()) -> test_return().
@@ -2370,12 +2362,13 @@ payment_session_changed_to_fail(C) ->
     %% Payment w/ preauth for suspend w/ user interaction occurrence.
     PaymentID = start_payment(InvoiceID, make_tds_payment_params(instant, ?pmt_sys(<<"visa-ref">>)), Client),
     UserInteraction = await_payment_process_interaction(InvoiceID, PaymentID, Client),
-
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {operation_blocked, ?err_gen_failure()}},
-        genlib:unique()
-    ),
+    Failure = #domain_Failure{
+        reason = genlib:unique(),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{
+            code = <<"operation_blocked">>
+        }
+    },
     Change = #proxy_provider_PaymentSessionChange{status = {failure, Failure}},
 
     %% Unknown session callback tag
@@ -4752,11 +4745,9 @@ payment_refund_success(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     Failure =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4797,11 +4788,9 @@ payment_refund_failure(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4909,11 +4898,9 @@ deadline_doesnt_affect_payment_refund(C) ->
     timer:sleep(ProcessingDeadline),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4951,11 +4938,9 @@ payment_manual_refund(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     Refund0 =
         ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment_manual(InvoiceID, PaymentID, RefundParams, Client),
@@ -5637,10 +5622,7 @@ adhoc_repair_force_invalid_transition(C) ->
     PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     PaymentID = execute_payment(InvoiceID, PaymentParams, Client),
     _ = ?assertEqual(ok, hg_invoice:fail(InvoiceID)),
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {unknown, ?err_gen_failure()}}
-    ),
+    Failure = #domain_Failure{code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"unknown">>}},
     InvalidChanges = [
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))),
         ?invoice_status_changed(?invoice_unpaid())
@@ -5850,11 +5832,11 @@ repair_fail_session_on_processed_succeeded(C) ->
 
     timeout = next_change(InvoiceID, 2000, Client),
 
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {security_policy_violated, ?err_gen_failure()}},
-        genlib:unique()
-    ),
+    Failure = #domain_Failure{
+        reason = genlib:unique(),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{code = <<"security_policy_violated">>}
+    },
     ok = repair_invoice_with_scenario(InvoiceID, {fail_session, Failure}, Client),
 
     [
@@ -6034,10 +6016,7 @@ repair_fulfill_session_with_trx_succeeded(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client).
 
 construct_authorization_failure() ->
-    payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {unknown, ?err_gen_failure()}}
-    ).
+    #domain_Failure{code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"unknown">>}}.
 
 %%
 
@@ -8189,7 +8168,7 @@ repair_invoice(InvoiceID, Changes, Action, Params, Client) ->
     hg_client_invoicing:repair(InvoiceID, Changes, Action, Params, Client).
 
 create_repair_scenario(fail_pre_processing) ->
-    Failure = payproc_errors:construct('PaymentFailure', {no_route_found, {unknown, ?err_gen_failure()}}),
+    Failure = #domain_Failure{code = <<"no_route_found">>, sub = #domain_SubFailure{code = <<"unknown">>}},
     {'fail_pre_processing', #'payproc_InvoiceRepairFailPreProcessing'{failure = Failure}};
 create_repair_scenario(skip_inspector) ->
     {'skip_inspector', #'payproc_InvoiceRepairSkipInspector'{risk_score = low}};
@@ -10758,3 +10737,17 @@ mock_fault_detector(SupPid) ->
 
 configured_limit_version(C) ->
     genlib:define(cfg(original_domain_revision, C), cfg(base_limits_domain_revision, C)).
+
+failure_to_tuple(undefined) -> undefined;
+failure_to_tuple(?subfailure(Code, SubFailure)) -> failure_to_tuple_(Code, SubFailure);
+failure_to_tuple(?failure(Code, _, SubFailure)) -> failure_to_tuple_(Code, SubFailure).
+
+failure_to_tuple_(Code, SubFailure) ->
+    {normalize_failure_code(Code), failure_to_tuple(SubFailure)}.
+normalize_failure_code(Code) ->
+    try
+        erlang:binary_to_existing_atom(Code, utf8)
+    catch
+        error:badarg ->
+            {unknown_error, Code}
+    end.

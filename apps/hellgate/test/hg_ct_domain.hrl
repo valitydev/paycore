@@ -233,8 +233,6 @@
         ]}
 }).
 
--define(err_gen_failure(), #payproc_error_GeneralFailure{}).
-
 -define(redirect(Uri, Form),
     {redirect, {post_request, #user_interaction_BrowserPostRequest{uri = Uri, form = Form}}}
 ).
