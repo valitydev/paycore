@@ -240,7 +240,9 @@ get_payment_state(PaymentSession) ->
 -type callback_response() :: dmsl_proxy_provider_thrift:'CallbackResponse'().
 
 -spec process_callback(tag(), callback()) ->
-    {ok, callback_response()} | {error, invalid_callback | notfound | failed} | no_return().
+    {ok, callback_response()}
+    | {error, {invalid_callback, binary()} | invalid_callback | notfound | failed}
+    | no_return().
 process_callback(Tag, Callback) ->
     process_with_tag(Tag, fun(MachineID) ->
         case prg_machine:call(?NS, MachineID, {callback, Tag, Callback}) of
@@ -248,6 +250,8 @@ process_callback(Tag, Callback) ->
                 Ok;
             {ok, ok} ->
                 ok;
+            {ok, {exception, {invalid_callback, _} = Error}} ->
+                {error, Error};
             {ok, {exception, invalid_callback}} ->
                 {error, invalid_callback};
             {error, _} = Error ->
@@ -550,6 +554,16 @@ dispatch_to_session({callback, Tag, {provider, Payload}}, #st{activity = {paymen
 dispatch_to_session({session_change, _Tag, _SessionChange} = Call, #st{activity = {payment, PaymentID}} = St) ->
     PaymentSession = get_payment_session(PaymentID, St),
     process_payment_call(Call, PaymentID, PaymentSession, St);
+dispatch_to_session({callback, _Tag, _Callback}, #st{invoice = Invoice, payments = Payments}) ->
+    PaymentStatuses = [
+        {PaymentID, element(1, (hg_invoice_payment:get_payment(PaymentSt))#domain_InvoicePayment.status)}
+     || {PaymentID, PaymentSt} <- Payments
+    ],
+    Details = genlib:format(
+        "No active payment: invoice_id=~ts, invoice_status=~p, payment_statuses=~0p",
+        [Invoice#domain_Invoice.id, element(1, Invoice#domain_Invoice.status), PaymentStatuses]
+    ),
+    throw({invalid_callback, Details});
 dispatch_to_session(_Call, _St) ->
     throw(invalid_callback).
 
@@ -1178,6 +1192,46 @@ wrap_event_payload(Payload) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -spec test() -> _.
+
+%% The callback is expected to throw because the invoice has no active payment.
+-dialyzer({no_fail_call, callback_after_capture_test/0}).
+
+-spec callback_after_capture_test() -> _.
+callback_after_capture_test() ->
+    Payment = #domain_InvoicePayment{
+        id = <<"1">>,
+        created_at = <<"2026-09-08T11:23:08Z">>,
+        status = ?captured_with_reason(<<"Timeout">>),
+        cost = ?cash(1000, <<"KZT">>),
+        domain_revision = 1,
+        flow = ?invoice_payment_flow_instant(),
+        payer = ?payment_resource_payer(
+            #domain_DisposablePaymentResource{payment_tool = {payment_terminal, #domain_PaymentTerminal{}}},
+            #domain_ContactInfo{}
+        )
+    },
+    PaymentSt = hg_invoice_payment:merge_change(?payment_started(Payment), undefined, #{}),
+    St = #st{
+        activity = invoice,
+        invoice = #domain_Invoice{
+            id = <<"invoice">>,
+            domain_revision = 1,
+            party_ref = #domain_PartyConfigRef{id = <<"party">>},
+            shop_ref = #domain_ShopConfigRef{id = <<"shop">>},
+            created_at = <<"2026-09-08T11:23:08Z">>,
+            status = ?invoice_paid(),
+            details = #domain_InvoiceDetails{product = <<"test">>},
+            due = <<"2026-09-08T12:23:08Z">>,
+            cost = Payment#domain_InvoicePayment.cost
+        },
+        payments = [{<<"1">>, PaymentSt}]
+    },
+    ?assertThrow(
+        {invalid_callback,
+            <<"No active payment: invoice_id=invoice, invoice_status=paid, payment_statuses=[{<<\"1\">>,captured}]">>},
+        dispatch_to_session({callback, <<"tag">>, {provider, <<>>}}, St)
+    ).
+
 create_dummy_refund_with_id(ID) ->
     #payproc_InvoicePaymentRefund{
         refund = #domain_InvoicePaymentRefund{

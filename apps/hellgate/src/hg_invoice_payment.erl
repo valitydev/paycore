@@ -1941,11 +1941,26 @@ process_callback(Tag, Payload, Session, St) when Session /= undefined ->
     case {hg_session:status(Session), hg_session:tags(Session)} of
         {suspended, [Tag | _]} ->
             handle_callback(get_activity(St), Payload, Session, St);
-        _ ->
-            throw(invalid_callback)
+        {suspended, [ExpectedTag | _]} ->
+            reject_callback(
+                genlib:format("Callback tag mismatch: received_tag=~ts, expected_tag=~ts", [Tag, ExpectedTag]),
+                St
+            );
+        {suspended, []} ->
+            reject_callback(<<"No callback tag registered for the suspended session">>, St);
+        {Status, _} ->
+            reject_callback(genlib:format("Session is not suspended: session_status=~p", [Status]), St)
     end;
-process_callback(_Tag, _Payload, undefined, _St) ->
-    throw(invalid_callback).
+process_callback(_Tag, _Payload, undefined, St) ->
+    reject_callback(<<"No active session">>, St).
+
+-spec reject_callback(binary(), st()) -> no_return().
+reject_callback(Reason, #st{payment = Payment, activity = Activity}) ->
+    Details = genlib:format(
+        "~ts; payment_id=~ts, payment_status=~p, activity=~0p",
+        [Reason, Payment#domain_InvoicePayment.id, element(1, Payment#domain_InvoicePayment.status), Activity]
+    ),
+    throw({invalid_callback, Details}).
 
 process_session_change(Tag, SessionChange, Session0, St) when Session0 /= undefined ->
     %% NOTE Change allowed only for suspended session. Not suspended
@@ -4230,6 +4245,52 @@ get_route_cascade_behaviour(Route, Revision) ->
 -include_lib("hellgate/test/hg_ct_domain.hrl").
 
 -spec test() -> _.
+
+%% Each generated test deliberately calls a callback rejection branch.
+-dialyzer({no_fail_call, invalid_callback_details_test_/0}).
+
+-spec invalid_callback_details_test_() -> [_].
+invalid_callback_details_test_() ->
+    St = #st{
+        activity = {payment, processing_session},
+        payment = #domain_InvoicePayment{
+            id = <<"1">>,
+            created_at = <<"2026-09-08T11:23:08Z">>,
+            status = ?pending(),
+            cost = ?cash(1000, <<"KZT">>),
+            domain_revision = 1,
+            flow = ?invoice_payment_flow_instant(),
+            payer = ?payment_resource_payer(
+                #domain_DisposablePaymentResource{payment_tool = {payment_terminal, #domain_PaymentTerminal{}}},
+                #domain_ContactInfo{}
+            )
+        }
+    },
+    Session = hg_session:apply_event(hg_session:create(), undefined, #{
+        target => ?processed(),
+        route => #domain_PaymentRoute{provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}},
+        invoice_id => <<"invoice">>,
+        payment_id => <<"1">>,
+        timestamp => 0
+    }),
+    Cases = [
+        {undefined, <<"No active session">>},
+        {Session, <<"Session is not suspended: session_status=active">>},
+        {Session#{status => finished}, <<"Session is not suspended: session_status=finished">>},
+        {Session#{status => suspended}, <<"No callback tag registered for the suspended session">>},
+        {
+            Session#{status => suspended, tags => [<<"new-tag">>, <<"old-tag">>]},
+            <<"Callback tag mismatch: received_tag=old-tag, expected_tag=new-tag">>
+        }
+    ],
+    lists:map(
+        fun({CurrentSession, Reason}) ->
+            Details =
+                <<Reason/binary, "; payment_id=1, payment_status=pending, activity={payment,processing_session}">>,
+            ?_assertThrow({invalid_callback, Details}, process_callback(<<"old-tag">>, <<>>, CurrentSession, St))
+        end,
+        Cases
+    ).
 
 -spec filter_attempted_routes_test_() -> [_].
 filter_attempted_routes_test_() ->
