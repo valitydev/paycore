@@ -1254,7 +1254,6 @@ payment_shop_limit_overflow(C) ->
     Failure = create_payment_shop_limit_overflow(
         PartyConfigRef, ShopConfigRef, PaymentAmount, Client, ?pmt_sys(<<"visa-ref">>)
     ),
-    %% TODO Replace with similar assert macro all other occurrences of payproc_errors:match/2
     ?assertFailure(Failure, {authorization_failed, {shop_limit_exceeded, {unknown, _}}}).
 
 -spec payment_shop_limit_more_overflow(config()) -> test_return().
@@ -1282,11 +1281,7 @@ payment_shop_limit_more_overflow(C) ->
     Failure = create_payment_shop_limit_overflow(
         PartyConfigRef, ShopConfigRef, PaymentAmount, Client, ?pmt_sys(<<"visa-ref">>)
     ),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun(
-        {authorization_failed, {shop_limit_exceeded, {unknown, _}}}
-    ) ->
-        ok
-    end).
+    ?assertFailure(Failure, {authorization_failed, {shop_limit_exceeded, {unknown, _}}}).
 
 -spec payment_routes_limit_values(config()) -> test_return().
 payment_routes_limit_values(C) ->
@@ -1365,27 +1360,7 @@ payment_limit_overflow(C) ->
     ok = hg_limiter_helper:assert_payment_limit_amount(
         ?LIMIT_ID, configured_limit_version(C), PaymentAmount, Payment, Invoice
     ),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun
-            %% NOTE If LimitID doesn't match any existing atom, payproc_error
-            %% will translate static tuple representation using it as a
-            %% reason_code for closing sub failure.
-            %% Otherwise it becomes an unknown error. Though it does normally
-            %% translate into generic Failure+SubFailure structs in both cases.
-            %% See subsequent assertion.
-            ({no_route_found, {rejected, {limit_overflow, #payproc_error_GeneralFailure{reason_code = ?LIMIT_ID}}}}) ->
-                ok;
-            (
-                {no_route_found,
-                    {rejected,
-                        {limit_overflow,
-                            {{unknown_error, ?LIMIT_ID}, #payproc_error_GeneralFailure{reason_code = undefined}}}}}
-            ) ->
-                ok
-        end
-    ).
+    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, {?LIMIT_ID, undefined}}}}).
 
 -spec limit_hold_currency_error(config()) -> test_return().
 limit_hold_currency_error(C) ->
@@ -1505,11 +1480,7 @@ refund_limit_success(C) ->
     ?payment(PaymentID) = Payment,
 
     Failure = create_payment_limit_overflow(PartyConfigRef, ShopConfigRef, 50000, Client, PmtSys),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({no_route_found, {rejected, {limit_overflow, _}}}) -> ok end
-    ),
+    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, _}}}),
     % create a refund finally
     RefundParams = make_refund_params(),
     RefundID = execute_payment_refund(InvoiceID, PaymentID, RefundParams, Client),
@@ -1633,11 +1604,7 @@ processing_deadline_reached_test(C) ->
         ?payment_ev(PaymentID, ?payment_rollback_started({failure, Failure})),
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID, 2, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({authorization_failed, {processing_deadline_reached, _}}) -> ok end
-    ).
+    ?assertFailure(Failure, {authorization_failed, {processing_deadline_reached, _}}).
 
 -spec payment_w_misconfigured_routing_failed(config()) -> test_return().
 payment_w_misconfigured_routing_failed(C) ->
@@ -2557,11 +2524,7 @@ payment_risk_score_check(C) ->
         ?payment_ev(PaymentID3, ?risk_score_changed(fatal)),
         ?payment_ev(PaymentID3, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID3, 5, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({no_route_found, _}) -> ok end
-    ).
+    ?assertFailure(Failure, {no_route_found, _}).
 
 -spec payment_risk_score_check_fail(config()) -> test_return().
 payment_risk_score_check_fail(C) ->
@@ -3420,11 +3383,7 @@ payment_temporary_unavailability_too_many_retries(C) ->
     PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
     {failed, PaymentID, {failure, Failure}} =
         await_payment_process_failure(InvoiceID, PaymentID, Client, 3),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({authorization_failed, {temporarily_unavailable, _}}) -> ok end
-    ).
+    ?assertFailure(Failure, {authorization_failed, {temporarily_unavailable, _}}).
 
 update_payment_terms_cashflow(ProviderRef, CashFlow) ->
     Provider = hg_domain:get({provider, ProviderRef}),
@@ -5687,7 +5646,7 @@ payment_with_offsite_preauth_failed(C) ->
         next_change(InvoiceID, 8000, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, 8000, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({authorization_failed, _}) -> ok end),
+    ?assertFailure(Failure, {authorization_failed, _}),
     ?invoice_status_changed(?invoice_cancelled(<<"overdue">>)) = next_change(InvoiceID, Client).
 
 -spec payment_with_tokenized_bank_card(config()) -> test_return().
@@ -6447,11 +6406,7 @@ payment_cascade_success(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {Route1, _Candidates1, _CashFlow1, TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure1,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS NOT failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(PaymentInterim)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -6837,7 +6792,7 @@ payment_cascade_limit_overflow(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure1, {authorization_failed, {unknown, _}}),
     %% And again but no route found
     [
         ?payment_ev(PaymentID, ?route_changed(Route2, Candidates2)),
@@ -6848,7 +6803,7 @@ payment_cascade_limit_overflow(C) ->
     ?assertNotEqual(Route1, Route2),
     ?assertNot(lists:member(Route1, Candidates2)),
     %% No route found and so we pass original failure from previous attempt
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure2, {authorization_failed, {unknown, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(FinalPayment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -6898,11 +6853,7 @@ payment_big_cascade_success(C) ->
         (fun() ->
             {Route, Candidates, _CashFlow, _TrxID, Failure} =
                 await_cascade_triggering(InvoiceID, PaymentID, Client),
-            ok = payproc_errors:match(
-                'PaymentFailure',
-                Failure,
-                fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-            ),
+            ?assertFailure(Failure, {authorization_failed, {card_blocked, _}}),
             _ = [
                 ?assertMatch(
                     HoldValue when HoldValue =:= 0 orelse HoldValue =:= Amount,
@@ -7188,7 +7139,7 @@ payment_cascade_fail_ui(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure1, {authorization_failed, {unknown, _}}),
     %% And again with UI
     [
         ?payment_ev(PaymentID, ?route_changed(_Route2)),
@@ -7209,7 +7160,7 @@ payment_cascade_fail_ui(C) ->
         next_changes(InvoiceID, 3, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({preauthorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure2, {preauthorization_failed, {unknown, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7393,7 +7344,7 @@ payment_cascade_fail_wo_available_attempt_limit(C) ->
         await_cascade_triggering(InvoiceID, PaymentID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7481,13 +7432,13 @@ payment_cascade_failures(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% And again
     {_Route2, _Candidates2, _CashFlow2, _TrxID2, Failure2} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure2, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7582,7 +7533,7 @@ payment_cascade_deadline_failures(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% And again
     ?payment_ev(PaymentID, ?route_changed(_Route2)) =
         next_change(InvoiceID, Client),
@@ -7592,11 +7543,7 @@ payment_cascade_deadline_failures(C) ->
         next_change(InvoiceID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure2,
-        fun({authorization_failed, {processing_deadline_reached, _}}) -> ok end
-    ),
+    ?assertFailure(Failure2, {authorization_failed, {processing_deadline_reached, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7821,11 +7768,7 @@ payment_recurrent_cascade_success(C) ->
         #domain_PaymentRoute{provider = ?prv(?CASCADE_ID_RANGE(?PAYMENT_RECURRENT_CASCADE_SUCCESS_ID + 1))},
         Route1
     ),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure1,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     [
         ?payment_ev(PaymentID, ?route_changed(Route2)),
         ?payment_ev(PaymentID, ?cash_flow_changed(_CashFlow2))
@@ -7878,11 +7821,7 @@ payment_recurrent_cascade_fail(C) ->
         next_change(InvoiceID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
     ?assertMatch(#domain_InvoicePayment{status = {failed, _}}, Payment).
