@@ -481,11 +481,10 @@ check_retry_possibility(Failure, Refund) ->
             fatal
     end.
 
-check_failure_type({failure, Failure}) ->
-    case Failure of
-        ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _)) -> transient;
-        _ -> fatal
-    end.
+check_failure_type({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _))}) ->
+    transient;
+check_failure_type(_) ->
+    fatal.
 
 get_actual_retry_strategy(Refund) ->
     hg_retry:skip_steps(get_initial_retry_strategy(), retry_attempts(Refund)).

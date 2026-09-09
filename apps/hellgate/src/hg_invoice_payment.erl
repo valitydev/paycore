@@ -2645,30 +2645,27 @@ get_bank_card_token(?recurrent_payer({bank_card, #domain_BankCard{token = Token}
 get_bank_card_token(_) ->
     undefined.
 
-choose_fd_operation_status_for_failure({failure, Failure}) ->
-    case Failure of
-        ?failure(<<"authorization_failed">>, _, ?subfailure(FailType0, _)) ->
-            DefaultBenignFailures = [
-                insufficient_funds,
-                rejected_by_issuer,
-                processing_deadline_reached
-            ],
-            FDConfig = genlib_app:env(hellgate, fault_detector, #{}),
-            Config = genlib_map:get(conversion, FDConfig, #{}),
-            BenignFailures = genlib_map:get(benign_failures, Config, DefaultBenignFailures),
-            FailType1 =
-                try
-                    erlang:binary_to_existing_atom(FailType0, utf8)
-                catch
-                    error:badarg -> undefined
-                end,
-            case lists:member(FailType1, BenignFailures) of
-                false -> error;
-                true -> finish
-            end;
-        _ ->
-            finish
-    end.
+choose_fd_operation_status_for_failure({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(FailType0, _))}) ->
+    DefaultBenignFailures = [
+        insufficient_funds,
+        rejected_by_issuer,
+        processing_deadline_reached
+    ],
+    FDConfig = genlib_app:env(hellgate, fault_detector, #{}),
+    Config = genlib_map:get(conversion, FDConfig, #{}),
+    BenignFailures = genlib_map:get(benign_failures, Config, DefaultBenignFailures),
+    FailType1 =
+        try
+            erlang:binary_to_existing_atom(FailType0, utf8)
+        catch
+            error:badarg -> undefined
+        end,
+    case lists:member(FailType1, BenignFailures) of
+        false -> error;
+        true -> finish
+    end;
+choose_fd_operation_status_for_failure(_) ->
+    finish.
 
 maybe_notify_fault_detector({payment, processing_session}, processed, Status, St) ->
     ProviderRef = get_route_provider(get_route(St)),
@@ -2725,13 +2722,10 @@ check_retry_possibility(Target, Failure, St) ->
     end.
 
 -spec check_failure_type(failure()) -> transient | fatal.
-check_failure_type({failure, Failure}) ->
-    case Failure of
-        ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _)) ->
-            transient;
-        _ ->
-            fatal
-    end.
+check_failure_type({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _))}) ->
+    transient;
+check_failure_type(_) ->
+    fatal.
 
 get_action(?processed(), _Action, St) ->
     case get_payment_flow(get_payment(St)) of
