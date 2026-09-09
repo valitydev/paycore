@@ -152,17 +152,17 @@ check_limit_(
         limit = #domain_TurnoverLimit{ref = ?ref(LimitID), upper_boundary = UpperBoundary},
         value = LimitAmount
     },
-    OverflownLimits
+    OverflowedLimits
 ) ->
     case LimitAmount =< UpperBoundary of
         true ->
-            OverflownLimits;
+            OverflowedLimits;
         false ->
             ok = logger:notice(
                 "Limit with id ~p overflowed, amount ~p upper boundary ~p",
                 [LimitID, LimitAmount, UpperBoundary]
             ),
-            [LimitID | OverflownLimits]
+            [LimitID | OverflowedLimits]
     end.
 
 -spec hold_payment_limits([turnover_limit()], invoice(), payment(), session() | undefined, route(), pos_integer()) ->

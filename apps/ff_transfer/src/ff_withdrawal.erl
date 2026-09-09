@@ -1957,9 +1957,14 @@ build_route_not_found_sub_failure([]) ->
 %% construction in `ff_withdrawal_routing:validate_turnover_limits/4` and
 %% `ff_limiter:check_limits/4`.
 build_route_not_found_sub_failure([
-    ?rejected_route({terms_violation, {overflow, [{LimitID, _Amount, _Boundary} | _]}}) | _
+    ?rejected_route({terms_violation, {overflow, OverflowedLimits}}) | _
 ]) ->
-    #{code => <<"limit_overflow">>, sub => #{code => LimitID}};
+    #{
+        code => <<"limit_overflow">>,
+        sub => #{
+            code => genlib_string:join($,, [LimitID || {LimitID, _Amount, _Boundary} <- OverflowedLimits])
+        }
+    };
 build_route_not_found_sub_failure([_H | Rest]) ->
     build_route_not_found_sub_failure(Rest).
 

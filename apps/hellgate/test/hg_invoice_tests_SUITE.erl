@@ -1360,7 +1360,10 @@ payment_limit_overflow(C) ->
     ok = hg_limiter_helper:assert_payment_limit_amount(
         ?LIMIT_ID, configured_limit_version(C), PaymentAmount, Payment, Invoice
     ),
-    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, {?LIMIT_ID, undefined}}}}).
+    %% NOTE We expect binary value of limit id to match exixting atom, so helper
+    %% fun inside an assert will translate it to it.
+    ExpectedLimitID = binary_to_existing_atom(?LIMIT_ID),
+    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, {ExpectedLimitID, undefined}}}}).
 
 -spec limit_hold_currency_error(config()) -> test_return().
 limit_hold_currency_error(C) ->
@@ -1381,7 +1384,11 @@ limit_hold_payment_tool_not_supported(C) ->
 -spec limit_hold_two_routes_failure(config()) -> test_return().
 limit_hold_two_routes_failure(C) ->
     Failure = payment_route_not_found(C),
-    ?assertRouteNotFound(Failure, {rejected, {limit_overflow, _}}, <<"[{">>).
+    ?assertRouteNotFound(
+        Failure,
+        {rejected, {limit_overflow, _}},
+        iolist_to_binary(io_lib:format("Limits ~p overflowed", [[?LIMIT_ID2]]))
+    ).
 
 payment_route_not_found(C) ->
     PmtSys = ?pmt_sys(<<"visa-ref">>),
@@ -1622,7 +1629,7 @@ payment_w_misconfigured_routing_failed(C) ->
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID, 5, Client),
     Reason = genlib:format({routing_decisions, {delegates, []}}),
-    ?assertRouteNotFound(Failure, {unknown, {{unknown_error, <<"misconfiguration">>}, _}}, Reason).
+    ?assertRouteNotFound(Failure, {unknown, {misconfiguration, _}}, Reason).
 
 payment_w_misconfigured_routing_failed_fixture(_Revision, _C) ->
     [
@@ -6853,7 +6860,7 @@ payment_big_cascade_success(C) ->
         (fun() ->
             {Route, Candidates, _CashFlow, _TrxID, Failure} =
                 await_cascade_triggering(InvoiceID, PaymentID, Client),
-            ?assertFailure(Failure, {authorization_failed, {card_blocked, _}}),
+            ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
             _ = [
                 ?assertMatch(
                     HoldValue when HoldValue =:= 0 orelse HoldValue =:= Amount,

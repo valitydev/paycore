@@ -1982,7 +1982,10 @@ construct_shop_limit_failure(limit_overflow, LimitIDs) ->
         code = <<"authorization_failed">>,
         sub = #domain_SubFailure{
             code = <<"shop_limit_exceeded">>,
-            sub = #domain_SubFailure{code = <<"unknown">>, sub = #domain_SubFailure{code = hd(LimitIDs)}}
+            sub = #domain_SubFailure{
+                code = <<"unknown">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
         }
     }}.
 
@@ -2201,17 +2204,20 @@ construct_routing_failure({rejected_routes, {SubCode, RejectedRoutes}}) when
         genlib:format(normalize_rejected_routes(RejectedRoutes))
     );
 construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) ->
-    %% NOTE For limit overflow subcode, we care only about the first rejected
-    %% route in this code pass.
-    %% See reason-tuple construction in `get_limit_overflow_routes/4`.
-    [{_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} | _Rest] =
-        NormalizedRejectedRoutes = normalize_rejected_routes(RejectedRoutes),
+    %% NOTE See reason-tuple construction in `get_limit_overflow_routes/4`.
+    LimitIDs = lists:flatten([
+        LimitIDs
+     || {_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} <- normalize_rejected_routes(RejectedRoutes)
+    ]),
     construct_routing_failure(
         #domain_SubFailure{
             code = <<"rejected">>,
-            sub = #domain_SubFailure{code = <<"limit_overflow">>, sub = #domain_SubFailure{code = hd(LimitIDs)}}
+            sub = #domain_SubFailure{
+                code = <<"limit_overflow">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
         },
-        genlib:format(NormalizedRejectedRoutes)
+        genlib:format("Limits ~p overflowed", [LimitIDs])
     );
 construct_routing_failure({rejected_routes, {_SubCode, RejectedRoutes}}) ->
     construct_routing_failure(
