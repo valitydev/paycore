@@ -184,6 +184,7 @@ check_deadline(Deadline) ->
 
 -spec format_failure(dmsl_domain_thrift:'Failure'() | undefined) -> iolist().
 format_failure(Failure) -> lists:join($:, extract_failure_code(Failure)).
+
 extract_failure_code(undefined) -> [];
 extract_failure_code(#domain_Failure{code = Code, sub = Sub}) -> [Code | extract_failure_code(Sub)];
 extract_failure_code(#domain_SubFailure{code = Code, sub = Sub}) -> [Code | extract_failure_code(Sub)].

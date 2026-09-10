@@ -1387,7 +1387,9 @@ limit_hold_two_routes_failure(C) ->
     ?assertRouteNotFound(
         Failure,
         {rejected, {limit_overflow, _}},
-        iolist_to_binary(io_lib:format("Limits ~p overflowed", [[?LIMIT_ID2]]))
+        %% NOTE Start of long and nested list of tuples describing route with
+        %% corresponding limit's states
+        <<"[{">>
     ).
 
 payment_route_not_found(C) ->

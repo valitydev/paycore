@@ -2205,10 +2205,12 @@ construct_routing_failure({rejected_routes, {SubCode, RejectedRoutes}}) when
     );
 construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) ->
     %% NOTE See reason-tuple construction in `get_limit_overflow_routes/4`.
-    LimitIDs = lists:flatten([
-        LimitIDs
-     || {_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} <- normalize_rejected_routes(RejectedRoutes)
-    ]),
+    LimitIDs = ordsets:from_list(
+        lists:flatten([
+            LimitIDs
+         || {_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} <- normalize_rejected_routes(RejectedRoutes)
+        ])
+    ),
     construct_routing_failure(
         #domain_SubFailure{
             code = <<"rejected">>,
@@ -2217,7 +2219,7 @@ construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) -
                 sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
             }
         },
-        genlib:format("Limits ~p overflowed", [LimitIDs])
+        genlib:format(normalize_rejected_routes(RejectedRoutes))
     );
 construct_routing_failure({rejected_routes, {_SubCode, RejectedRoutes}}) ->
     construct_routing_failure(
