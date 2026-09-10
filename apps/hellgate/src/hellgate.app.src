@@ -25,7 +25,6 @@
         dmt_client,
         party_client,
         bender_client,
-        payproc_errors,
         erl_health,
         limiter_proto,
         opentelemetry_api,

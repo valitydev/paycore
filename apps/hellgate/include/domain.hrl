@@ -13,13 +13,8 @@
     terminal = TerminalRef
 }).
 
--define(failure(Code),
-    ?failure(Code, undefined)
-).
-
--define(failure(Code, Reason),
-    {failure, #domain_Failure{code = Code, reason = Reason}}
-).
+-define(failure(Code, Reason, Sub), #domain_Failure{code = Code, sub = Sub, reason = Reason}).
+-define(subfailure(Code, Sub), #domain_SubFailure{code = Code, sub = Sub}).
 
 -define(operation_timeout(),
     {operation_timeout, #domain_OperationTimeout{}}
