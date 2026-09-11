@@ -1,5 +1,6 @@
 -module(hg_customer_client).
 
+-include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
@@ -15,11 +16,16 @@
 -export([get_recurrent_tokens/2]).
 -export([add_payment/3]).
 -export([link_bank_card/2]).
+-export([find_or_create_customer_by_email/2]).
+-export([get_terminal_affinities/1]).
+-export([bind_terminal_affinity/4]).
 
 -export_type([cascade_tokens/0]).
+-export_type([payment_ref/0]).
 
 -type invoice_id() :: dmsl_domain_thrift:'InvoiceID'().
 -type payment_id() :: dmsl_domain_thrift:'InvoicePaymentID'().
+-type payment_ref() :: {invoice_id(), payment_id()}.
 -type provider_terminal_key() :: dmsl_customer_thrift:'ProviderTerminalKey'().
 -type token() :: dmsl_domain_thrift:'Token'().
 -type recurrent_token() :: dmsl_customer_thrift:'RecurrentToken'().
@@ -103,6 +109,57 @@ get_recurrent_tokens(InvoiceID, PaymentID) ->
             []
     end.
 
+%% cubasty is part of the core: a failure is not swallowed but fails the caller, so that the
+%% machine step is retried or repaired. Only answers a retry would not change are handled
+-spec find_or_create_customer_by_email(dmsl_domain_thrift:'PartyConfigRef'(), binary()) ->
+    dmsl_customer_thrift:'CustomerID'() | undefined.
+find_or_create_customer_by_email(PartyRef, Email) ->
+    case call(customer_management, 'FindOrCreateByEmail', {PartyRef, Email}) of
+        {ok, #customer_Customer{id = ID}} ->
+            ID;
+        %% An address cubasty does not accept identifies no payer
+        {exception, #base_InvalidRequest{}} ->
+            undefined
+    end.
+
+-spec get_terminal_affinities(dmsl_customer_thrift:'CustomerID'()) -> [dmsl_customer_thrift:'TerminalAffinity'()].
+get_terminal_affinities(CustomerID) ->
+    case call(customer_management, 'GetTerminalAffinities', {CustomerID}) of
+        {ok, Affinities} ->
+            Affinities;
+        %% Deleting a Customer releases its bindings, so a deleted one has none
+        {exception, #customer_CustomerNotFound{}} ->
+            []
+    end.
+
+%% The payment reference is the binding's idempotency key: a repeat call by the same
+%% payment returns the existing record without moving it to the tail of the history.
+%% The field is required, so an incomplete reference fails here, not in the serialiser
+-spec bind_terminal_affinity(
+    dmsl_customer_thrift:'CustomerID'(),
+    dmsl_domain_thrift:'PaymentRoute'(),
+    dmsl_domain_thrift:'RoutingAffinityTtl'() | undefined,
+    payment_ref()
+) -> ok.
+bind_terminal_affinity(
+    CustomerID,
+    #domain_PaymentRoute{provider = Provider, terminal = Terminal},
+    Ttl,
+    {InvoiceID, PaymentID}
+) when is_binary(InvoiceID), is_binary(PaymentID) ->
+    {ok, _} = call(
+        customer_management,
+        'BindTerminalAffinity',
+        {#customer_TerminalAffinityParams{
+            customer_id = CustomerID,
+            provider_ref = Provider,
+            terminal_ref = Terminal,
+            ttl = Ttl,
+            payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
+        }}
+    ),
+    ok.
+
 -spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id()) -> ok.
 add_payment(CustomerID, InvoiceID, PaymentID) ->
     {ok, ok} = call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID}),
@@ -164,3 +221,122 @@ call(ServiceName, Function, Args) ->
         },
         WoodyContext
     ).
+
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec customer_calls_test_() -> _.
+customer_calls_test_() ->
+    {setup,
+        fun() ->
+            %% woody pulls in snowflake, without which woody_context:new/0 cannot build a
+            %% req_id: otherwise the tests are green only when run after someone else's,
+            %% which have already started woody
+            {ok, _} = application:ensure_all_started(woody),
+            ok = meck:new(woody_client, [passthrough]),
+            ok = meck:new(hg_woody_wrapper, [passthrough]),
+            ok = meck:expect(hg_woody_wrapper, get_service_options, fun(_) ->
+                #{url => <<"http://localhost/unused">>}
+            end)
+        end,
+        fun(_) ->
+            ok = meck:unload([woody_client, hg_woody_wrapper])
+        end,
+        [
+            ?_test(customer_calls_fail()),
+            ?_test(customer_calls_answers()),
+            ?_test(bind_terminal_affinity_payment_ref())
+        ]}.
+
+bind_affinity(Ttl) ->
+    bind_terminal_affinity(
+        <<"customer">>,
+        #domain_PaymentRoute{
+            provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}
+        },
+        Ttl,
+        {<<"invoice">>, <<"payment">>}
+    ).
+
+%% The payment reference is the idempotency key on the cubasty side: if it does not
+%% arrive in the params, a retried machine step becomes indistinguishable from a new
+%% successful payment
+-dialyzer({nowarn_function, bind_terminal_affinity_payment_ref/0}).
+bind_terminal_affinity_payment_ref() ->
+    Self = self(),
+    ok = meck:expect(woody_client, call, fun({_Service, 'BindTerminalAffinity', {Params}}, _, _) ->
+        Self ! {params, Params},
+        {ok, #customer_TerminalAffinity{
+            provider_ref = #domain_ProviderRef{id = 1},
+            terminal_ref = #domain_TerminalRef{id = 1},
+            bind_seq = 1,
+            bound_at = <<"2026-01-01T00:00:00Z">>,
+            last_used_at = <<"2026-01-01T00:00:00Z">>
+        }}
+    end),
+    ?assertEqual(ok, bind_affinity({since_bound, 3600})),
+    receive
+        {params, Params} ->
+            ?assertEqual(
+                #customer_TerminalAffinityParams{
+                    customer_id = <<"customer">>,
+                    provider_ref = #domain_ProviderRef{id = 1},
+                    terminal_ref = #domain_TerminalRef{id = 1},
+                    ttl = {since_bound, 3600},
+                    payment = #customer_PaymentRef{invoice_id = <<"invoice">>, payment_id = <<"payment">>}
+                },
+                Params
+            )
+    after 0 -> error(bind_not_called)
+    end,
+    %% A required field: the client does not send an incomplete reference at all
+    ?assertError(
+        function_clause,
+        bind_terminal_affinity(
+            <<"customer">>,
+            #domain_PaymentRoute{provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}},
+            undefined,
+            {<<"invoice">>, undefined}
+        )
+    ).
+
+%% Nothing is swallowed: a failing cubasty and an answer nobody expects both fail the caller
+-dialyzer({nowarn_function, customer_calls_fail/0}).
+customer_calls_fail() ->
+    Calls = [
+        fun() -> find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>) end,
+        fun() -> get_terminal_affinities(<<"customer">>) end,
+        fun() -> bind_affinity(undefined) end,
+        fun() -> add_payment(<<"customer">>, <<"invoice">>, <<"payment">>) end,
+        fun() -> link_bank_card(<<"customer">>, <<"card">>) end
+    ],
+    lists:foreach(
+        fun(Call) ->
+            lists:foreach(
+                fun(Error) ->
+                    ok = meck:expect(woody_client, call, fun(_, _, _) -> error(Error) end),
+                    ?assertError(Error, Call())
+                end,
+                [
+                    {woody_error, {internal, resource_unavailable, <<"timeout">>}},
+                    {woody_error, {external, result_unexpected, <<"crash">>}}
+                ]
+            ),
+            ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_InvalidRecurrentParent{}} end),
+            ?assertException(error, _, Call())
+        end,
+        Calls
+    ).
+
+customer_calls_answers() ->
+    ok = meck:expect(woody_client, call, fun(_, _, _) ->
+        {exception, #base_InvalidRequest{errors = [<<"invalid email">>]}}
+    end),
+    ?assertEqual(undefined, find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)),
+    ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
+    ?assertEqual([], get_terminal_affinities(<<"customer">>)).
+
+-endif.

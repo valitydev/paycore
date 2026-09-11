@@ -33,7 +33,7 @@ services:
     command: /sbin/init
 
   dmt:
-    image: ghcr.io/valitydev/dominant-v2:sha-ab393d5
+    image: ghcr.io/valitydev/dominant-v2:sha-27c8426-epic-XYZ-447-bump_damsel
     command: /opt/dmt/bin/dmt foreground
     environment:
       DMT_KAFKA_ENABLED: "0"
@@ -115,7 +115,7 @@ services:
       retries: 20
 
   party-management:
-    image: ghcr.io/valitydev/party-management:sha-e3fe0dc
+    image: ghcr.io/valitydev/party-management:sha-783da31-epic-XYZ-447-bump_damsel
     command: /opt/party-management/bin/party-management foreground
     volumes:
       - ./test/party-management/sys.config:/opt/party-management/releases/0.1/sys.config
@@ -133,7 +133,7 @@ services:
       retries: 10
 
   cubasty:
-    image: ghcr.io/valitydev/cubasty:sha-f94b6a0-epic-fix_matched
+    image: ghcr.io/valitydev/cubasty:sha-8b254d7-epic-XYZ-447-affinity
     volumes:
       - ./test/cubasty/sys.config:/opt/cs/releases/0.1/sys.config
     hostname: cubasty

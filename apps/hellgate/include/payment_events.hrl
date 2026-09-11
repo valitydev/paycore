@@ -26,6 +26,12 @@
     }}
 ).
 
+-define(terminal_affinities_loaded(Affinities),
+    {invoice_payment_terminal_affinities_loaded, #payproc_InvoicePaymentTerminalAffinitiesLoaded{
+        affinities = Affinities
+    }}
+).
+
 -define(risk_score_changed(RiskScore),
     {invoice_payment_risk_score_changed, #payproc_InvoicePaymentRiskScoreChanged{risk_score = RiskScore}}
 ).
