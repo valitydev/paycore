@@ -1419,8 +1419,9 @@ create_cash_flow_adjustment(Timestamp, Params, DomainRevision, St, Opts) ->
     OldCashFlow = get_final_cashflow(St),
     VS = collect_validation_varset(St, Opts),
     Allocation = get_allocation(St),
+    Payment0 = Payment#domain_InvoicePayment{cost = get_payment_cost(Payment)},
     {Payment1, AdditionalEvents} = maybe_inject_new_cost_amount(
-        Payment, Params#payproc_InvoicePaymentAdjustmentParams.scenario
+        Payment0, Params#payproc_InvoicePaymentAdjustmentParams.scenario
     ),
     ExchangeContext = get_exchange_context(St),
     Context = genlib_map:compact(#{

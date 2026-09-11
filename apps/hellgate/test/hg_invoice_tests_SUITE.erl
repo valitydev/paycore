@@ -79,6 +79,8 @@
 -export([payment_adjustment_captured_from_failed/1]).
 -export([payment_adjustment_failed_from_captured/1]).
 -export([payment_adjustment_change_amount_and_captured/1]).
+-export([payment_adjustment_recalculates_changed_cost/1]).
+-export([payment_adjustment_new_amount_overrides_changed_cost/1]).
 -export([payment_adjustment_change_amount_and_refund_all/1]).
 -export([payment_adjustment_transaction_info_success/1]).
 -export([status_adjustment_of_partial_refunded_payment/1]).
@@ -351,6 +353,8 @@ groups() ->
             payment_adjustment_captured_from_failed,
             payment_adjustment_failed_from_captured,
             payment_adjustment_change_amount_and_captured,
+            payment_adjustment_recalculates_changed_cost,
+            payment_adjustment_new_amount_overrides_changed_cost,
             payment_adjustment_change_amount_and_refund_all,
             payment_adjustment_transaction_info_success,
             status_adjustment_of_partial_refunded_payment,
@@ -701,6 +705,8 @@ init_per_testcase(Name, C) when
     Name == payment_adjustment_captured_from_failed;
     Name == payment_adjustment_failed_from_captured;
     Name == payment_adjustment_change_amount_and_captured;
+    Name == payment_adjustment_recalculates_changed_cost;
+    Name == payment_adjustment_new_amount_overrides_changed_cost;
     Name == payment_adjustment_change_amount_and_refund_all;
     Name == payment_adjustment_transaction_info_success;
     Name == registered_payment_adjustment_success
@@ -3109,6 +3115,140 @@ payment_adjustment_change_amount_and_captured(C) ->
     ?assertEqual(MrcDiff2, maps:get(own_amount, MrcAccount3) - maps:get(own_amount, MrcAccount2)),
     ?assertEqual(PrvDiff2, maps:get(own_amount, PrvAccount3) - maps:get(own_amount, PrvAccount2)),
     ?assertEqual(SysDiff2, maps:get(own_amount, SysAccount3) - maps:get(own_amount, SysAccount2)).
+
+-spec payment_adjustment_recalculates_changed_cost(config()) -> test_return().
+payment_adjustment_recalculates_changed_cost(C) ->
+    Client = cfg(client, C),
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(initial)),
+    OriginalAmount = 100000,
+    ChangedAmount = 200000,
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), OriginalAmount, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    PaymentID = await_payment_started(InvoiceID, PaymentID, Client),
+    {_CF, _Route} = await_payment_cash_flow(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
+    PaymentID = await_payment_process_finish(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+
+    AdjustmentParams1 = make_adjustment_params(<<"change payment amount">>, undefined, ChangedAmount),
+    ?adjustment(AdjustmentID1, ?adjustment_pending()) =
+        Adjustment1 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams1, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_created(Adjustment1))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(OriginalAmount, <<"RUB">>), ?cash(ChangedAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment1) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(ChangedAmount, <<"RUB">>)
+        },
+        Payment1
+    ),
+
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(actual)),
+    ExpectedRevision = hg_domain:head(),
+    #payproc_InvoicePayment{cash_flow = CashFlowBefore} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    AdjustmentParams = make_adjustment_params(<<"recalculate changed cost">>),
+    AdjustmentID = execute_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams, Client),
+    #domain_InvoicePaymentAdjustment{
+        old_cash_flow_inverse = OldCashFlowInverse,
+        new_cash_flow = NewCashFlow,
+        domain_revision = AdjustmentRevision
+    } = hg_client_invoicing:get_payment_adjustment(InvoiceID, PaymentID, AdjustmentID, Client),
+    #payproc_InvoicePayment{cash_flow = CashFlowAfter} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertEqual(ExpectedRevision, AdjustmentRevision),
+    ?assertEqual(hg_cashflow:revert(CashFlowBefore), OldCashFlowInverse),
+    ?assertEqual(NewCashFlow, CashFlowAfter),
+    ?assertEqual(
+        [
+            % ?merchant_to_system_share_1 ?share(45, 1000, operation_amount)
+            {{merchant, settlement}, {system, settlement}, 9000},
+            % ?share(1, 1, operation_amount)
+            {{provider, settlement}, {merchant, settlement}, ChangedAmount},
+            % ?system_to_provider_share_actual ?share(16, 1000, operation_amount)
+            {{system, settlement}, {provider, settlement}, 3200},
+            % ?system_to_external_fixed ?fixed(20, <<"RUB">>)
+            {{system, settlement}, {external, outcome}, 20}
+        ],
+        get_payment_cashflow_mapped(InvoiceID, PaymentID, Client)
+    ).
+
+-spec payment_adjustment_new_amount_overrides_changed_cost(config()) -> test_return().
+payment_adjustment_new_amount_overrides_changed_cost(C) ->
+    Client = cfg(client, C),
+    OriginalAmount = 100000,
+    FirstAmount = 200000,
+    SecondAmount = 150000,
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), OriginalAmount, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    PaymentID = await_payment_started(InvoiceID, PaymentID, Client),
+    {_CF, _Route} = await_payment_cash_flow(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
+    PaymentID = await_payment_process_finish(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(actual)),
+    AdjustmentParams1 = make_adjustment_params(<<"change amount first">>, undefined, FirstAmount),
+    ?adjustment(AdjustmentID1, ?adjustment_pending()) =
+        Adjustment1 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams1, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_created(Adjustment1))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(OriginalAmount, <<"RUB">>), ?cash(FirstAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment1) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(FirstAmount, <<"RUB">>)
+        },
+        Payment1
+    ),
+
+    AdjustmentParams2 = make_adjustment_params(<<"override changed cost">>, undefined, SecondAmount),
+    ?adjustment(AdjustmentID2, ?adjustment_pending()) =
+        Adjustment2 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams2, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_created(Adjustment2))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(FirstAmount, <<"RUB">>), ?cash(SecondAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment2) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(SecondAmount, <<"RUB">>)
+        },
+        Payment2
+    ),
+    ?assertEqual(
+        [
+            % ?merchant_to_system_share_1 ?share(45, 1000, operation_amount)
+            {{merchant, settlement}, {system, settlement}, 6750},
+            % ?share(1, 1, operation_amount)
+            {{provider, settlement}, {merchant, settlement}, SecondAmount},
+            % ?system_to_provider_share_actual ?share(16, 1000, operation_amount)
+            {{system, settlement}, {provider, settlement}, 2400},
+            % ?system_to_external_fixed ?fixed(20, <<"RUB">>)
+            {{system, settlement}, {external, outcome}, 20}
+        ],
+        get_payment_cashflow_mapped(InvoiceID, PaymentID, Client)
+    ).
 
 -spec payment_adjustment_change_amount_and_refund_all(config()) -> test_return().
 payment_adjustment_change_amount_and_refund_all(C) ->
