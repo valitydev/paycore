@@ -153,12 +153,23 @@ route_explanation(candidate, RouteWithContext, ChosenRoute) ->
         rejection_description = candidate_rejection_explanation(RouteWithContext, ChosenRoute)
     }.
 
-candidate_rejection_explanation(
+normalize_scores(#domain_PaymentRouteScores{terminal_affinity = undefined} = Scores) ->
+    Scores#domain_PaymentRouteScores{terminal_affinity = 0};
+normalize_scores(Scores) ->
+    Scores.
+
+candidate_rejection_explanation(#{scores := Scores} = Route, #{scores := ChosenScores} = Chosen) ->
+    candidate_rejection_explanation_(
+        Route#{scores => normalize_scores(Scores)},
+        Chosen#{scores => normalize_scores(ChosenScores)}
+    ).
+
+candidate_rejection_explanation_(
     #{scores := undefined, limits := undefined},
     _ChosenRoute
 ) ->
     <<"Not enough information to make judgement. Payment was done before relevant changes were done.">>;
-candidate_rejection_explanation(
+candidate_rejection_explanation_(
     #{scores := undefined, limits := RouteLimits},
     _ChosenRoute
 ) ->
@@ -166,24 +177,24 @@ candidate_rejection_explanation(
         <<"We only know about limits for this route, but no limit",
             " was reached, if you see this message contact developer.">>,
     check_route_limits(RouteLimits, IfEmpty);
-candidate_rejection_explanation(
+candidate_rejection_explanation_(
     #{scores := #domain_PaymentRouteScores{blacklist_condition = 1}} = R,
     _
 ) ->
     check_route_blacklisted(R);
-candidate_rejection_explanation(
+candidate_rejection_explanation_(
     #{scores := RouteScores, limits := RouteLimits},
     #{scores := ChosenScores}
 ) when RouteScores =:= ChosenScores ->
     IfEmpty = <<"This route has the same score as the chosen route, but wasn't chosen due to order in ruleset.">>,
     check_route_limits(RouteLimits, IfEmpty);
-candidate_rejection_explanation(
+candidate_rejection_explanation_(
     #{scores := RouteScores, limits := RouteLimits},
     #{scores := ChosenScores}
 ) when RouteScores > ChosenScores ->
     IfEmpty = <<"No explanation for rejection can be found. Check in with developer.">>,
     check_route_limits(RouteLimits, IfEmpty);
-candidate_rejection_explanation(
+candidate_rejection_explanation_(
     #{scores := RouteScores, limits := RouteLimits} = R,
     #{scores := ChosenScores}
 ) when RouteScores < ChosenScores ->
@@ -222,7 +233,10 @@ check_route_limits([TurnoverLimitValue | Rest]) ->
             check_route_limits(Rest)
     end.
 
-check_route_scores(
+check_route_scores(Scores, ChosenScores) ->
+    check_route_scores_(normalize_scores(Scores), normalize_scores(ChosenScores)).
+
+check_route_scores_(
     #domain_PaymentRouteScores{
         availability_condition = 0,
         availability = Av
@@ -235,7 +249,7 @@ check_route_scores(
         "Availability reached critical level with availability of ~p, while threshold is ~p.",
         [1.0 - Av, CriticalFailRate]
     );
-check_route_scores(
+check_route_scores_(
     #domain_PaymentRouteScores{
         conversion_condition = 0,
         conversion = Cv
@@ -248,7 +262,12 @@ check_route_scores(
         "Conversion reached critical level with conversion of ~p, while threshold is ~p.",
         [1.0 - Cv, CriticalFailRate]
     );
-check_route_scores(
+check_route_scores_(
+    #domain_PaymentRouteScores{terminal_affinity = A0},
+    #domain_PaymentRouteScores{terminal_affinity = A1}
+) when is_integer(A0), is_integer(A1), A0 < A1 ->
+    <<"This route has a lower terminal affinity rank than the chosen route.">>;
+check_route_scores_(
     #domain_PaymentRouteScores{
         terminal_priority_rating = Rating0
     },
@@ -257,7 +276,7 @@ check_route_scores(
     }
 ) when Rating0 < Rating1 ->
     format("Priority of this route was less than in chosen route, where ~p < ~p.", [Rating0, Rating1]);
-check_route_scores(
+check_route_scores_(
     #domain_PaymentRouteScores{
         route_pin = Pin0
     },
@@ -266,7 +285,7 @@ check_route_scores(
     }
 ) when Pin0 < Pin1 ->
     format("Pin wasn't the same as in chosen route ~p < ~p.", [Pin0, Pin1]);
-check_route_scores(
+check_route_scores_(
     #domain_PaymentRouteScores{
         random_condition = Random0
     },
@@ -275,7 +294,7 @@ check_route_scores(
     }
 ) when Random0 < Random1 ->
     format("Random condition wasn't the same as in chosen route ~p < ~p.", [Random0, Random1]);
-check_route_scores(
+check_route_scores_(
     #domain_PaymentRouteScores{
         availability = Av0
     },
@@ -284,7 +303,7 @@ check_route_scores(
     }
 ) when Av0 < Av1 ->
     format("Avaliability is less than in chosen route ~p < ~p.", [Av0, Av1]);
-check_route_scores(
+check_route_scores_(
     #domain_PaymentRouteScores{
         conversion = Cv0
     },
@@ -327,3 +346,40 @@ get_shop(#{invoice := Invoice}, Revision) ->
 
 format(Format, Data) ->
     erlang:iolist_to_binary(io_lib:format(Format, Data)).
+
+-ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+-spec legacy_affinity_scores_test() -> _.
+legacy_affinity_scores_test() ->
+    Old = #domain_PaymentRouteScores{
+        availability_condition = 1,
+        conversion_condition = 1,
+        terminal_priority_rating = 0,
+        route_pin = 0,
+        random_condition = 0,
+        availability = 1.0,
+        conversion = 1.0,
+        blacklist_condition = 0
+    },
+    Zero = Old#domain_PaymentRouteScores{terminal_affinity = 0},
+    Bound = Zero#domain_PaymentRouteScores{terminal_affinity = 1},
+    Priority = Zero#domain_PaymentRouteScores{terminal_priority_rating = 1},
+    Ctx = fun(Scores) -> #{scores => Scores, limits => []} end,
+    lists:foreach(
+        fun({A, B}) ->
+            ?assertEqual(
+                candidate_rejection_explanation(Ctx(normalize_scores(A)), Ctx(normalize_scores(B))),
+                candidate_rejection_explanation(Ctx(A), Ctx(B))
+            )
+        end,
+        [{Old, Zero}, {Zero, Old}, {Old, Bound}, {Bound, Old}, {Old, Priority}, {Priority, Old}]
+    ),
+    ?assertEqual(check_route_scores(Zero, Bound), check_route_scores(Old, Bound)),
+    ?assertEqual(check_route_scores(Zero, Priority), check_route_scores(Old, Priority)),
+    ?assertNotEqual(check_route_scores(Old, Bound), check_route_scores(Old, Priority)).
+
+-endif.
