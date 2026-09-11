@@ -158,7 +158,7 @@ limit_overflow_and_return(C) ->
     A = First#payproc_InvoicePayment.route,
     ok = meck:new(hg_limiter, [passthrough]),
     ok = meck:expect(hg_limiter, check_limits, [
-        {['_', '_', '_', '_', A, '_'], meck:val({error, {limit_overflow, [<<"affinity-limit">>], []}})},
+        {['_', '_', '_', '_', A, '_'], meck:val({error, {limit_overflow, [<<"affinity-limit">>]}, []})},
         {['_', '_', '_', '_', '_', '_'], meck:passthrough()}
     ]),
     {_, _, Second, _} = pay(C),
