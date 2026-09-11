@@ -479,10 +479,7 @@ resolve_customer_id(undefined, PartyRef, ContactInfo) ->
         undefined ->
             undefined;
         Email ->
-            case hg_customer_client:find_or_create_customer_by_email(PartyRef, Email) of
-                {ok, CustomerID} -> CustomerID;
-                {error, unavailable} -> undefined
-            end
+            hg_customer_client:find_or_create_customer_by_email(PartyRef, Email)
     end;
 resolve_customer_id(CustomerID, _PartyRef, _ContactInfo) ->
     CustomerID.
@@ -2112,11 +2109,7 @@ load_terminal_affinities(GetResult, #st{terminal_affinities = undefined, payment
     case hg_route_affinity:enabled(Routes) andalso CustomerID =/= undefined of
         true ->
             hg_customer_metrics:affinity(enabled),
-            Affinities =
-                case hg_customer_client:get_terminal_affinities(CustomerID) of
-                    {ok, Loaded} -> Loaded;
-                    {error, unavailable} -> []
-                end,
+            Affinities = hg_customer_client:get_terminal_affinities(CustomerID),
             {Affinities, [?terminal_affinities_loaded(Affinities)]};
         false ->
             {[], []}
@@ -2630,9 +2623,7 @@ process_result({payment, finalizing_accounter}, Action, St) ->
         ?captured() ->
             %% The binding goes first: it also remembers the payment for the Customer,
             %% and only its outcome tells whether a separate AddPayment is needed
-            Bound = save_customer_data(
-                fun() -> maybe_bind_terminal_affinity(St) end, 'BindTerminalAffinity', not_bound
-            ),
+            Bound = maybe_bind_terminal_affinity(St),
             _ = maybe_save_recurrent_token_to_customer(Bound, St),
             ok;
         ?cancelled() ->
@@ -2697,18 +2688,6 @@ check_recurrent_token(#st{
 check_recurrent_token(_) ->
     ok.
 
-save_customer_data(Fun, Op, Default) ->
-    try
-        Fun()
-    catch
-        Class:Reason:Stacktrace ->
-            _ = logger:error("Customer operation ~p failed: ~p:~p", [Op, Class, Reason], #{
-                operation => Op, class => Class, reason => Reason, stacktrace => Stacktrace
-            }),
-            hg_customer_metrics:unavailable(Op),
-            Default
-    end.
-
 -spec maybe_bind_terminal_affinity(st()) -> bound | not_bound.
 maybe_bind_terminal_affinity(
     #st{
@@ -2721,13 +2700,9 @@ maybe_bind_terminal_affinity(
     case hg_terminal_affinity:can_bind(Ttl, erlang:system_time(millisecond)) of
         true ->
             InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
-            case hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}) of
-                ok ->
-                    _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
-                    bound;
-                {error, unavailable} ->
-                    not_bound
-            end;
+            ok = hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}),
+            _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
+            bound;
         false ->
             not_bound
     end;
@@ -2746,12 +2721,10 @@ maybe_save_recurrent_token_to_customer(
     } = St
 ) when CustomerID =/= undefined ->
     InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
-    %% Saving the recurrent token is not silenced: a new token lost quietly would leave
-    %% the next recurrent payment on the old, possibly invalid one. A binding that went
-    %% through remembers the payment for the Customer with the same call, so AddPayment
+    %% A binding remembers the payment for the Customer with the same call, so AddPayment
     %% is needed only when there was no binding: without it the payment is lost to the
     %% personal account
-    _ =
+    ok =
         case Bound of
             bound -> ok;
             not_bound -> hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID)
@@ -4639,16 +4612,16 @@ terminal_affinities_snapshot_test_() ->
         fun(_) -> meck:unload([hg_customer_client, hg_party]) end, [
             ?_test(terminal_affinities_snapshot()),
             ?_test(customer_resolution()),
-            ?_test(customer_save_failure()),
             ?_test(route_affinity_replay()),
             {timeout, 30, ?_test(customer_finalization())}
         ]}.
 
+-dialyzer({nowarn_function, terminal_affinities_snapshot/0}).
 terminal_affinities_snapshot() ->
     Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{}))#{affinity => #domain_RoutingAffinity{}},
     GetResult = #{routes => [Route]},
     St = (customer_finalization_state())#st{activity = {payment, processing_failure}},
-    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> {error, unavailable} end),
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [] end),
     {[], [Event]} = load_terminal_affinities(GetResult, St),
     St1 = merge_change(Event, St, #{validation => strict}),
     ?assertEqual({[], []}, load_terminal_affinities(GetResult, St1)),
@@ -4661,7 +4634,7 @@ terminal_affinities_snapshot() ->
         bound_at = <<"2026-01-01T00:00:00Z">>,
         last_used_at = <<"2026-01-01T00:00:00Z">>
     },
-    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> {ok, [Affinity]} end),
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [Affinity] end),
     {[Affinity], [Loaded]} = load_terminal_affinities(GetResult, St),
     Replay = merge_change(Loaded, St, #{validation => strict}),
     ?assertEqual({[Affinity], []}, load_terminal_affinities(GetResult, Replay)),
@@ -4685,16 +4658,22 @@ terminal_affinities_snapshot() ->
     ),
     ?assertEqual(Before, meck:num_calls(hg_customer_client, get_terminal_affinities, '_')),
     %% And when one does take part it is written, empty history included
-    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> {error, unavailable} end),
-    ?assertEqual({[], [?terminal_affinities_loaded([])]}, load_terminal_affinities(GetResult, St)).
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [] end),
+    ?assertEqual({[], [?terminal_affinities_loaded([])]}, load_terminal_affinities(GetResult, St)),
+    %% A failing cubasty fails the step and writes nothing: the retried step loads again
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) ->
+        error({woody_error, {internal, resource_unavailable, <<"timeout">>}})
+    end),
+    ?assertError({woody_error, _}, load_terminal_affinities(GetResult, St)).
 
+-dialyzer({nowarn_function, customer_resolution/0}).
 customer_resolution() ->
     PartyRef = #domain_PartyConfigRef{id = <<"party">>},
     Contact = #domain_ContactInfo{email = <<" a@example.test ">>},
     ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(Party, Email) ->
         ?assertEqual(PartyRef, Party),
         ?assertEqual(<<"a@example.test">>, Email),
-        {ok, <<"resolved">>}
+        <<"resolved">>
     end),
     ?assertEqual(<<"resolved">>, resolve_customer_id(undefined, PartyRef, Contact)),
     ?assertEqual(<<"explicit">>, resolve_customer_id(<<"explicit">>, PartyRef, Contact)),
@@ -4706,22 +4685,14 @@ customer_resolution() ->
     %% With no email there is nothing to resolve, and cubasty is not called at all
     ?assertEqual(undefined, resolve_customer_id(undefined, PartyRef, #domain_ContactInfo{email = <<"  ">>})),
     ?assertEqual(1, meck:num_calls(hg_customer_client, find_or_create_customer_by_email, '_')),
-    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(_, _) -> {error, unavailable} end),
-    ?assertEqual(undefined, resolve_customer_id(undefined, PartyRef, Contact)).
-
--dialyzer({nowarn_function, customer_save_failure/0}).
-customer_save_failure() ->
-    lists:foreach(
-        fun(Fun) ->
-            ?assertEqual(not_bound, save_customer_data(Fun, 'BindTerminalAffinity', not_bound))
-        end,
-        [
-            fun() -> error({woody_error, {internal, resource_unavailable, <<"timeout">>}}) end,
-            fun() -> error(unexpected) end,
-            fun() -> throw(unexpected) end,
-            fun() -> exit(unexpected) end
-        ]
-    ).
+    %% An address cubasty does not accept identifies no payer
+    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(_, _) -> undefined end),
+    ?assertEqual(undefined, resolve_customer_id(undefined, PartyRef, Contact)),
+    %% A failing cubasty fails the payment creation rather than creating it without a Customer
+    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(_, _) ->
+        error({woody_error, {internal, resource_unavailable, <<"timeout">>}})
+    end),
+    ?assertError({woody_error, _}, resolve_customer_id(undefined, PartyRef, Contact)).
 
 route_affinity_replay() ->
     St0 = customer_finalization_state(),
@@ -4796,6 +4767,7 @@ replay_route_decision(Decision, St) ->
     ?assertEqual(Replayed#st.route_affinity, Restored#st.route_affinity),
     Replayed#st{activity = St#st.activity, cash_flow = St#st.cash_flow}.
 
+-dialyzer({nowarn_function, customer_finalization/0}).
 customer_finalization() ->
     Modules = [hg_limiter, hg_accounting, hg_invoice_utils, hg_payment_institution, hg_route_collector],
     ok = meck:new(Modules, [passthrough]),
@@ -4833,14 +4805,10 @@ customer_finalization() ->
         ok = meck:expect(hg_accounting, rollback, 2, ok),
         ok = meck:expect(hg_route_collector, get_routes, 4, #{routes => []}),
         lists:foreach(
-            fun(Op) -> assert_customer_finalization(Op, St) end,
-            [add_payment, link_bank_card, bind_terminal_affinity]
-        ),
-        lists:foreach(
             fun(Ttl) ->
-                assert_customer_finalization(none, replay_route_affinity(#domain_RoutingAffinity{ttl = Ttl}, St0))
+                assert_customer_finalization(replay_route_affinity(#domain_RoutingAffinity{ttl = Ttl}, St0))
             end,
-            [{since_bound, 3600}, {since_last_use, 1800}, {deadline, <<"2100-01-01T00:00:00Z">>}]
+            [undefined, {since_bound, 3600}, {since_last_use, 1800}, {deadline, <<"2100-01-01T00:00:00Z">>}]
         ),
         Before = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
         BeforeAddPayment = meck:num_calls(hg_customer_client, add_payment, '_'),
@@ -4864,28 +4832,37 @@ customer_finalization() ->
             process_result({payment, finalizing_accounter}, idle, St#st{target = Cancelled})
         ),
         ?assertEqual(History, meck:history(hg_customer_client)),
-        ?assertEqual(0, meck:num_calls(hg_route_collector, get_routes, '_'))
+        ?assertEqual(0, meck:num_calls(hg_route_collector, get_routes, '_')),
+        %% Nothing is swallowed: a failing customer operation fails the step after the commits,
+        %% and the retried step commits again idempotently and repeats the calls
+        Timeout = {woody_error, {internal, resource_unavailable, <<"timeout">>}},
+        lists:foreach(
+            fun({Op, Fail, Failing}) ->
+                ok = customer_operations_succeed(),
+                ok = meck:expect(hg_customer_client, Op, Fail),
+                ?assertError({woody_error, _}, process_result({payment, finalizing_accounter}, idle, Failing))
+            end,
+            [
+                {bind_terminal_affinity, fun(_, _, _, _) -> erlang:error(Timeout) end, St},
+                {add_payment, fun(_, _, _) -> erlang:error(Timeout) end, St#st{route_affinity = false}},
+                {link_bank_card, fun(_, _) -> erlang:error(Timeout) end, St}
+            ]
+        )
     after
         ok = meck:unload(Modules)
     end.
 
-assert_customer_finalization(FailingOp, St) ->
+assert_customer_finalization(St) ->
     Ref = make_ref(),
     Caller = self(),
     ok = meck:expect(hg_accounting, commit, fun(_, _) ->
         Caller ! {Ref, committed},
         ok
     end),
-    %% The client returns cubasty's unavailability rather than throwing it — the mock does the same
-    ok = meck:expect(hg_customer_client, add_payment, fun(_, _, _) ->
-        unavailable_when(add_payment, FailingOp)
-    end),
-    ok = meck:expect(hg_customer_client, link_bank_card, fun(_, _) ->
-        unavailable_when(link_bank_card, FailingOp)
-    end),
+    ok = customer_operations_succeed(),
     ok = meck:expect(hg_customer_client, bind_terminal_affinity, fun(CustomerID, Route, Ttl, Payment) ->
         Caller ! {Ref, bind, CustomerID, Route, Ttl, Payment},
-        fail_customer_operation(bind_terminal_affinity, FailingOp)
+        ok
     end),
     BeforeAddPayment = meck:num_calls(hg_customer_client, add_payment, '_'),
     ?assertEqual(
@@ -4903,24 +4880,13 @@ assert_customer_finalization(FailingOp, St) ->
             ok
     after 0 -> error(affinity_not_bound)
     end,
-    %% A binding that went through has already remembered the payment for the Customer:
-    %% a separate AddPayment is left only to the branch where binding failed
-    ExpectedAddPayments =
-        case FailingOp of
-            bind_terminal_affinity -> BeforeAddPayment + 1;
-            _ -> BeforeAddPayment
-        end,
-    ?assertEqual(ExpectedAddPayments, meck:num_calls(hg_customer_client, add_payment, '_')).
+    %% A binding that went through has already remembered the payment for the Customer
+    ?assertEqual(BeforeAddPayment, meck:num_calls(hg_customer_client, add_payment, '_')).
 
-%% The only path that can genuinely throw: catching is mandatory around the binding,
-%% because by that step the money is already committed
-fail_customer_operation(Op, Op) ->
-    error({woody_error, {internal, resource_unavailable, <<"timeout">>}});
-fail_customer_operation(_, _) ->
-    ok.
-
-unavailable_when(Op, Op) -> {error, unavailable};
-unavailable_when(_, _) -> ok.
+customer_operations_succeed() ->
+    ok = meck:expect(hg_customer_client, add_payment, 3, ok),
+    ok = meck:expect(hg_customer_client, link_bank_card, 2, ok),
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, ok).
 
 customer_finalization_state() ->
     Cash = ?cash(1000, <<"RUB">>),

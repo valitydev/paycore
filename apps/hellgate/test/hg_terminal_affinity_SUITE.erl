@@ -11,9 +11,9 @@
 -export([all/0, init_per_suite/1, end_per_suite/1, init_per_testcase/2, end_per_testcase/2]).
 -export([email_customer/1, first_and_second_payment/1, prohibition_and_return/1, cascade_and_return/1]).
 -export([lower_priority_cascade/1, limit_overflow_and_return/1, disabled_affinity/1, mixed_candidates/1]).
--export([unavailable_init/1, unavailable_routing/1, unavailable_capture/1, collector_affinity/1]).
+-export([cubasty_failure_init/1, cubasty_failure_routing/1, cubasty_failure_capture/1, collector_affinity/1]).
 -export([replay/1, hold_capture_order/1, cancelled_hold/1, expired_deadline/1]).
--export([payment_recorded_once/1]).
+-export([payment_recorded_once/1, cubasty_failure_add_payment/1]).
 
 -type config() :: hg_ct_helper:config().
 
@@ -28,9 +28,10 @@ all() ->
         limit_overflow_and_return,
         disabled_affinity,
         mixed_candidates,
-        unavailable_init,
-        unavailable_routing,
-        unavailable_capture,
+        cubasty_failure_init,
+        cubasty_failure_routing,
+        cubasty_failure_capture,
+        cubasty_failure_add_payment,
         collector_affinity,
         replay,
         hold_capture_order,
@@ -203,32 +204,47 @@ mixed_candidates(C) ->
     ?assertEqual(1, terminal_id(Second)),
     ?assertEqual([Second#payproc_InvoicePayment.route], history(Second)).
 
--spec unavailable_init(config()) -> _.
-unavailable_init(C) ->
-    unavailable(['FindOrCreateByEmail']),
-    {_, _, Payment, _} = pay(C),
-    ?assertEqual(undefined, customer_id(Payment)),
-    assert_unavailable('FindOrCreateByEmail').
-
--spec unavailable_routing(config()) -> _.
-unavailable_routing(C) ->
-    set_candidates([{1, 100, 10, true}, {2, 100, 0, true}]),
-    fail_provider(1, true),
-    unavailable(['GetTerminalAffinities']),
-    {_, _, _Payment, Events} = pay(C),
-    ?assertEqual([[]], [A || ?terminal_affinities_loaded(A) <- Events]),
-    ?assertEqual(
-        1,
-        meck:num_calls(woody_client, call, [{'_', 'GetTerminalAffinities', '_'}, '_', '_'])
+%% cubasty is part of the core: a failure while resolving the Customer fails StartPayment,
+%% and no payment is created without one
+-spec cubasty_failure_init(config()) -> _.
+cubasty_failure_init(C) ->
+    InvoiceID = create_invoice(C),
+    fail_customer_calls(['FindOrCreateByEmail'], always),
+    ?assertException(
+        error, _, hg_client_invoicing:start_payment(InvoiceID, payment_params(C, instant), cfg(client, C))
     ),
-    assert_unavailable('GetTerminalAffinities').
+    ?assert(customer_calls('FindOrCreateByEmail') > 0).
 
--spec unavailable_capture(config()) -> _.
-unavailable_capture(C) ->
-    unavailable(['AddPayment', 'AddBankCard', 'BindTerminalAffinity']),
-    _ = pay(C),
-    assert_unavailable('AddPayment'),
-    assert_unavailable('BindTerminalAffinity').
+%% A failure while loading the history fails the routing step instead of routing by weights
+%% on an empty one; the retried step loads the real history
+-spec cubasty_failure_routing(config()) -> _.
+cubasty_failure_routing(C) ->
+    {_, _, First, _} = pay(C),
+    Bound = history(First),
+    fail_customer_calls(['GetTerminalAffinities'], once),
+    {_, _, Second, Events} = pay(C),
+    ?assertEqual(2, customer_calls('GetTerminalAffinities')),
+    ?assertEqual([Bound], [routes(A) || ?terminal_affinities_loaded(A) <- Events]),
+    ?assertEqual(First#payproc_InvoicePayment.route, Second#payproc_InvoicePayment.route).
+
+%% A failure while binding fails the finalization step after the commits; the retried step
+%% commits again, and the binding and the payment record still happen exactly once
+-spec cubasty_failure_capture(config()) -> _.
+cubasty_failure_capture(C) ->
+    fail_customer_calls(['BindTerminalAffinity'], once),
+    {InvoiceID, PaymentID, Payment, _} = pay(C),
+    ?assertEqual(2, customer_calls('BindTerminalAffinity')),
+    ?assertEqual([Payment#payproc_InvoicePayment.route], history(Payment)),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+
+%% Without a binding the payment is recorded by AddPayment, and its failure is retried as well
+-spec cubasty_failure_add_payment(config()) -> _.
+cubasty_failure_add_payment(C) ->
+    set_candidates([{1, 50, 0, false}, {2, 50, 0, false}]),
+    fail_customer_calls(['AddPayment'], once),
+    {InvoiceID, PaymentID, Payment, _} = pay(C),
+    ?assertEqual(2, customer_calls('AddPayment')),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
 
 -spec collector_affinity(config()) -> _.
 collector_affinity(_C) ->
@@ -359,7 +375,9 @@ customer_id(#payproc_InvoicePayment{payment = Payment}) -> Payment#domain_Invoic
 terminal_id(#payproc_InvoicePayment{route = #domain_PaymentRoute{terminal = #domain_TerminalRef{id = ID}}}) -> ID.
 
 history(Payment) ->
-    {ok, Affinities} = hg_customer_client:get_terminal_affinities(customer_id(Payment)),
+    routes(hg_customer_client:get_terminal_affinities(customer_id(Payment))).
+
+routes(Affinities) ->
     [
         #domain_PaymentRoute{provider = P, terminal = T}
      || #customer_TerminalAffinity{provider_ref = P, terminal_ref = T} <- Affinities
@@ -373,7 +391,12 @@ pay(C) ->
     {InvoiceID, PaymentID, Payment, Events}.
 
 start_payment(C, FlowType) ->
-    Client = cfg(client, C),
+    InvoiceID = create_invoice(C),
+    ?payment_state(?payment(PaymentID)) =
+        hg_client_invoicing:start_payment(InvoiceID, payment_params(C, FlowType), cfg(client, C)),
+    {InvoiceID, PaymentID}.
+
+create_invoice(C) ->
     Params = hg_ct_helper:make_invoice_params(
         cfg(party_config_ref, C),
         cfg(shop_config_ref, C),
@@ -381,7 +404,10 @@ start_payment(C, FlowType) ->
         genlib_time:unow() + 60,
         hg_ct_helper:make_cash(42000, <<"RUB">>)
     ),
-    ?invoice_state(?invoice(InvoiceID)) = hg_client_invoicing:create(Params, Client),
+    ?invoice_state(?invoice(InvoiceID)) = hg_client_invoicing:create(Params, cfg(client, C)),
+    InvoiceID.
+
+payment_params(C, FlowType) ->
     {{bank_card, Card}, Session} = hg_dummy_provider:make_payment_tool(no_preauth, ?pmt_sys(<<"visa-ref">>)),
     Token = <<(Card#domain_BankCard.token)/binary, "/", (hg_utils:unique_id())/binary>>,
     Flow =
@@ -389,7 +415,7 @@ start_payment(C, FlowType) ->
             instant -> {instant, #payproc_InvoicePaymentParamsFlowInstant{}};
             hold -> {hold, #payproc_InvoicePaymentParamsFlowHold{on_hold_expiration = cancel}}
         end,
-    PaymentParams = #payproc_InvoicePaymentParams{
+    #payproc_InvoicePaymentParams{
         flow = Flow,
         make_recurrent = false,
         payer =
@@ -401,9 +427,7 @@ start_payment(C, FlowType) ->
                 },
                 contact_info = #domain_ContactInfo{email = cfg(email, C)}
             }}
-    },
-    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
-    {InvoiceID, PaymentID}.
+    }.
 
 await_status(InvoiceID, PaymentID, Status, C) ->
     await_status(InvoiceID, PaymentID, Status, C, []).
@@ -515,19 +539,24 @@ fail_provider(ID, Fail) ->
     ]),
     ok.
 
-unavailable(Functions) ->
+%% cubasty fails the listed calls: always, or once and then answers as usual, the way a
+%% transient failure does
+-dialyzer({nowarn_function, fail_customer_calls/2}).
+fail_customer_calls(Functions, Mode) ->
+    Timeout = {woody_error, {internal, resource_unavailable, <<"timeout">>}},
+    Failure = meck:exec(fun(_, _, _) -> erlang:error(Timeout) end),
+    Result =
+        case Mode of
+            always -> Failure;
+            once -> meck:seq([Failure, meck:passthrough()])
+        end,
     ok = meck:new(woody_client, [passthrough]),
-    ok = meck:expect(woody_client, call, fun({_, Function, _} = Request, Opts, Context) ->
-        case lists:member(Function, Functions) of
-            true ->
-                ?assert(woody_deadline:to_timeout(woody_context:get_deadline(Context)) =< 1000),
-                timer:sleep(10),
-                %% The source in the term is internal | external; woody never yields the atom system
-                error({woody_error, {internal, resource_unavailable, <<"timeout">>}});
-            false ->
-                meck:passthrough([Request, Opts, Context])
-        end
-    end).
+    ok = meck:expect(
+        woody_client,
+        call,
+        [{[{'_', Function, '_'}, '_', '_'], Result} || Function <- Functions] ++
+            [{['_', '_', '_'], meck:passthrough()}]
+    ).
 
-assert_unavailable(Op) ->
-    ?assert(prometheus_counter:value(customer_unavailable, [Op]) > 0).
+customer_calls(Function) ->
+    meck:num_calls(woody_client, call, [{'_', Function, '_'}, '_', '_']).

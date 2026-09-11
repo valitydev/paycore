@@ -1,5 +1,6 @@
 -module(hg_customer_client).
 
+-include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
@@ -108,18 +109,28 @@ get_recurrent_tokens(InvoiceID, PaymentID) ->
             []
     end.
 
+%% cubasty is part of the core: a failure is not swallowed but fails the caller, so that the
+%% machine step is retried or repaired. Only answers a retry would not change are handled
 -spec find_or_create_customer_by_email(dmsl_domain_thrift:'PartyConfigRef'(), binary()) ->
-    {ok, dmsl_customer_thrift:'CustomerID'()} | {error, unavailable}.
+    dmsl_customer_thrift:'CustomerID'() | undefined.
 find_or_create_customer_by_email(PartyRef, Email) ->
-    case customer_call('FindOrCreateByEmail', {PartyRef, Email}) of
-        {ok, #customer_Customer{id = ID}} -> {ok, ID};
-        {error, unavailable} = Error -> Error
+    case call(customer_management, 'FindOrCreateByEmail', {PartyRef, Email}) of
+        {ok, #customer_Customer{id = ID}} ->
+            ID;
+        %% An address cubasty does not accept identifies no payer
+        {exception, #base_InvalidRequest{}} ->
+            undefined
     end.
 
--spec get_terminal_affinities(dmsl_customer_thrift:'CustomerID'()) ->
-    {ok, [dmsl_customer_thrift:'TerminalAffinity'()]} | {error, unavailable}.
+-spec get_terminal_affinities(dmsl_customer_thrift:'CustomerID'()) -> [dmsl_customer_thrift:'TerminalAffinity'()].
 get_terminal_affinities(CustomerID) ->
-    customer_call('GetTerminalAffinities', {CustomerID}).
+    case call(customer_management, 'GetTerminalAffinities', {CustomerID}) of
+        {ok, Affinities} ->
+            Affinities;
+        %% Deleting a Customer releases its bindings, so a deleted one has none
+        {exception, #customer_CustomerNotFound{}} ->
+            []
+    end.
 
 %% The payment reference is the binding's idempotency key: a repeat call by the same
 %% payment returns the existing record without moving it to the tail of the history.
@@ -129,42 +140,39 @@ get_terminal_affinities(CustomerID) ->
     dmsl_domain_thrift:'PaymentRoute'(),
     dmsl_domain_thrift:'RoutingAffinityTtl'() | undefined,
     payment_ref()
-) -> ok | {error, unavailable}.
+) -> ok.
 bind_terminal_affinity(
     CustomerID,
     #domain_PaymentRoute{provider = Provider, terminal = Terminal},
     Ttl,
     {InvoiceID, PaymentID}
 ) when is_binary(InvoiceID), is_binary(PaymentID) ->
-    case
-        customer_call(
-            'BindTerminalAffinity',
-            {#customer_TerminalAffinityParams{
-                customer_id = CustomerID,
-                provider_ref = Provider,
-                terminal_ref = Terminal,
-                ttl = Ttl,
-                payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
-            }}
-        )
-    of
-        {ok, _} -> ok;
-        {error, unavailable} = Error -> Error
-    end.
+    {ok, _} = call(
+        customer_management,
+        'BindTerminalAffinity',
+        {#customer_TerminalAffinityParams{
+            customer_id = CustomerID,
+            provider_ref = Provider,
+            terminal_ref = Terminal,
+            ttl = Ttl,
+            payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
+        }}
+    ),
+    ok.
 
--spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id()) -> ok | {error, unavailable}.
+-spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id()) -> ok.
 add_payment(CustomerID, InvoiceID, PaymentID) ->
-    case customer_call('AddPayment', {CustomerID, InvoiceID, PaymentID}) of
-        {ok, ok} -> ok;
-        {error, unavailable} = Error -> Error
-    end.
+    {ok, ok} = call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID}),
+    ok.
 
--spec link_bank_card(dmsl_customer_thrift:'CustomerID'(), token()) -> ok | {error, unavailable}.
+-spec link_bank_card(dmsl_customer_thrift:'CustomerID'(), token()) -> ok.
 link_bank_card(CustomerID, BankCardToken) ->
-    case customer_call('AddBankCard', {CustomerID, #customer_BankCardParams{bank_card_token = BankCardToken}}) of
-        {ok, _} -> ok;
-        {error, unavailable} = Error -> Error
-    end.
+    {ok, _} = call(
+        customer_management,
+        'AddBankCard',
+        {CustomerID, #customer_BankCardParams{bank_card_token = BankCardToken}}
+    ),
+    ok.
 
 %% Internal
 
@@ -193,47 +201,7 @@ token_to_map_entry(
     },
     Acc#{Key => Token}.
 
-customer_call(Function, Args) ->
-    try
-        case call(customer_management, Function, Args, own_deadline) of
-            {exception, #customer_CustomerNotFound{}} when Function =:= 'GetTerminalAffinities' ->
-                {ok, []};
-            {exception, Exception} ->
-                %% A service failing and a service rejecting the request are different
-                %% things: counting the latter as unavailability pollutes the downtime metric
-                customer_rejected(Function, Exception);
-            {ok, _} = Result ->
-                Result
-        end
-    catch
-        %% woody_error:raise(system, {Source, Class, _}) surfaces as
-        %% {woody_error, {Source, Class, Details}}, where Source is internal | external
-        error:{woody_error, {Source, _Class, _Details}} when Source =:= internal; Source =:= external ->
-            customer_unavailable(Function)
-    end.
-
-customer_unavailable(Function) ->
-    hg_customer_metrics:unavailable(Function),
-    {error, unavailable}.
-
-customer_rejected(Function, Exception) ->
-    _ = logger:warning("Customer service rejected ~p: ~p", [Function, Exception]),
-    hg_customer_metrics:rejected(Function),
-    {error, unavailable}.
-
-%% A deadline of our own may only shorten the step's budget: woody_context:set_deadline/2
-%% assigns the value as given, so we take the minimum ourselves
-customer_deadline(WoodyContext) ->
-    Own = woody_deadline:from_timeout(genlib_app:env(hellgate, customer_timeout, 1000)),
-    case woody_context:get_deadline(WoodyContext) of
-        undefined -> Own;
-        Inherited -> erlang:min(Inherited, Own)
-    end.
-
 call(ServiceName, Function, Args) ->
-    call(ServiceName, Function, Args, undefined).
-
-call(ServiceName, Function, Args, Deadline) ->
     Service = hg_proto:get_service(ServiceName),
     Opts = hg_woody_wrapper:get_service_options(ServiceName),
     WoodyContext =
@@ -251,10 +219,7 @@ call(ServiceName, Function, Args, Deadline) ->
                 genlib_app:env(hellgate, scoper_event_handler_options, #{})
             }
         },
-        case Deadline of
-            undefined -> WoodyContext;
-            own_deadline -> woody_context:set_deadline(customer_deadline(WoodyContext), WoodyContext)
-        end
+        WoodyContext
     ).
 
 -ifdef(TEST).
@@ -271,8 +236,6 @@ customer_calls_test_() ->
             %% req_id: otherwise the tests are green only when run after someone else's,
             %% which have already started woody
             {ok, _} = application:ensure_all_started(woody),
-            {ok, _} = application:ensure_all_started(prometheus),
-            ok = hg_customer_metrics:setup(),
             ok = meck:new(woody_client, [passthrough]),
             ok = meck:new(hg_woody_wrapper, [passthrough]),
             ok = meck:expect(hg_woody_wrapper, get_service_options, fun(_) ->
@@ -283,8 +246,8 @@ customer_calls_test_() ->
             ok = meck:unload([woody_client, hg_woody_wrapper])
         end,
         [
-            ?_test(customer_calls_fallback()),
-            ?_test(customer_call_deadline()),
+            ?_test(customer_calls_fail()),
+            ?_test(customer_calls_answers()),
             ?_test(bind_terminal_affinity_payment_ref())
         ]}.
 
@@ -340,68 +303,40 @@ bind_terminal_affinity_payment_ref() ->
         )
     ).
 
--dialyzer({nowarn_function, customer_calls_fallback/0}).
-customer_calls_fallback() ->
+%% Nothing is swallowed: a failing cubasty and an answer nobody expects both fail the caller
+-dialyzer({nowarn_function, customer_calls_fail/0}).
+customer_calls_fail() ->
     Calls = [
-        {'FindOrCreateByEmail', fun() ->
-            find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)
-        end},
-        {'GetTerminalAffinities', fun() -> get_terminal_affinities(<<"customer">>) end},
-        {'BindTerminalAffinity', fun() -> bind_affinity(undefined) end},
-        {'AddPayment', fun() -> add_payment(<<"customer">>, <<"invoice">>, <<"payment">>) end}
+        fun() -> find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>) end,
+        fun() -> get_terminal_affinities(<<"customer">>) end,
+        fun() -> bind_affinity(undefined) end,
+        fun() -> add_payment(<<"customer">>, <<"invoice">>, <<"payment">>) end,
+        fun() -> link_bank_card(<<"customer">>, <<"card">>) end
     ],
     lists:foreach(
-        fun({Op, Call}) ->
+        fun(Call) ->
             lists:foreach(
-                fun(Class) ->
-                    Before = prometheus_counter:value(customer_unavailable, [Op]),
-                    ok = meck:expect(woody_client, call, fun(_, _, _) ->
-                        error({woody_error, {internal, Class, <<"unavailable">>}})
-                    end),
-                    ?assertEqual({error, unavailable}, Call()),
-                    ?assertEqual(genlib:define(Before, 0) + 1, prometheus_counter:value(customer_unavailable, [Op]))
+                fun(Error) ->
+                    ok = meck:expect(woody_client, call, fun(_, _, _) -> error(Error) end),
+                    ?assertError(Error, Call())
                 end,
-                [resource_unavailable, result_unknown, result_unexpected]
+                [
+                    {woody_error, {internal, resource_unavailable, <<"timeout">>}},
+                    {woody_error, {external, result_unexpected, <<"crash">>}}
+                ]
             ),
-            BeforeExternal = prometheus_counter:value(customer_unavailable, [Op]),
-            ok = meck:expect(woody_client, call, fun(_, _, _) ->
-                error({woody_error, {external, result_unexpected, <<"unavailable">>}})
-            end),
-            ?assertEqual({error, unavailable}, Call()),
-            ?assertEqual(genlib:define(BeforeExternal, 0) + 1, prometheus_counter:value(customer_unavailable, [Op])),
-            %% A request the service rejected is not downtime: the unavailability counter stays put
-            BeforeRejected = prometheus_counter:value(customer_unavailable, [Op]),
-            ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
-            Expected =
-                case Op of
-                    'GetTerminalAffinities' -> {ok, []};
-                    _ -> {error, unavailable}
-                end,
-            ?assertEqual(Expected, Call()),
-            ?assertEqual(
-                genlib:define(BeforeRejected, 0),
-                genlib:define(
-                    prometheus_counter:value(customer_unavailable, [Op]), 0
-                )
-            )
+            ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_InvalidRecurrentParent{}} end),
+            ?assertException(error, _, Call())
         end,
         Calls
     ).
 
-customer_call_deadline() ->
-    ok = meck:expect(woody_client, call, fun(_, _, Context) ->
-        Deadline = woody_context:get_deadline(Context),
-        ?assert(woody_deadline:to_timeout(Deadline) =< 1000),
-        ?assert(woody_deadline:to_timeout(Deadline) > 0),
-        {ok, #customer_Customer{
-            id = <<"customer">>,
-            party_ref = #domain_PartyConfigRef{id = <<"party">>},
-            created_at = <<"2026-01-01T00:00:00Z">>,
-            status = {active, #customer_CustomerActive{}}
-        }}
+customer_calls_answers() ->
+    ok = meck:expect(woody_client, call, fun(_, _, _) ->
+        {exception, #base_InvalidRequest{errors = [<<"invalid email">>]}}
     end),
-    ?assertEqual(
-        {ok, <<"customer">>}, find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)
-    ).
+    ?assertEqual(undefined, find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)),
+    ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
+    ?assertEqual([], get_terminal_affinities(<<"customer">>)).
 
 -endif.
