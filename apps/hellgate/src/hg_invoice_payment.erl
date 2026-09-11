@@ -1074,11 +1074,9 @@ validate_processing_deadline(#domain_InvoicePayment{processing_deadline = Deadli
         ok ->
             ok;
         {error, deadline_reached} ->
-            {failure,
-                payproc_errors:construct(
-                    'PaymentFailure',
-                    {authorization_failed, {processing_deadline_reached, #payproc_error_GeneralFailure{}}}
-                )}
+            {failure, #domain_Failure{
+                code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"processing_deadline_reached">>}
+            }}
     end;
 validate_processing_deadline(_, _TargetType) ->
     ok.
@@ -1967,11 +1965,26 @@ process_callback(Tag, Payload, Session, St) when Session /= undefined ->
     case {hg_session:status(Session), hg_session:tags(Session)} of
         {suspended, [Tag | _]} ->
             handle_callback(get_activity(St), Payload, Session, St);
-        _ ->
-            throw(invalid_callback)
+        {suspended, [ExpectedTag | _]} ->
+            reject_callback(
+                genlib:format("Callback tag mismatch: received_tag=~ts, expected_tag=~ts", [Tag, ExpectedTag]),
+                St
+            );
+        {suspended, []} ->
+            reject_callback(<<"No callback tag registered for the suspended session">>, St);
+        {Status, _} ->
+            reject_callback(genlib:format("Session is not suspended: session_status=~p", [Status]), St)
     end;
-process_callback(_Tag, _Payload, undefined, _St) ->
-    throw(invalid_callback).
+process_callback(_Tag, _Payload, undefined, St) ->
+    reject_callback(<<"No active session">>, St).
+
+-spec reject_callback(binary(), st()) -> no_return().
+reject_callback(Reason, #st{payment = Payment, activity = Activity}) ->
+    Details = genlib:format(
+        "~ts; payment_id=~ts, payment_status=~p, activity=~0p",
+        [Reason, Payment#domain_InvoicePayment.id, element(1, Payment#domain_InvoicePayment.status), Activity]
+    ),
+    throw({invalid_callback, Details}).
 
 process_session_change(Tag, SessionChange, Session0, St) when Session0 /= undefined ->
     %% NOTE Change allowed only for suspended session. Not suspended
@@ -1995,8 +2008,8 @@ process_shop_limit_initialization(_Action, St) ->
     case check_shop_limits(Opts, St) of
         ok ->
             {next, {[?shop_limit_initiated()], timeout}};
-        {error, {limit_overflow = Error, IDs}} ->
-            Failure = construct_shop_limit_failure(Error, IDs),
+        {error, {limit_overflow = Error, LimitIDs}} ->
+            Failure = construct_shop_limit_failure(Error, LimitIDs),
             Events = [
                 ?shop_limit_initiated(),
                 ?payment_rollback_started(Failure)
@@ -2004,10 +2017,18 @@ process_shop_limit_initialization(_Action, St) ->
             {next, {Events, timeout}}
     end.
 
-construct_shop_limit_failure(limit_overflow, IDs) ->
-    Error = mk_static_error([authorization_failed, shop_limit_exceeded, unknown]),
-    Reason = genlib:format("Limits with following IDs overflowed: ~p", [IDs]),
-    {failure, payproc_errors:construct('PaymentFailure', Error, Reason)}.
+construct_shop_limit_failure(limit_overflow, LimitIDs) ->
+    {failure, #domain_Failure{
+        reason = genlib:format("Limits ~p overflowed", [LimitIDs]),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{
+            code = <<"shop_limit_exceeded">>,
+            sub = #domain_SubFailure{
+                code = <<"unknown">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
+        }
+    }}.
 
 process_shop_limit_failure(_Action, #st{failure = Failure} = St) ->
     Opts = get_opts(St),
@@ -2265,19 +2286,44 @@ log_rejected_route_groups(Result, VS) ->
 
 construct_routing_failure({rejected_routes, {SubCode, RejectedRoutes}}) when
     SubCode =:= limit_misconfiguration orelse
-        SubCode =:= limit_overflow orelse
         SubCode =:= adapter_unavailable orelse
         SubCode =:= provider_conversion_is_too_low
 ->
-    construct_routing_failure([rejected, SubCode], genlib:format(normalize_rejected_routes(RejectedRoutes)));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"rejected">>, sub = #domain_SubFailure{code = atom_to_binary(SubCode)}},
+        genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
+construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) ->
+    %% NOTE See reason-tuple construction in `get_limit_overflow_routes/4`.
+    LimitIDs = ordsets:from_list(
+        lists:flatten([
+            LimitIDs
+         || {_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} <- normalize_rejected_routes(RejectedRoutes)
+        ])
+    ),
+    construct_routing_failure(
+        #domain_SubFailure{
+            code = <<"rejected">>,
+            sub = #domain_SubFailure{
+                code = <<"limit_overflow">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
+        },
+        genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
 construct_routing_failure({rejected_routes, {_SubCode, RejectedRoutes}}) ->
-    construct_routing_failure([forbidden], genlib:format(normalize_rejected_routes(RejectedRoutes)));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"forbidden">>}, genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
 construct_routing_failure({misconfiguration = Code, Details}) ->
-    construct_routing_failure([unknown, {unknown_error, atom_to_binary(Code)}], genlib:format(Details));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"unknown">>, sub = #domain_SubFailure{code = atom_to_binary(Code)}},
+        genlib:format(Details)
+    );
 construct_routing_failure(risk_score_is_too_high = Code) ->
-    construct_routing_failure([Code], undefined);
+    construct_routing_failure(#domain_SubFailure{code = atom_to_binary(Code)}, undefined);
 construct_routing_failure(Error) when is_atom(Error) ->
-    construct_routing_failure([{unknown_error, Error}], undefined).
+    construct_routing_failure(#domain_SubFailure{code = atom_to_binary(Error)}, undefined).
 
 normalize_rejected_routes(RejectedRoutes) ->
     [normalize_rejected_route(Route) || Route <- RejectedRoutes].
@@ -2289,12 +2335,8 @@ normalize_rejected_route(#{provider_ref := _, terminal_ref := _, rejection_reaso
 normalize_rejected_route(Route) ->
     Route.
 
-construct_routing_failure(Codes, Reason) ->
-    {failure, payproc_errors:construct('PaymentFailure', mk_static_error([no_route_found | Codes]), Reason)}.
-
-mk_static_error([_ | _] = Codes) -> mk_static_error_(#payproc_error_GeneralFailure{}, lists:reverse(Codes)).
-mk_static_error_(T, []) -> T;
-mk_static_error_(Sub, [Code | Codes]) -> mk_static_error_({Code, Sub}, Codes).
+construct_routing_failure(SubFailure, Reason) ->
+    {failure, #domain_Failure{reason = Reason, code = <<"no_route_found">>, sub = SubFailure}}.
 
 -spec process_cash_flow_building(action(), st()) -> machine_result().
 process_cash_flow_building(_Action, St) ->
@@ -2760,12 +2802,7 @@ get_bank_card_token(?recurrent_payer({bank_card, #domain_BankCard{token = Token}
 get_bank_card_token(_) ->
     undefined.
 
-choose_fd_operation_status_for_failure({failure, Failure}) ->
-    payproc_errors:match('PaymentFailure', Failure, fun do_choose_fd_operation_status_for_failure/1);
-choose_fd_operation_status_for_failure(_Failure) ->
-    finish.
-
-do_choose_fd_operation_status_for_failure({authorization_failed, {FailType, _}}) ->
+choose_fd_operation_status_for_failure({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(FailType0, _))}) ->
     DefaultBenignFailures = [
         insufficient_funds,
         rejected_by_issuer,
@@ -2774,11 +2811,17 @@ do_choose_fd_operation_status_for_failure({authorization_failed, {FailType, _}})
     FDConfig = genlib_app:env(hellgate, fault_detector, #{}),
     Config = genlib_map:get(conversion, FDConfig, #{}),
     BenignFailures = genlib_map:get(benign_failures, Config, DefaultBenignFailures),
-    case lists:member(FailType, BenignFailures) of
+    FailType1 =
+        try
+            erlang:binary_to_existing_atom(FailType0, utf8)
+        catch
+            error:badarg -> undefined
+        end,
+    case lists:member(FailType1, BenignFailures) of
         false -> error;
         true -> finish
     end;
-do_choose_fd_operation_status_for_failure(_Failure) ->
+choose_fd_operation_status_for_failure(_) ->
     finish.
 
 maybe_notify_fault_detector({payment, processing_session}, processed, Status, St) ->
@@ -2820,7 +2863,7 @@ get_initial_retry_strategy(TargetType) ->
     St :: st(),
     Timeout :: non_neg_integer().
 check_retry_possibility(Target, Failure, St) ->
-    case check_failure_type(Target, Failure) of
+    case check_failure_type(Failure) of
         transient ->
             RetryStrategy = get_actual_retry_strategy(Target, St),
             case hg_retry:next_step(RetryStrategy) of
@@ -2835,20 +2878,10 @@ check_retry_possibility(Target, Failure, St) ->
             fatal
     end.
 
--spec check_failure_type(target(), failure()) -> transient | fatal.
-check_failure_type(Target, {failure, Failure}) ->
-    payproc_errors:match(get_error_class(Target), Failure, fun do_check_failure_type/1);
-check_failure_type(_Target, _Other) ->
-    fatal.
-
-get_error_class({Target, _}) when Target =:= processed; Target =:= captured; Target =:= cancelled ->
-    'PaymentFailure';
-get_error_class(Target) ->
-    error({unsupported_target, Target}).
-
-do_check_failure_type({authorization_failed, {temporarily_unavailable, _}}) ->
+-spec check_failure_type(failure()) -> transient | fatal.
+check_failure_type({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _))}) ->
     transient;
-do_check_failure_type(_Failure) ->
+check_failure_type(_) ->
     fatal.
 
 get_action(?processed(), _Action, St) ->
@@ -2930,8 +2963,8 @@ get_limit_overflow_routes(Routes, VS, Iter, St) ->
             case hg_limiter:check_limits(TurnoverLimits, Invoice, Payment, Session, PaymentRoute, Iter) of
                 {ok, Limits} ->
                     {[Route | RoutesNoOverflowIn], RejectedIn, LimitsIn#{PaymentRoute => Limits}};
-                {error, {limit_overflow, IDs, Limits}} ->
-                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', IDs}, Route),
+                {error, {limit_overflow, LimitIDs}, Limits} ->
+                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', LimitIDs}, Route),
                     {RoutesNoOverflowIn, [RejectedRoute | RejectedIn], LimitsIn#{PaymentRoute => Limits}}
             end
         end,
@@ -4327,10 +4360,7 @@ format_status_details(_) ->
 format_failure({operation_timeout, _}) ->
     [<<"timeout">>];
 format_failure({failure, Failure}) ->
-    format_domain_failure(Failure).
-
-format_domain_failure(Failure) ->
-    payproc_errors:format_raw(Failure).
+    hg_invoice_utils:format_failure(Failure).
 
 get_account_key({AccountParty, AccountType}) ->
     hg_utils:join(AccountParty, $., AccountType).
@@ -4377,6 +4407,52 @@ get_route_cascade_behaviour(Route, Revision) ->
 -include_lib("hellgate/test/hg_ct_domain.hrl").
 
 -spec test() -> _.
+
+%% Each generated test deliberately calls a callback rejection branch.
+-dialyzer({no_fail_call, invalid_callback_details_test_/0}).
+
+-spec invalid_callback_details_test_() -> [_].
+invalid_callback_details_test_() ->
+    St = #st{
+        activity = {payment, processing_session},
+        payment = #domain_InvoicePayment{
+            id = <<"1">>,
+            created_at = <<"2026-09-08T11:23:08Z">>,
+            status = ?pending(),
+            cost = ?cash(1000, <<"KZT">>),
+            domain_revision = 1,
+            flow = ?invoice_payment_flow_instant(),
+            payer = ?payment_resource_payer(
+                #domain_DisposablePaymentResource{payment_tool = {payment_terminal, #domain_PaymentTerminal{}}},
+                #domain_ContactInfo{}
+            )
+        }
+    },
+    Session = hg_session:apply_event(hg_session:create(), undefined, #{
+        target => ?processed(),
+        route => #domain_PaymentRoute{provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}},
+        invoice_id => <<"invoice">>,
+        payment_id => <<"1">>,
+        timestamp => 0
+    }),
+    Cases = [
+        {undefined, <<"No active session">>},
+        {Session, <<"Session is not suspended: session_status=active">>},
+        {Session#{status => finished}, <<"Session is not suspended: session_status=finished">>},
+        {Session#{status => suspended}, <<"No callback tag registered for the suspended session">>},
+        {
+            Session#{status => suspended, tags => [<<"new-tag">>, <<"old-tag">>]},
+            <<"Callback tag mismatch: received_tag=old-tag, expected_tag=new-tag">>
+        }
+    ],
+    lists:map(
+        fun({CurrentSession, Reason}) ->
+            Details =
+                <<Reason/binary, "; payment_id=1, payment_status=pending, activity={payment,processing_session}">>,
+            ?_assertThrow({invalid_callback, Details}, process_callback(<<"old-tag">>, <<>>, CurrentSession, St))
+        end,
+        Cases
+    ).
 
 -spec filter_attempted_routes_test_() -> [_].
 filter_attempted_routes_test_() ->
