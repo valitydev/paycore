@@ -2062,8 +2062,7 @@ process_routing(Action, St) ->
     case get_routes(PaymentInstitution, VS, Revision, St) of
         #{error := Error} ->
             ok = log_misconfigurations(Error),
-            {_, AffinityEvents} = load_terminal_affinities(#{routes => []}, St),
-            handle_choose_route_error(Error, AffinityEvents, St, Action);
+            handle_choose_route_error(Error, [], St, Action);
         #{routes := Routes0} = GetResult ->
             {Affinities, AffinityEvents} = load_terminal_affinities(GetResult, St),
             Routes = hg_route_affinity:fill(Affinities, Routes0, erlang:system_time(millisecond)),
@@ -2619,16 +2618,15 @@ process_result({payment, finalizing_accounter}, Action, St) ->
                 rollback_payment_cashflow(St)
         end,
     check_recurrent_token(St),
-    case Target of
-        ?captured() ->
-            %% The binding goes first: it also remembers the payment for the Customer,
-            %% and only its outcome tells whether a separate AddPayment is needed
-            Bound = maybe_bind_terminal_affinity(St),
-            _ = maybe_save_recurrent_token_to_customer(Bound, St),
-            ok;
-        ?cancelled() ->
-            ok
-    end,
+    %% Only a captured payment binds. The binding goes first: it also remembers the payment
+    %% for the Customer, and only its outcome tells whether a separate AddPayment is needed.
+    %% A cancelled hold still saves its token and is recorded, as it was before bindings
+    Bound =
+        case Target of
+            ?captured() -> maybe_bind_terminal_affinity(St);
+            ?cancelled() -> not_bound
+        end,
+    _ = maybe_save_recurrent_token_to_customer(Bound, St),
     NewAction = get_action(Target, Action, St),
     {done, {[?payment_status_changed(Target)], NewAction}}.
 
@@ -2700,9 +2698,15 @@ maybe_bind_terminal_affinity(
     case hg_terminal_affinity:can_bind(Ttl, erlang:system_time(millisecond)) of
         true ->
             InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
-            ok = hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}),
-            _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
-            bound;
+            case hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}) of
+                ok ->
+                    _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
+                    bound;
+                %% The Customer was deleted mid-payment: there is nothing to bind to, and a
+                %% retry of the step would get the same answer
+                {error, customer_not_found} ->
+                    not_bound
+            end;
         false ->
             not_bound
     end;
@@ -4825,13 +4829,22 @@ customer_finalization() ->
         ),
         ?assertEqual(Before, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
         ?assertEqual(BeforeAddPayment + 2, meck:num_calls(hg_customer_client, add_payment, '_')),
-        History = meck:history(hg_customer_client),
+        %% The Customer was deleted mid-payment: the step completes without a binding, and the
+        %% payment goes on to AddPayment, which a deleted Customer does not fail either
+        ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, {error, customer_not_found}),
+        BeforeDeleted = meck:num_calls(hg_customer_client, add_payment, '_'),
+        ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, St)),
+        ?assertEqual(BeforeDeleted + 1, meck:num_calls(hg_customer_client, add_payment, '_')),
+        %% A cancelled hold binds nothing but is still recorded for the Customer, as before
+        BeforeBind = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
+        BeforeCancelled = meck:num_calls(hg_customer_client, add_payment, '_'),
         Cancelled = ?cancelled_with_reason(<<"cancel">>),
         ?assertEqual(
             {done, {[?payment_status_changed(Cancelled)], idle}},
             process_result({payment, finalizing_accounter}, idle, St#st{target = Cancelled})
         ),
-        ?assertEqual(History, meck:history(hg_customer_client)),
+        ?assertEqual(BeforeBind, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
+        ?assertEqual(BeforeCancelled + 1, meck:num_calls(hg_customer_client, add_payment, '_')),
         ?assertEqual(0, meck:num_calls(hg_route_collector, get_routes, '_')),
         %% Nothing is swallowed: a failing customer operation fails the step after the commits,
         %% and the retried step commits again idempotently and repeats the calls

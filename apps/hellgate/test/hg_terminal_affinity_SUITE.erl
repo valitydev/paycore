@@ -12,7 +12,7 @@
 -export([email_customer/1, first_and_second_payment/1, prohibition_and_return/1, cascade_and_return/1]).
 -export([lower_priority_cascade/1, limit_overflow_and_return/1, disabled_affinity/1, mixed_candidates/1]).
 -export([cubasty_failure_init/1, cubasty_failure_routing/1, cubasty_failure_capture/1, collector_affinity/1]).
--export([replay/1, hold_capture_order/1, cancelled_hold/1, expired_deadline/1]).
+-export([replay/1, hold_capture_order/1, cancelled_hold/1, deleted_customer_capture/1, expired_deadline/1]).
 -export([payment_recorded_once/1, cubasty_failure_add_payment/1]).
 
 -type config() :: hg_ct_helper:config().
@@ -36,6 +36,7 @@ all() ->
         replay,
         hold_capture_order,
         cancelled_hold,
+        deleted_customer_capture,
         expired_deadline,
         payment_recorded_once
     ].
@@ -324,8 +325,20 @@ cancelled_hold(C) ->
     _ = await_status(InvoiceID, PaymentID, cancelled, C),
     Payment = hg_client_invoicing:get_payment(InvoiceID, PaymentID, cfg(client, C)),
     ?assertEqual([], history(Payment)),
-    {ok, Customer} = hg_woody_wrapper:call(customer_management, 'Get', {customer_id(Payment)}),
-    ?assertEqual([], Customer#customer_CustomerState.payment_refs).
+    %% A cancelled hold binds nothing but is still recorded for the Customer, as before bindings
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+
+%% A Customer deleted between StartPayment and capture does not wedge the payment: there is
+%% nothing to bind it or record it in, and a retry of the step would get the same answer
+-spec deleted_customer_capture(config()) -> _.
+deleted_customer_capture(C) ->
+    {InvoiceID, PaymentID} = start_payment(C, hold),
+    _ = await_status(InvoiceID, PaymentID, processed, C),
+    Payment = hg_client_invoicing:get_payment(InvoiceID, PaymentID, cfg(client, C)),
+    {ok, ok} = hg_woody_wrapper:call(customer_management, 'Delete', {customer_id(Payment)}),
+    ok = hg_client_invoicing:capture_payment(InvoiceID, PaymentID, <<"capture">>, cfg(client, C)),
+    _ = await_status(InvoiceID, PaymentID, captured, C),
+    ?assertEqual([], history(Payment)).
 
 -spec expired_deadline(config()) -> _.
 expired_deadline(C) ->

@@ -30,9 +30,24 @@ is_live(_Affinity, undefined, _Now) ->
 
 -spec can_bind(ttl(), integer()) -> boolean().
 can_bind({deadline, Deadline}, Now) ->
-    timestamp(Deadline) > Now;
+    case deadline(Deadline) of
+        {ok, Timestamp} -> Timestamp > Now;
+        error -> false
+    end;
 can_bind(_, _) ->
     true.
+
+%% The deadline comes from a ruleset, not from cubasty: one that does not parse is taken as
+%% passed, so the candidate stays usable without stickiness instead of failing routing for
+%% every payment that reaches it
+deadline(Value) ->
+    try
+        {ok, timestamp(Value)}
+    catch
+        error:_ ->
+            _ = logger:error("Malformed terminal affinity deadline ~p is taken as passed", [Value]),
+            error
+    end.
 
 timestamp(Value) ->
     calendar:rfc3339_to_system_time(binary_to_list(Value), [{unit, millisecond}]).
@@ -65,7 +80,9 @@ ttl_test_() ->
         ?_assertEqual([], live([A, B], Routes({since_last_use, 1}), Now)),
         ?_assertEqual([], live([A, B], Routes({deadline, <<"2026-01-01T00:01:00Z">>}), Now)),
         ?_assertEqual([A, B], live([A, B], Routes({deadline, <<"2026-01-01T00:01:01Z">>}), Now)),
-        ?_assertNot(can_bind({deadline, <<"2026-01-01T00:01:00Z">>}, Now))
+        ?_assertNot(can_bind({deadline, <<"2026-01-01T00:01:00Z">>}, Now)),
+        ?_assertNot(can_bind({deadline, <<"not a timestamp">>}, Now)),
+        ?_assertEqual([], live([A, B], Routes({deadline, <<"not a timestamp">>}), Now))
     ].
 
 -endif.

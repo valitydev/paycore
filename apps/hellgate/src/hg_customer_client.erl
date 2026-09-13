@@ -140,39 +140,44 @@ get_terminal_affinities(CustomerID) ->
     dmsl_domain_thrift:'PaymentRoute'(),
     dmsl_domain_thrift:'RoutingAffinityTtl'() | undefined,
     payment_ref()
-) -> ok.
+) -> ok | {error, customer_not_found}.
 bind_terminal_affinity(
     CustomerID,
     #domain_PaymentRoute{provider = Provider, terminal = Terminal},
     Ttl,
     {InvoiceID, PaymentID}
 ) when is_binary(InvoiceID), is_binary(PaymentID) ->
-    {ok, _} = call(
-        customer_management,
-        'BindTerminalAffinity',
-        {#customer_TerminalAffinityParams{
-            customer_id = CustomerID,
-            provider_ref = Provider,
-            terminal_ref = Terminal,
-            ttl = Ttl,
-            payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
-        }}
-    ),
-    ok.
+    Params = #customer_TerminalAffinityParams{
+        customer_id = CustomerID,
+        provider_ref = Provider,
+        terminal_ref = Terminal,
+        ttl = Ttl,
+        payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
+    },
+    case call(customer_management, 'BindTerminalAffinity', {Params}) of
+        {ok, _} ->
+            ok;
+        %% A Customer deleted mid-payment; a retry would get the same answer
+        {exception, #customer_CustomerNotFound{}} ->
+            {error, customer_not_found}
+    end.
 
+%% A Customer deleted mid-payment has no history left to record the payment or the card in,
+%% and a retry would get the same answer
 -spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id()) -> ok.
 add_payment(CustomerID, InvoiceID, PaymentID) ->
-    {ok, ok} = call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID}),
-    ok.
+    case call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID}) of
+        {ok, ok} -> ok;
+        {exception, #customer_CustomerNotFound{}} -> ok
+    end.
 
 -spec link_bank_card(dmsl_customer_thrift:'CustomerID'(), token()) -> ok.
 link_bank_card(CustomerID, BankCardToken) ->
-    {ok, _} = call(
-        customer_management,
-        'AddBankCard',
-        {CustomerID, #customer_BankCardParams{bank_card_token = BankCardToken}}
-    ),
-    ok.
+    Params = #customer_BankCardParams{bank_card_token = BankCardToken},
+    case call(customer_management, 'AddBankCard', {CustomerID, Params}) of
+        {ok, _} -> ok;
+        {exception, #customer_CustomerNotFound{}} -> ok
+    end.
 
 %% Internal
 
@@ -337,6 +342,9 @@ customer_calls_answers() ->
     end),
     ?assertEqual(undefined, find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)),
     ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
-    ?assertEqual([], get_terminal_affinities(<<"customer">>)).
+    ?assertEqual([], get_terminal_affinities(<<"customer">>)),
+    ?assertEqual({error, customer_not_found}, bind_affinity(undefined)),
+    ?assertEqual(ok, add_payment(<<"customer">>, <<"invoice">>, <<"payment">>)),
+    ?assertEqual(ok, link_bank_card(<<"customer">>, <<"card">>)).
 
 -endif.
