@@ -140,7 +140,7 @@ get_terminal_affinities(CustomerID) ->
     dmsl_domain_thrift:'PaymentRoute'(),
     dmsl_domain_thrift:'RoutingAffinityTtl'() | undefined,
     payment_ref()
-) -> ok | {error, customer_not_found}.
+) -> ok | {error, customer_not_found | invalid_request}.
 bind_terminal_affinity(
     CustomerID,
     #domain_PaymentRoute{provider = Provider, terminal = Terminal},
@@ -159,7 +159,12 @@ bind_terminal_affinity(
             ok;
         %% A Customer deleted mid-payment; a retry would get the same answer
         {exception, #customer_CustomerNotFound{}} ->
-            {error, customer_not_found}
+            {error, customer_not_found};
+        %% A request cubasty rejects, such as a payment already recorded for another Customer:
+        %% a retry would get the same answer too, but it points at a bug worth seeing
+        {exception, #base_InvalidRequest{errors = Errors}} ->
+            _ = logger:error("Terminal affinity bind rejected: ~p", [Errors]),
+            {error, invalid_request}
     end.
 
 %% A Customer deleted mid-payment has no history left to record the payment or the card in,
@@ -341,6 +346,7 @@ customer_calls_answers() ->
         {exception, #base_InvalidRequest{errors = [<<"invalid email">>]}}
     end),
     ?assertEqual(undefined, find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>)),
+    ?assertEqual({error, invalid_request}, bind_affinity(undefined)),
     ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
     ?assertEqual([], get_terminal_affinities(<<"customer">>)),
     ?assertEqual({error, customer_not_found}, bind_affinity(undefined)),

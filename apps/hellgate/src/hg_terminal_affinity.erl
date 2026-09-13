@@ -21,25 +21,31 @@ live(Affinities, Config, Now) ->
 
 is_live(Affinity, #domain_RoutingAffinity{ttl = Ttl}, Now) ->
     case Ttl of
-        {since_bound, Timeout} -> timestamp(Affinity#customer_TerminalAffinity.bound_at) + Timeout * 1000 > Now;
-        {since_last_use, Timeout} -> timestamp(Affinity#customer_TerminalAffinity.last_used_at) + Timeout * 1000 > Now;
-        _ -> can_bind(Ttl, Now)
+        {since_bound, Timeout} when Timeout >= 0 ->
+            timestamp(Affinity#customer_TerminalAffinity.bound_at) + Timeout * 1000 > Now;
+        {since_last_use, Timeout} when Timeout >= 0 ->
+            timestamp(Affinity#customer_TerminalAffinity.last_used_at) + Timeout * 1000 > Now;
+        _ ->
+            can_bind(Ttl, Now)
     end;
 is_live(_Affinity, undefined, _Now) ->
     true.
 
+%% The ttl comes from a ruleset, not from cubasty: a deadline that does not parse and a negative
+%% timeout are taken as expired, so the candidate stays usable without stickiness instead of
+%% failing routing, or having cubasty reject the bind after the money is committed
 -spec can_bind(ttl(), integer()) -> boolean().
 can_bind({deadline, Deadline}, Now) ->
     case deadline(Deadline) of
         {ok, Timestamp} -> Timestamp > Now;
         error -> false
     end;
+can_bind({Base, Timeout}, _Now) when (Base =:= since_bound orelse Base =:= since_last_use), Timeout < 0 ->
+    _ = logger:error("Negative terminal affinity timeout ~p is taken as expired", [Timeout]),
+    false;
 can_bind(_, _) ->
     true.
 
-%% The deadline comes from a ruleset, not from cubasty: one that does not parse is taken as
-%% passed, so the candidate stays usable without stickiness instead of failing routing for
-%% every payment that reaches it
 deadline(Value) ->
     try
         {ok, timestamp(Value)}
@@ -82,7 +88,9 @@ ttl_test_() ->
         ?_assertEqual([A, B], live([A, B], Routes({deadline, <<"2026-01-01T00:01:01Z">>}), Now)),
         ?_assertNot(can_bind({deadline, <<"2026-01-01T00:01:00Z">>}, Now)),
         ?_assertNot(can_bind({deadline, <<"not a timestamp">>}, Now)),
-        ?_assertEqual([], live([A, B], Routes({deadline, <<"not a timestamp">>}), Now))
+        ?_assertEqual([], live([A, B], Routes({deadline, <<"not a timestamp">>}), Now)),
+        ?_assertNot(can_bind({since_bound, -1}, Now)),
+        ?_assertEqual([], live([A, B], Routes({since_last_use, -1}), Now))
     ].
 
 -endif.

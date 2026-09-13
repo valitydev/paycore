@@ -2702,9 +2702,9 @@ maybe_bind_terminal_affinity(
                 ok ->
                     _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
                     bound;
-                %% The Customer was deleted mid-payment: there is nothing to bind to, and a
-                %% retry of the step would get the same answer
-                {error, customer_not_found} ->
+                %% The Customer was deleted mid-payment, or cubasty rejected the request: there
+                %% is nothing to bind, and a retry of the step would get the same answer
+                {error, Reason} when Reason =:= customer_not_found; Reason =:= invalid_request ->
                     not_bound
             end;
         false ->
@@ -4819,22 +4819,28 @@ customer_finalization() ->
         Expired = replay_route_affinity(
             #domain_RoutingAffinity{ttl = {deadline, <<"2000-01-01T00:00:00Z">>}}, St0
         ),
+        Negative = replay_route_affinity(#domain_RoutingAffinity{ttl = {since_bound, -1}}, St0),
         %% There was no binding at all — the payment is remembered for the Customer by a
         %% separate call, otherwise it is lost to the personal account
         lists:foreach(
             fun(NotBound) ->
                 ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, NotBound))
             end,
-            [St#st{route_affinity = false}, Expired]
+            [St#st{route_affinity = false}, Expired, Negative]
         ),
         ?assertEqual(Before, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
-        ?assertEqual(BeforeAddPayment + 2, meck:num_calls(hg_customer_client, add_payment, '_')),
-        %% The Customer was deleted mid-payment: the step completes without a binding, and the
-        %% payment goes on to AddPayment, which a deleted Customer does not fail either
-        ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, {error, customer_not_found}),
-        BeforeDeleted = meck:num_calls(hg_customer_client, add_payment, '_'),
-        ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, St)),
-        ?assertEqual(BeforeDeleted + 1, meck:num_calls(hg_customer_client, add_payment, '_')),
+        ?assertEqual(BeforeAddPayment + 3, meck:num_calls(hg_customer_client, add_payment, '_')),
+        %% The Customer was deleted mid-payment, or cubasty rejected the bind: the step completes
+        %% without a binding, and the payment goes on to AddPayment
+        lists:foreach(
+            fun(Rejection) ->
+                ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, {error, Rejection}),
+                BeforeRejected = meck:num_calls(hg_customer_client, add_payment, '_'),
+                ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, St)),
+                ?assertEqual(BeforeRejected + 1, meck:num_calls(hg_customer_client, add_payment, '_'))
+            end,
+            [customer_not_found, invalid_request]
+        ),
         %% A cancelled hold binds nothing but is still recorded for the Customer, as before
         BeforeBind = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
         BeforeCancelled = meck:num_calls(hg_customer_client, add_payment, '_'),

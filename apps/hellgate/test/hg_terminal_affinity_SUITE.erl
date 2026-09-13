@@ -13,6 +13,7 @@
 -export([lower_priority_cascade/1, limit_overflow_and_return/1, disabled_affinity/1, mixed_candidates/1]).
 -export([cubasty_failure_init/1, cubasty_failure_routing/1, cubasty_failure_capture/1, collector_affinity/1]).
 -export([replay/1, hold_capture_order/1, cancelled_hold/1, deleted_customer_capture/1, expired_deadline/1]).
+-export([negative_timeout/1]).
 -export([payment_recorded_once/1, cubasty_failure_add_payment/1]).
 
 -type config() :: hg_ct_helper:config().
@@ -38,6 +39,7 @@ all() ->
         cancelled_hold,
         deleted_customer_capture,
         expired_deadline,
+        negative_timeout,
         payment_recorded_once
     ].
 
@@ -351,6 +353,21 @@ expired_deadline(C) ->
     ]),
     {_, _, Payment, _} = pay(C),
     ?assertEqual([], history(Payment)).
+
+%% A negative timeout in a ruleset is taken as expired: the payment captures without a binding
+%% instead of having cubasty reject the bind after the money is committed
+-spec negative_timeout(config()) -> _.
+negative_timeout(C) ->
+    set_rules(2, [
+        #domain_RoutingCandidate{
+            terminal = ?trm(1),
+            allowed = {constant, true},
+            affinity = #domain_RoutingAffinity{ttl = {since_bound, -1}}
+        }
+    ]),
+    {InvoiceID, PaymentID, Payment, _} = pay(C),
+    ?assertEqual([], history(Payment)),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
 
 %% The payment must reach the Customer exactly once down either branch: a binding
 %% remembers it with the same call, without one a separate AddPayment remains
