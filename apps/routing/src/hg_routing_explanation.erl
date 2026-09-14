@@ -353,8 +353,8 @@ format(Format, Data) ->
 
 -spec test() -> _.
 
--spec legacy_affinity_scores_test() -> _.
-legacy_affinity_scores_test() ->
+-spec legacy_affinity_scores_test_() -> [_].
+legacy_affinity_scores_test_() ->
     Old = #domain_PaymentRouteScores{
         availability_condition = 1,
         conversion_condition = 1,
@@ -369,17 +369,27 @@ legacy_affinity_scores_test() ->
     Bound = Zero#domain_PaymentRouteScores{terminal_affinity = 1},
     Priority = Zero#domain_PaymentRouteScores{terminal_priority_rating = 1},
     Ctx = fun(Scores) -> #{scores => Scores, limits => []} end,
-    lists:foreach(
-        fun({A, B}) ->
+    [
+        ?_test(
             ?assertEqual(
                 candidate_rejection_explanation(Ctx(normalize_scores(A)), Ctx(normalize_scores(B))),
-                candidate_rejection_explanation(Ctx(A), Ctx(B))
+                candidate_rejection_explanation(Ctx(A), Ctx(B)),
+                Comment
             )
-        end,
-        [{Old, Zero}, {Zero, Old}, {Old, Bound}, {Bound, Old}, {Old, Priority}, {Priority, Old}]
-    ),
-    ?assertEqual(check_route_scores(Zero, Bound), check_route_scores(Old, Bound)),
-    ?assertEqual(check_route_scores(Zero, Priority), check_route_scores(Old, Priority)),
-    ?assertNotEqual(check_route_scores(Old, Bound), check_route_scores(Old, Priority)).
+        )
+     || {Comment, A, B} <- [
+            {"old vs zero", Old, Zero},
+            {"zero vs old", Zero, Old},
+            {"old vs bound", Old, Bound},
+            {"bound vs old", Bound, Old},
+            {"old vs priority", Old, Priority},
+            {"priority vs old", Priority, Old}
+        ]
+    ] ++
+        [
+            ?_assertEqual(check_route_scores(Zero, Bound), check_route_scores(Old, Bound)),
+            ?_assertEqual(check_route_scores(Zero, Priority), check_route_scores(Old, Priority)),
+            ?_assertNotEqual(check_route_scores(Old, Bound), check_route_scores(Old, Priority))
+        ].
 
 -endif.
