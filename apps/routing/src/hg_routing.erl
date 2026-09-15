@@ -88,7 +88,9 @@ format_logger_metadata(Meta, Route, Revision) when
         provider => #{id => ProviderID, name => ProviderName},
         terminal => #{id => TerminalID, name => TerminalName},
         priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route)
+        weight => hg_route:weight(Route),
+        terminal_affinity => hg_route:affinity_rank(Route),
+        affinity_enabled => hg_route:affinity(Route) =/= undefined
     }).
 
 -spec get_routes(get_route_params()) -> get_routes_result().
@@ -116,7 +118,7 @@ get_routes(
     genlib_map:compact(
         maps:merge(
             #{error => maps:get(error, Result, undefined)},
-            filter(hg_route_balancer:fill(Routes5), [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
+            filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
         )
     ).
 
@@ -557,5 +559,57 @@ prefer_priority_over_conversion_test() ->
     Routes = [Route1, Route2, Route3],
 
     ?assertMatch({?trm(2), _}, balance_and_choose_route(Routes)).
+
+-spec balance_surviving_routes_test() -> _.
+balance_surviving_routes_test() ->
+    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
+    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
+    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
+    _ = rand:seed(exsss, {31, 41, 59}),
+    Chosen = lists:map(
+        fun(_) ->
+            #{routes := Survivors} = filter([A, B, C], [{prohibit, true}]),
+            {Route, _} = choose_route(hg_route_balancer:fill(Survivors)),
+            hg_route:terminal_ref(Route)
+        end,
+        lists:seq(1, 1000)
+    ),
+    ?assertNot(lists:member(?trm(1), Chosen)),
+    ?assert(abs(length([T || T <- Chosen, T =:= ?trm(2)]) - 500) < 80).
+
+-spec get_routes_preserves_weights_test() -> _.
+get_routes_preserves_weights_test() ->
+    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
+    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
+    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
+    ok = meck:new([hg_route_collector, hg_route_fd], [passthrough]),
+    try
+        ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) -> #{routes => [A, B, C]} end),
+        ok = meck:expect(hg_route_collector, fill_accepted, fun(_, _, _, Routes) -> Routes end),
+        ok = meck:expect(hg_route_collector, fill_prohibition, fun(_, _, _, Routes) -> Routes end),
+        ok = meck:expect(hg_route_collector, fill_fd_overrides, fun(_, Routes) -> Routes end),
+        ok = meck:expect(hg_route_fd, fill, fun(Routes) -> Routes end),
+        #{routes := Survivors} = get_routes(#{
+            predestination => payment,
+            revision => 1,
+            varset => #{},
+            payment_institution => #domain_PaymentInstitution{
+                name = <<"test">>,
+                realm = test,
+                residences = [],
+                system_account_set = {value, #domain_SystemAccountSetRef{id = 1}},
+                inspector = {value, #domain_InspectorRef{id = 1}}
+            },
+            pin_context => #{
+                currency => #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+                payment_tool =>
+                    {generic, #domain_GenericPaymentTool{payment_service = #domain_PaymentServiceRef{id = <<"test">>}}},
+                client_ip => undefined
+            }
+        }),
+        ?assertEqual([25, 25], [hg_route:weight(R) || R <- Survivors])
+    after
+        ok = meck:unload([hg_route_collector, hg_route_fd])
+    end.
 
 -endif.

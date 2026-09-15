@@ -22,6 +22,9 @@
 -export([priority/1]).
 -export([weight/1]).
 -export([pin/1]).
+-export([affinity/1]).
+-export([set_affinity_rank/2]).
+-export([affinity_rank/1]).
 -export([pin_hash/1]).
 -export([fd_overrides/1]).
 -export([fd_score/1]).
@@ -53,6 +56,7 @@
     terminal_ref := dmsl_domain_thrift:'TerminalRef'(),
     route_data := route_data(),
     pin_data => pin_data(),
+    affinity => dmsl_domain_thrift:'RoutingAffinity'() | undefined,
     fd_overrides => fd_overrides(),
     rejection_reason => route_rejection_reason(),
     exchange_context => hg_invoice_payment:exchange_context()
@@ -76,6 +80,7 @@
     priority => integer(),
     weight => integer(),
     pin_score => integer(),
+    affinity_rank => integer(),
     blacklisted => blacklist_condition()
 }.
 
@@ -122,6 +127,7 @@ new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
             },
             weight => Weight,
             priority => Priority,
+            affinity_rank => 0,
             blacklisted => 0
         },
         pin_data => Pin
@@ -202,6 +208,18 @@ priority(#{route_data := #{priority := Priority}}) ->
 weight(#{route_data := #{weight := Weight}}) ->
     Weight.
 
+-spec affinity(t()) -> dmsl_domain_thrift:'RoutingAffinity'() | undefined.
+affinity(R) ->
+    maps:get(affinity, R, undefined).
+
+-spec set_affinity_rank(integer(), t()) -> t().
+set_affinity_rank(Rank, #{route_data := Data} = R) ->
+    R#{route_data => Data#{affinity_rank => Rank}}.
+
+-spec affinity_rank(t()) -> integer().
+affinity_rank(#{route_data := Data}) ->
+    maps:get(affinity_rank, Data, 0).
+
 -spec pin(t()) -> pin_data() | undefined.
 pin(#{pin_data := Pin}) ->
     Pin.
@@ -253,6 +271,7 @@ score(R) ->
     #domain_PaymentRouteScores{
         availability_condition = AvailabilityCondition,
         conversion_condition = ConversionCondition,
+        terminal_affinity = affinity_rank(R),
         terminal_priority_rating = priority(R),
         route_pin = pin_hash(R),
         random_condition = weight(R),

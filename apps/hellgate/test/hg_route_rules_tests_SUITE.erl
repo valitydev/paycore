@@ -819,7 +819,7 @@ terminal_priority_for_shop(ShopID, _C) ->
     #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
-    hg_routing:choose_route(Routes).
+    hg_routing:choose_route(hg_route_balancer:fill(Routes)).
 
 -spec gather_pinned_route(config()) -> test_return().
 gather_pinned_route(_C) ->
