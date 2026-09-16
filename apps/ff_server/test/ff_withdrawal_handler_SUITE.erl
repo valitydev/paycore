@@ -71,7 +71,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             session_unknown_test,
             session_get_context_test,
             session_get_events_test,

@@ -60,7 +60,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             adjustment_can_change_status_to_failed_test,
             adjustment_can_change_failure_test,
             adjustment_can_change_status_to_succeeded_test,
@@ -79,6 +79,7 @@ groups() ->
             adjustment_can_not_increase_body,
             adjustment_can_not_change_body_on_pending
         ]},
+        %% These cases assert deltas on the shared provider account.
         {non_parallel, [], [
             adjustment_can_change_domain_revision_test,
             adjustment_change_cash_flow_then_change_body_test,

@@ -1,6 +1,5 @@
 %% TODO
 %%%  - Do not share state between test cases
-%%%  - Run cases in parallel
 
 -module(hg_invoice_tests_SUITE).
 
@@ -270,17 +269,22 @@ all() ->
         consistent_account_balances
     ].
 
--spec groups() -> [{group_name(), list(), [test_case_name()]}].
+-type test_group() :: {group_name(), list(), [test_case_name() | {group, group_name()} | test_group()]}.
+
+-spec groups() -> [test_group()].
 groups() ->
     [
+        %% Keep the parent serial: children include domain and account mutations.
         {all_non_destructive_tests, [], [
             {group, base_payments},
             % {group, operation_limits_legacy},
             {group, operation_limits},
 
-            payment_risk_score_check,
-            payment_risk_score_check_fail,
-            payment_risk_score_check_timeout,
+            {risk_scores, [parallel], [
+                payment_risk_score_check,
+                payment_risk_score_check_fail,
+                payment_risk_score_check_timeout
+            ]},
 
             invalid_payment_w_deprived_party,
             external_account_posting,
@@ -301,42 +305,49 @@ groups() ->
             {group, proxy_provider_protocol}
         ]},
 
+        %% Serial fences protect shared balance deltas, domain overrides and fault-detector settings.
         {base_payments, [], [
-            invoice_creation_idempotency,
-            invalid_invoice_shop,
-            invalid_invoice_amount,
-            invalid_invoice_currency,
-            invalid_invoice_template_cost,
-            invalid_invoice_template_id,
-            invoice_w_template_idempotency,
-            invoice_w_template_amount_randomization,
-            invoice_w_template,
-            invoice_cancellation,
-            overdue_invoice_cancellation,
-            invoice_cancellation_after_payment_timeout,
-            invalid_payment_amount,
+            {independent_payments, [parallel], [
+                invoice_creation_idempotency,
+                invalid_invoice_shop,
+                invalid_invoice_amount,
+                invalid_invoice_currency,
+                invalid_invoice_template_cost,
+                invalid_invoice_template_id,
+                invoice_w_template_idempotency,
+                invoice_w_template_amount_randomization,
+                invoice_w_template,
+                invoice_cancellation,
+                overdue_invoice_cancellation,
+                invoice_cancellation_after_payment_timeout,
+                invalid_payment_amount,
 
-            payment_success_ruleset,
-            processing_deadline_reached_test,
-            payment_bank_card_category_condition,
-            payment_w_terminal_w_payment_service_success,
-            payment_success_on_second_try,
-            payment_success_with_increased_cost,
+                payment_success_ruleset,
+                processing_deadline_reached_test,
+                payment_bank_card_category_condition,
+                payment_w_terminal_w_payment_service_success,
+                payment_success_on_second_try,
+                payment_success_with_increased_cost
+            ]},
             refund_payment_with_increased_cost,
             payment_success_with_decreased_cost,
             refund_payment_with_decreased_cost,
-            payment_fail_after_silent_callback,
-            payment_session_changed_to_fail,
+            {payment_retries, [parallel], [
+                payment_fail_after_silent_callback,
+                payment_session_changed_to_fail,
 
-            payment_temporary_unavailability_retry_success,
-            payment_temporary_unavailability_too_many_retries,
-            invoice_success_on_third_payment,
+                payment_temporary_unavailability_retry_success,
+                payment_temporary_unavailability_too_many_retries,
+                invoice_success_on_third_payment
+            ]},
             payment_w_misconfigured_routing_failed,
-            payment_capture_failed,
-            payment_capture_retries_exceeded,
-            payment_partial_capture_success,
-            payment_error_in_cancel_session_does_not_cause_payment_failure,
-            payment_error_in_capture_session_does_not_cause_payment_failure,
+            {payment_captures, [parallel], [
+                payment_capture_failed,
+                payment_capture_retries_exceeded,
+                payment_partial_capture_success,
+                payment_error_in_cancel_session_does_not_cause_payment_failure,
+                payment_error_in_capture_session_does_not_cause_payment_failure
+            ]},
 
             payment_success_ruleset_provider_available,
             route_not_found_provider_unavailable,
@@ -361,38 +372,42 @@ groups() ->
             registered_payment_adjustment_success
         ]},
 
+        %% The provision-terms override finishes before cases with private shop accounts start.
         {chargebacks, [], [
             create_chargeback_not_allowed,
             create_chargeback_provision_terms_not_allowed,
-            create_chargeback_inconsistent,
-            create_chargeback_exceeded,
-            create_chargeback_idempotency,
-            cancel_payment_chargeback,
-            cancel_partial_payment_chargeback,
-            cancel_partial_payment_chargeback_exceeded,
-            cancel_payment_chargeback_refund,
-            reject_payment_chargeback_inconsistent,
-            reject_payment_chargeback,
-            reject_payment_chargeback_no_fees,
-            reject_payment_chargeback_new_levy,
-            accept_payment_chargeback_inconsistent,
-            accept_payment_chargeback_exceeded,
-            accept_payment_chargeback_empty_params,
-            accept_payment_chargeback_twice,
-            accept_payment_chargeback_new_body,
-            accept_payment_chargeback_new_levy,
-            reopen_accepted_payment_chargeback_and_cancel_ok,
-            reopen_payment_chargeback_inconsistent,
-            reopen_payment_chargeback_exceeded,
-            reopen_payment_chargeback_cancel,
-            reopen_payment_chargeback_reject,
-            reopen_payment_chargeback_accept,
-            reopen_payment_chargeback_skip_stage_accept,
-            reopen_payment_chargeback_accept_new_levy,
-            reopen_payment_chargeback_arbitration,
-            reopen_payment_chargeback_arbitration_reopen_fails
+            {independent_chargebacks, [parallel], [
+                create_chargeback_inconsistent,
+                create_chargeback_exceeded,
+                create_chargeback_idempotency,
+                cancel_payment_chargeback,
+                cancel_partial_payment_chargeback,
+                cancel_partial_payment_chargeback_exceeded,
+                cancel_payment_chargeback_refund,
+                reject_payment_chargeback_inconsistent,
+                reject_payment_chargeback,
+                reject_payment_chargeback_no_fees,
+                reject_payment_chargeback_new_levy,
+                accept_payment_chargeback_inconsistent,
+                accept_payment_chargeback_exceeded,
+                accept_payment_chargeback_empty_params,
+                accept_payment_chargeback_twice,
+                accept_payment_chargeback_new_body,
+                accept_payment_chargeback_new_levy,
+                reopen_accepted_payment_chargeback_and_cancel_ok,
+                reopen_payment_chargeback_inconsistent,
+                reopen_payment_chargeback_exceeded,
+                reopen_payment_chargeback_cancel,
+                reopen_payment_chargeback_reject,
+                reopen_payment_chargeback_accept,
+                reopen_payment_chargeback_skip_stage_accept,
+                reopen_payment_chargeback_accept_new_levy,
+                reopen_payment_chargeback_arbitration,
+                reopen_payment_chargeback_arbitration_reopen_fails
+            ]}
         ]},
 
+        %% These cases accumulate limits and change their configuration in order.
         {operation_limits, [], [
             payment_limit_success,
             payment_shop_limit_success,
@@ -415,27 +430,29 @@ groups() ->
         {refunds, [], [
             invalid_refund_party_status,
             invalid_refund_shop_status,
-            %%{parallel, [], [
-            retry_temporary_unavailability_refund,
-            payment_refund_idempotency,
-            payment_refund_success,
-            payment_refund_failure,
-            payment_refund_success_after_callback,
-            payment_partial_refunds_success,
-            invalid_amount_payment_partial_refund,
-            invalid_amount_partial_capture_and_refund,
-            invalid_currency_payment_partial_refund,
-            cant_start_simultaneous_partial_refunds,
-            %% ]},
-            deadline_doesnt_affect_payment_refund,
+            {independent_refunds, [parallel], [
+                retry_temporary_unavailability_refund,
+                payment_refund_idempotency,
+                payment_refund_success,
+                payment_refund_failure,
+                payment_refund_success_after_callback,
+                payment_partial_refunds_success,
+                invalid_amount_payment_partial_refund,
+                invalid_amount_partial_capture_and_refund,
+                invalid_currency_payment_partial_refund,
+                cant_start_simultaneous_partial_refunds,
+                deadline_doesnt_affect_payment_refund
+            ]},
             ineligible_payment_partial_refund,
             payment_manual_refund,
-            payment_refund_id_types,
+            {refund_ids, [parallel], [
+                payment_refund_id_types,
 
-            registered_payment_manual_refund_success
+                registered_payment_manual_refund_success
+            ]}
         ]},
 
-        {holds_management, [], [
+        {holds_management, [parallel], [
             payment_hold_cancellation,
             payment_hold_double_cancellation,
             payment_hold_cancellation_captured,
@@ -457,11 +474,11 @@ groups() ->
             invalid_permit_partial_capture_in_provider
         ]},
 
-        {offsite_preauth_payment, [], [
+        {offsite_preauth_payment, [parallel], [
             payment_with_offsite_preauth_success,
             payment_with_offsite_preauth_failed
         ]},
-        {adhoc_repairs, [], [
+        {adhoc_repairs, [parallel], [
             adhoc_repair_working_failed,
             adhoc_repair_failed_succeeded,
             adhoc_repair_force_removal,

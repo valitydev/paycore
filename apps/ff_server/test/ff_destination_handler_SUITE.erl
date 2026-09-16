@@ -33,7 +33,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             create_bank_card_destination_ok,
             create_crypto_wallet_destination_ok,
             create_ripple_wallet_destination_ok,

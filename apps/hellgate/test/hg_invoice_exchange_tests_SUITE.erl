@@ -46,14 +46,19 @@ all() ->
         payment_and_refund_with_increased_cost,
         accept_payment_chargeback_new_body,
         payment_adjustment_success,
-        payment_failed_exchange_rate_unknown,
-        payment_failed_exchange_rate_timeout,
-        payment_failed_exchange_rate_unexpected
+        {group, exchange_failures}
     ].
 
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
-    [].
+    %% The preceding adjustment changes terminal cashflow; failures use separate currency shops.
+    [
+        {exchange_failures, [parallel], [
+            payment_failed_exchange_rate_unknown,
+            payment_failed_exchange_rate_timeout,
+            payment_failed_exchange_rate_unexpected
+        ]}
+    ].
 
 -spec init_per_suite(config()) -> config().
 init_per_suite(C) ->
