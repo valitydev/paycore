@@ -108,6 +108,9 @@ common-test:
 common-test.%: apps/hellgate/test/hg_%_tests_SUITE.erl
 	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
 
+common-test.invoice-cashflow: apps/hellgate/test/hg_invoice_cashflow_SUITE.erl
+	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
+
 cover:
 	$(REBAR) covertool generate
 
