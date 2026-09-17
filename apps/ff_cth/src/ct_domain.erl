@@ -27,6 +27,9 @@
 -export([globals/2]).
 -export([withdrawal_provider/4]).
 -export([withdrawal_provider/5]).
+-export([withdrawal_provider/6]).
+-export([withdrawal_terms/2]).
+-export([withdrawal_provider_with_guarantee/3]).
 -export([withdrawal_terminal/2]).
 -export([withdrawal_terminal/3]).
 
@@ -130,7 +133,18 @@ withdrawal_provider(Ref, ProxyRef, Realm, TermSet) ->
     ?DTP('PaymentInstitutionRealm'),
     ?DTP('ProvisionTermSet') | undefined
 ) -> object().
-withdrawal_provider(AccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
+withdrawal_provider(AccountID, Ref, ProxyRef, Realm, TermSet) ->
+    withdrawal_provider(AccountID, undefined, Ref, ProxyRef, Realm, TermSet).
+
+-spec withdrawal_provider(
+    ff_account:account_id(),
+    ff_account:account_id() | undefined,
+    ?DTP('ProviderRef'),
+    ?DTP('ProxyRef'),
+    ?DTP('PaymentInstitutionRealm'),
+    ?DTP('ProvisionTermSet') | undefined
+) -> object().
+withdrawal_provider(SettlementAccountID, GuaranteeAccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
     {provider, #domain_ProviderObject{
         ref = Ref,
         data = #domain_Provider{
@@ -140,8 +154,51 @@ withdrawal_provider(AccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
             realm = Realm,
             terms = TermSet,
             accounts = #{
-                ?cur(<<"RUB">>) => #domain_ProviderAccount{settlement = AccountID}
+                ?cur(<<"RUB">>) => #domain_ProviderAccount{
+                    settlement = SettlementAccountID,
+                    guarantee = GuaranteeAccountID
+                }
             }
+        }
+    }}.
+
+-spec withdrawal_terms(currency(), [dmsl_domain_thrift:'CashFlowPosting'()]) ->
+    ?DTP('ProvisionTermSet').
+withdrawal_terms(Currency, CashFlow) ->
+    #domain_ProvisionTermSet{
+        wallet = #domain_WalletProvisionTerms{
+            withdrawals = #domain_WithdrawalProvisionTerms{
+                currencies = {value, ?ordset([?cur(Currency)])},
+                cash_limit =
+                    {value,
+                        ?cashrng(
+                            {inclusive, ?cash(0, Currency)},
+                            {exclusive, ?cash(10000000, Currency)}
+                        )},
+                cash_flow = {value, CashFlow}
+            }
+        }
+    }.
+
+-spec withdrawal_provider_with_guarantee(
+    ?DTP('ProviderRef'),
+    ff_account:account_id(),
+    ?DTP('ProvisionTermSet') | undefined
+) -> object().
+withdrawal_provider_with_guarantee(?prv(ID) = Ref, GuaranteeAccountID, TermSet) ->
+    #domain_Provider{accounts = Accounts} = Provider = ct_domain_config:get({provider, Ref}),
+    ProviderAccount = maps:get(?cur(<<"RUB">>), Accounts),
+    {provider, #domain_ProviderObject{
+        ref = Ref,
+        data = Provider#domain_Provider{
+            name = genlib:format("Withdrawal provider #~B", [ID]),
+            terms = TermSet,
+            accounts =
+                Accounts#{
+                    ?cur(<<"RUB">>) => ProviderAccount#domain_ProviderAccount{
+                        guarantee = GuaranteeAccountID
+                    }
+                }
         }
     }}.
 

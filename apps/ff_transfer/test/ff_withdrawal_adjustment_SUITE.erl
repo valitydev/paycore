@@ -2,6 +2,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+-include_lib("ff_cth/include/ct_domain.hrl").
 
 %% Common test API
 
@@ -29,6 +30,7 @@
 -export([adjustment_can_not_change_domain_revision_to_same/1]).
 -export([adjustment_can_not_change_domain_revision_with_failed_status/1]).
 -export([adjustment_can_change_domain_revision_test/1]).
+-export([adjustment_can_change_cash_flow_to_guarantee_account_test/1]).
 -export([adjustment_fail_change_body_succeed_test/1]).
 -export([adjustment_can_change_body_on_succeeded_test/1]).
 -export([adjustment_change_cash_flow_then_change_body_test/1]).
@@ -82,7 +84,8 @@ groups() ->
         {non_parallel, [], [
             adjustment_can_change_domain_revision_test,
             adjustment_change_cash_flow_then_change_body_test,
-            adjustment_change_body_then_change_cash_flow_test
+            adjustment_change_body_then_change_cash_flow_test,
+            adjustment_can_change_cash_flow_to_guarantee_account_test
         ]}
     ].
 
@@ -392,6 +395,50 @@ adjustment_can_change_domain_revision_test(C) ->
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
     ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)).
 
+-spec adjustment_can_change_cash_flow_to_guarantee_account_test(config()) -> test_return().
+adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
+    ProviderID = 1,
+    ProviderFee = 5,
+    ?FINAL_BALANCE(StartProviderAmount, <<"RUB">>) = get_provider_balance(ProviderID, ct_domain_config:head()),
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)),
+    Withdrawal = get_withdrawal(WithdrawalID),
+    #{provider_id := ProviderID} = ff_withdrawal:route(Withdrawal),
+    DomainRevision = ff_withdrawal:domain_revision(Withdrawal),
+    %% provider fee is the lesser of 10 RUB and 5% of 100 RUB
+    ?assertEqual(
+        ?FINAL_BALANCE(StartProviderAmount + ProviderFee, <<"RUB">>),
+        get_provider_balance(ProviderID, DomainRevision)
+    ),
+
+    %% switch the provider fee cash flow from the settlement to the guarantee account
+    GuaranteeRevision = configure_provider_guarantee_account(ProviderID),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_provider_balance(ProviderID, GuaranteeRevision, guarantee)),
+
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_cash_flow, GuaranteeRevision},
+        external_id => <<"true_unique_id">>
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual(succeeded, get_withdrawal_status(WithdrawalID)),
+    assert_adjustment_same_revisions(WithdrawalID, AdjustmentID),
+    %% the old settlement posting is inverted, the new one is applied to the guarantee account
+    ?assertEqual(
+        ?FINAL_BALANCE(StartProviderAmount, <<"RUB">>),
+        get_provider_balance(ProviderID, GuaranteeRevision, settlement)
+    ),
+    ?assertEqual(
+        ?FINAL_BALANCE(ProviderFee, <<"RUB">>),
+        get_provider_balance(ProviderID, GuaranteeRevision, guarantee)
+    ),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)).
+
 -spec adjustment_fail_change_body_succeed_test(config()) -> test_return().
 adjustment_fail_change_body_succeed_test(C) ->
     #{
@@ -639,10 +686,32 @@ get_destination_balance(ID) ->
     get_account_balance(ff_destination:account(Destination)).
 
 get_provider_balance(ProviderID, DomainRevision) ->
+    get_provider_balance(ProviderID, DomainRevision, settlement).
+
+get_provider_balance(ProviderID, DomainRevision, AccountType) ->
     {ok, Provider} = ff_payouts_provider:get(ProviderID, DomainRevision),
     ProviderAccounts = ff_payouts_provider:accounts(Provider),
-    ProviderAccount = maps:get(<<"RUB">>, ProviderAccounts, undefined),
-    get_account_balance(ProviderAccount).
+    ProviderAccount = maps:get(<<"RUB">>, ProviderAccounts, #{}),
+    get_account_balance(maps:get(AccountType, ProviderAccount, undefined)).
+
+configure_provider_guarantee_account(ProviderID) ->
+    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
+    CashFlow = [
+        ?cfpost(
+            {system, settlement},
+            {provider, guarantee},
+            ?fixed(5, <<"RUB">>)
+        )
+    ],
+    ProviderRef = #domain_ProviderRef{id = ProviderID},
+    _ = ct_domain_config:upsert(
+        ct_domain:withdrawal_provider_with_guarantee(
+            ProviderRef,
+            GuaranteeAccountID,
+            ct_domain:withdrawal_terms(<<"RUB">>, CashFlow)
+        )
+    ),
+    ct_domain_config:head().
 
 get_account_balance(Account) ->
     {ok, {Amounts, Currency}} = ff_accounting:balance(Account),

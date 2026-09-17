@@ -50,6 +50,7 @@
 -export([provider_terminal_terms_merging_test/1]).
 -export([force_status_change_test/1]).
 -export([withdrawal_without_termset_test/1]).
+-export([provider_guarantee_account_test/1]).
 
 %% Internal types
 
@@ -122,7 +123,8 @@ groups() ->
             provider_terminal_terms_merging_test
         ]},
         {non_parallel, [], [
-            use_quote_revisions_test
+            use_quote_revisions_test,
+            provider_guarantee_account_test
         ]},
         {withdrawal_repair, [], [
             force_status_change_test
@@ -192,6 +194,23 @@ end_per_group(_, _) ->
 %%
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
+init_per_testcase(provider_guarantee_account_test = Name, C) ->
+    C1 = ct_helper:makeup_cfg(
+        [
+            ct_helper:test_case_name(Name),
+            ct_helper:woody_ctx()
+        ],
+        C
+    ),
+    ok = ct_helper:set_context(C1),
+    WasRevision = ct_domain_config:head(),
+    {SettlementAccountID, GuaranteeAccountID} = configure_provider_guarantee_account(),
+    [
+        {domain_revision, WasRevision},
+        {provider_settlement_account_id, SettlementAccountID},
+        {provider_guarantee_account_id, GuaranteeAccountID}
+        | C1
+    ];
 init_per_testcase(Name, C) ->
     C1 = ct_helper:makeup_cfg(
         [
@@ -204,6 +223,15 @@ init_per_testcase(Name, C) ->
     C1.
 
 -spec end_per_testcase(test_case_name(), config()) -> _.
+end_per_testcase(provider_guarantee_account_test, C) ->
+    _ =
+        case lists:keyfind(domain_revision, 1, C) of
+            {domain_revision, WasRevision} ->
+                _ = ct_domain_config:reset(WasRevision);
+            false ->
+                ok
+        end,
+    ok = ct_helper:unset_context();
 end_per_testcase(_Name, _C) ->
     ok = ct_helper:unset_context().
 
@@ -800,6 +828,56 @@ withdrawal_without_termset_test(C) ->
     ),
     ok.
 
+-spec provider_guarantee_account_test(config()) -> test_return().
+provider_guarantee_account_test(C) ->
+    Cash = {300, <<"RUB">>},
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment(Cash, C),
+    GuaranteeAccountID = ct_helper:cfg(provider_guarantee_account_id, C),
+    SettlementAccountID = ct_helper:cfg(provider_settlement_account_id, C),
+    %% the settlement account is shared between the suite cases, so only its change is asserted
+    SettlementBefore = get_account_amount(SettlementAccountID),
+    GuaranteeBefore = get_account_amount(GuaranteeAccountID),
+    WithdrawalID = genlib:bsuuid(),
+    WithdrawalParams = #{
+        id => WithdrawalID,
+        destination_id => DestinationID,
+        wallet_id => WalletID,
+        party_id => PartyID,
+        body => Cash,
+        external_id => WithdrawalID
+    },
+    ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
+    ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID)),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(240, <<"RUB">>), get_destination_balance(DestinationID)),
+
+    Withdrawal = get_withdrawal(WithdrawalID),
+    #{
+        postings := Postings
+    } = ff_withdrawal:effective_final_cash_flow(Withdrawal),
+    %% the provider fee is the lesser of 10 RUB and 5% of 300 RUB, posted to the guarantee account
+    [
+        #{
+            sender := #{type := {system, settlement}},
+            receiver := #{type := {provider, guarantee}, account := ReceiverAccount},
+            volume := Volume
+        }
+    ] = [
+        P
+     || #{receiver := #{type := {provider, guarantee}}} = P <- Postings
+    ],
+    ?assertEqual(GuaranteeAccountID, maps:get(account_id, ReceiverAccount)),
+    ?assertEqual({10, <<"RUB">>}, Volume),
+
+    %% the provider fee is credited to the guarantee account only, the settlement one is left intact
+    ?assertEqual(GuaranteeBefore + 10, get_account_amount(GuaranteeAccountID)),
+    ?assertEqual(SettlementBefore, get_account_amount(SettlementAccountID)),
+    ok.
+
 -spec unknown_test(config()) -> test_return().
 unknown_test(_C) ->
     WithdrawalID = <<"unknown_withdrawal">>,
@@ -1034,6 +1112,50 @@ await_wallet_balance({Amount, Currency}, ID) ->
 
 get_wallet_balance(ID) ->
     ct_objects:get_wallet_balance(ID).
+
+get_destination_balance(ID) ->
+    {ok, Machine} = ff_destination_machine:get(ID),
+    Destination = ff_destination_machine:destination(Machine),
+    get_account_balance(ff_destination:account(Destination)).
+
+get_account_balance(AccountID) when is_integer(AccountID) ->
+    {ok, {Amounts, Currency}} = ff_accounting:balance(AccountID, <<"RUB">>),
+    {ff_indef:current(Amounts), ff_indef:to_range(Amounts), Currency};
+get_account_balance(Account) ->
+    {ok, {Amounts, Currency}} = ff_accounting:balance(Account),
+    {ff_indef:current(Amounts), ff_indef:to_range(Amounts), Currency}.
+
+get_account_amount(AccountID) ->
+    {Amount, _Range, _Currency} = get_account_balance(AccountID),
+    Amount.
+
+configure_provider_guarantee_account() ->
+    ProviderID = 17,
+    {ok, Provider} = ff_payouts_provider:get(ProviderID, ct_domain_config:head()),
+    ProviderAccounts = ff_payouts_provider:accounts(Provider),
+    #{settlement := SettlementAccount} = maps:get(<<"RUB">>, ProviderAccounts),
+    SettlementAccountID = ff_account:account_id(SettlementAccount),
+    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
+    CashFlow = [
+        ?cfpost(
+            {system, settlement},
+            {provider, guarantee},
+            {product,
+                {min_of,
+                    ?ordset([
+                        ?fixed(10, <<"RUB">>),
+                        ?share(5, 100, operation_amount, round_half_towards_zero)
+                    ])}}
+        )
+    ],
+    _ = ct_domain_config:upsert(
+        ct_domain:withdrawal_provider_with_guarantee(
+            ?prv(ProviderID),
+            GuaranteeAccountID,
+            ct_domain:withdrawal_terms(<<"RUB">>, CashFlow)
+        )
+    ),
+    {SettlementAccountID, GuaranteeAccountID}.
 
 create_crypto_destination(PartyID, _C) ->
     ID = genlib:bsuuid(),

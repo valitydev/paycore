@@ -9,6 +9,7 @@
 -include_lib("fistful_proto/include/fistful_fistful_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_cashflow_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_account_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_transfer_thrift.hrl").
 -include_lib("ff_cth/include/ct_domain.hrl").
 
@@ -48,6 +49,7 @@
 -export([create_adjustment_invalid_operation_amount_error_test/1]).
 -export([create_adjustment_change_body_ok_test/1]).
 -export([withdrawal_state_content_test/1]).
+-export([withdrawal_with_provider_guarantee_account_test/1]).
 -export([trace_withdrawal_test/1]).
 -export([create_withdrawal_with_changed_body_test/1]).
 
@@ -98,7 +100,8 @@ groups() ->
             create_adjustment_already_has_body_error_test,
             create_adjustment_invalid_operation_amount_error_test,
             create_adjustment_change_body_ok_test,
-            withdrawal_state_content_test
+            withdrawal_state_content_test,
+            withdrawal_with_provider_guarantee_account_test
         ]}
     ].
 
@@ -129,12 +132,31 @@ end_per_group(_, _) ->
 %%
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
+init_per_testcase(withdrawal_with_provider_guarantee_account_test = Name, C) ->
+    C1 = ct_helper:makeup_cfg([ct_helper:test_case_name(Name), ct_helper:woody_ctx()], C),
+    ok = ct_helper:set_context(C1),
+    WasRevision = ct_domain_config:head(),
+    GuaranteeAccountID = configure_provider_guarantee_account(),
+    [
+        {domain_revision, WasRevision},
+        {provider_guarantee_account_id, GuaranteeAccountID}
+        | C1
+    ];
 init_per_testcase(Name, C) ->
     C1 = ct_helper:makeup_cfg([ct_helper:test_case_name(Name), ct_helper:woody_ctx()], C),
     ok = ct_helper:set_context(C1),
     C1.
 
 -spec end_per_testcase(test_case_name(), config()) -> _.
+end_per_testcase(withdrawal_with_provider_guarantee_account_test, C) ->
+    _ =
+        case lists:keyfind(domain_revision, 1, C) of
+            {domain_revision, WasRevision} ->
+                _ = ct_domain_config:reset(WasRevision);
+            false ->
+                ok
+        end,
+    ok = ct_helper:unset_context();
 end_per_testcase(_Name, _C) ->
     ok = ct_helper:unset_context().
 
@@ -936,6 +958,67 @@ withdrawal_state_content_test(_C) ->
     ?assertNotEqual(undefined, WithdrawalState#wthd_WithdrawalState.effective_route),
     ?assertNotEqual(undefined, WithdrawalState#wthd_WithdrawalState.status).
 
+-spec withdrawal_with_provider_guarantee_account_test(config()) -> test_return().
+withdrawal_with_provider_guarantee_account_test(C) ->
+    Cash = make_cash({100, <<"RUB">>}),
+    GuaranteeAccountID = ct_helper:cfg(provider_guarantee_account_id, C),
+    Ctx = ct_objects:build_default_ctx(),
+    #{withdrawal_id := WithdrawalID} = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+
+    %% the provider fee is the lesser of 10 RUB and 5% of 100 RUB, posted to the guarantee account
+    {ok, #wthd_WithdrawalState{
+        effective_final_cash_flow = #cashflow_FinalCashFlow{postings = Postings}
+    }} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
+    [
+        #cashflow_FinalCashFlowPosting{
+            source = #cashflow_FinalCashFlowAccount{account_type = {system, settlement}},
+            destination = #cashflow_FinalCashFlowAccount{
+                account_type = {provider, guarantee},
+                account = #'account_Account'{account_id = GuaranteeAccountID}
+            },
+            volume = #fistful_base_Cash{amount = 5, currency = #'fistful_base_CurrencyRef'{symbolic_code = <<"RUB">>}}
+        }
+    ] = [
+        P
+     || #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        } = P <-
+            Postings
+    ],
+
+    %% the same posting must survive in the serialized transfer event
+    Range = {undefined, undefined},
+    EncodedRange = ff_codec:marshal(event_range, Range),
+    {ok, Events} = call_withdrawal('GetEvents', {WithdrawalID, EncodedRange}),
+    [CreatedEvent] = [
+        E
+     || #wthd_Event{change = {transfer, #wthd_TransferChange{payload = {created, _}}}} = E <- Events
+    ],
+    #wthd_Event{
+        change =
+            {transfer, #wthd_TransferChange{
+                payload =
+                    {created, #transfer_CreatedChange{
+                        transfer = #transfer_Transfer{
+                            cashflow = #cashflow_FinalCashFlow{postings = EventPostings}
+                        }
+                    }}
+            }}
+    } = CreatedEvent,
+    [
+        #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        }
+    ] = [
+        P
+     || #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        } = P <-
+            EventPostings
+    ],
+    ok.
+
 %%  Internals
 
 call_withdrawal_session(Fun, Args) ->
@@ -969,3 +1052,27 @@ make_cash({Amount, Currency}) ->
         amount = Amount,
         currency = #'fistful_base_CurrencyRef'{symbolic_code = Currency}
     }.
+
+configure_provider_guarantee_account() ->
+    ProviderID = 1,
+    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
+    CashFlow = [
+        ?cfpost(
+            {system, settlement},
+            {provider, guarantee},
+            {product,
+                {min_of,
+                    ?ordset([
+                        ?fixed(10, <<"RUB">>),
+                        ?share(5, 100, operation_amount, round_half_towards_zero)
+                    ])}}
+        )
+    ],
+    _ = ct_domain_config:upsert(
+        ct_domain:withdrawal_provider_with_guarantee(
+            ?prv(ProviderID),
+            GuaranteeAccountID,
+            ct_domain:withdrawal_terms(<<"RUB">>, CashFlow)
+        )
+    ),
+    GuaranteeAccountID.

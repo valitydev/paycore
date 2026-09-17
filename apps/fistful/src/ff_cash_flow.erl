@@ -77,7 +77,8 @@
     | {wallet, receiver_destination}
     | {system, settlement}
     | {system, subagent}
-    | {provider, settlement}.
+    | {provider, settlement}
+    | {provider, guarantee}.
 
 -type final_account() :: #{
     account := account(),

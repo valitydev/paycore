@@ -1122,6 +1122,8 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
     {ok, Provider} = ff_payouts_provider:get(ProviderID, DomainRevision),
     ProviderAccounts = ff_payouts_provider:accounts(Provider),
     ProviderAccount = maps:get(CurrencyID, ProviderAccounts, undefined),
+    ProviderSettlementAccount = maps:get(settlement, ProviderAccount, undefined),
+    ProviderGuaranteeAccount = maps:get(guarantee, ProviderAccount, undefined),
 
     #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
     {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
@@ -1144,7 +1146,8 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
         {wallet, receiver_destination} => DestinationAccount,
         {system, settlement} => SettlementAccount,
         {system, subagent} => SubagentAccount,
-        {provider, settlement} => ProviderAccount
+        {provider, settlement} => ProviderSettlementAccount,
+        {provider, guarantee} => ProviderGuaranteeAccount
     }),
     {ok, FinalCashFlow} = ff_cash_flow:finalize(CashFlowPlan, Accounts, Constants),
 
