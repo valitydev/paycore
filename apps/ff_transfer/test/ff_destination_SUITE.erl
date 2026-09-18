@@ -35,7 +35,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             create_destination_ok_test,
             create_destination_party_notfound_fail_test,
             create_destination_currency_notfound_fail_test,

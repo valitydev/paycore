@@ -54,15 +54,20 @@ all() ->
         {group, default}
     ].
 
--spec groups() -> [{group_name(), [test_case_name()]}].
+-type test_group() :: {group_name(), list(), [test_case_name() | test_group()]}.
+
+-spec groups() -> [test_group()].
 groups() ->
     [
-        {default, [
-            allow_route_test,
-            not_allow_route_test,
-            not_reduced_allow_route_test,
-            not_global_allow_route_test,
-            adapter_unreachable_route_test,
+        %% Retryable-error cases replace application env and must stay serial.
+        {default, [], [
+            {independent_routes, [parallel], [
+                allow_route_test,
+                not_allow_route_test,
+                not_reduced_allow_route_test,
+                not_global_allow_route_test,
+                adapter_unreachable_route_test
+            ]},
             adapter_unreachable_route_retryable_test,
             adapter_unreachable_quote_test,
             attempt_limit_test,

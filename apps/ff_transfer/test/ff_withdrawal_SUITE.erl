@@ -94,7 +94,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             session_fail_test,
             session_repair_test,
             quote_fail_test,
@@ -121,6 +121,7 @@ groups() ->
             provider_callback_test,
             provider_terminal_terms_merging_test
         ]},
+        %% Domain revision changes must run after all default cases finish.
         {non_parallel, [], [
             use_quote_revisions_test
         ]},

@@ -78,7 +78,9 @@ all() ->
         {group, domain_affecting_operations}
     ].
 
--spec groups() -> [{group_name(), list(), [test_case_name()]}].
+-type test_group() :: {group_name(), list(), [test_case_name() | test_group()]}.
+
+-spec groups() -> [test_group()].
 groups() ->
     [
         {basic_operations, [parallel], [
@@ -95,15 +97,20 @@ groups() ->
         {domain_affecting_operations, [], [
             not_permitted_recurrent_test
         ]},
+        %% Cascade fixture changes and their cleanup remain serial between parallel groups.
         {cascade_tokens, [], [
-            customer_id_stored_test,
-            customer_id_stored_no_parent_test,
-            different_customer_id_test,
-            regular_payment_saves_to_cubasty_test,
-            cascade_tokens_filter_success_test,
+            {customer_tokens, [parallel], [
+                customer_id_stored_test,
+                customer_id_stored_no_parent_test,
+                different_customer_id_test,
+                regular_payment_saves_to_cubasty_test,
+                cascade_tokens_filter_success_test
+            ]},
             cascade_recurrent_payment_success_test,
-            make_recurrent_saves_token_without_customer_test,
-            recurrent_no_customer_bankcard_lookup_test,
+            {tokens_without_customer, [parallel], [
+                make_recurrent_saves_token_without_customer_test,
+                recurrent_no_customer_bankcard_lookup_test
+            ]},
             new_client_old_card_cascade_test,
             cascade_exhaustion_test,
             cascade_routing_filter_test

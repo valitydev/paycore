@@ -36,7 +36,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             get_missing_fails,
             deposit_withdrawal_ok,
             deposit_quote_withdrawal_ok,

@@ -97,7 +97,8 @@ start_app(dmt_client = AppName) ->
             % milliseconds
             {cache_update_interval, 500},
             {max_cache_size, #{
-                elements => 10,
+                %% Parallel cases must retain their in-flight domain lookups until readers consume them.
+                elements => 1000,
                 % 50Mb
                 memory => 52428800
             }},
