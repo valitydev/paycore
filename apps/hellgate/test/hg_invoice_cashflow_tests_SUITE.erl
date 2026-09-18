@@ -222,6 +222,8 @@ payment_adjustment_to_provider_guarantee_account(C) ->
     [_] = lookup_posting(CashFlow, {provider, settlement}, {merchant, settlement}),
     assert_route(Route),
 
+    #domain_ProviderAccount{guarantee = GuaranteeAccountID} = provider_rub_account(),
+    #{own_amount := GuaranteeBalanceBefore} = hg_accounting:get_balance(GuaranteeAccountID),
     ok = configure_provider_guarantee_cashflow(),
     Params = #payproc_InvoicePaymentAdjustmentParams{
         reason = <<"switch to provider guarantee">>,
@@ -242,14 +244,13 @@ payment_adjustment_to_provider_guarantee_account(C) ->
 
     #domain_InvoicePaymentAdjustment{new_cash_flow = NewCashFlow} =
         hg_client_invoicing:get_payment_adjustment(InvoiceID, PaymentID, AdjustmentID, Client),
-    #domain_ProviderAccount{guarantee = GuaranteeAccountID} = provider_rub_account(),
     [
         #domain_FinalCashFlowPosting{
             source = #domain_FinalCashFlowAccount{account_id = GuaranteeAccountID}
         }
     ] = lookup_posting(NewCashFlow, {provider, guarantee}, {merchant, settlement}),
     #{own_amount := GuaranteeBalance} = hg_accounting:get_balance(GuaranteeAccountID),
-    ?assertEqual(-Amount, GuaranteeBalance),
+    ?assertEqual(GuaranteeBalanceBefore - Amount, GuaranteeBalance),
     ok.
 
 %% Internals

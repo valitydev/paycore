@@ -398,10 +398,11 @@ adjustment_can_change_domain_revision_test(C) ->
 -spec adjustment_can_change_cash_flow_to_guarantee_account_test(config()) -> test_return().
 adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
     ProviderID = 1,
-    %% provider 1 posts a fixed 2 RUB fee to settlement
     InitialProviderFee = 2,
     AdjustedProviderFee = 5,
     ?FINAL_BALANCE(StartProviderAmount, <<"RUB">>) = get_provider_balance(ProviderID, ct_domain_config:head()),
+    %% pin withdrawal to a domain revision with a fixed 2 RUB fee on settlement
+    _SettlementRevision = configure_provider_settlement_cashflow(ProviderID),
     #{
         withdrawal_id := WithdrawalID,
         wallet_id := WalletID,
@@ -418,7 +419,7 @@ adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
     ),
 
     %% switch the provider fee cash flow from the settlement to the guarantee account
-    GuaranteeRevision = configure_provider_guarantee_cashflow(ProviderID),
+    GuaranteeRevision = configure_provider_guarantee_cashflow(ProviderID, AdjustedProviderFee),
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_provider_balance(ProviderID, GuaranteeRevision, guarantee)),
 
     AdjustmentID = process_adjustment(WithdrawalID, #{
@@ -695,14 +696,25 @@ get_provider_balance(ProviderID, DomainRevision, AccountType) ->
     ProviderAccount = maps:get(<<"RUB">>, ProviderAccounts, #{}),
     get_account_balance(maps:get(AccountType, ProviderAccount, undefined)).
 
-configure_provider_guarantee_cashflow(ProviderID) ->
-    CashFlow = [
+configure_provider_settlement_cashflow(ProviderID) ->
+    configure_provider_cashflow(ProviderID, [
+        ?cfpost(
+            {system, settlement},
+            {provider, settlement},
+            ?fixed(2, <<"RUB">>)
+        )
+    ]).
+
+configure_provider_guarantee_cashflow(ProviderID, ProviderFee) ->
+    configure_provider_cashflow(ProviderID, [
         ?cfpost(
             {system, settlement},
             {provider, guarantee},
-            ?fixed(5, <<"RUB">>)
+            ?fixed(ProviderFee, <<"RUB">>)
         )
-    ],
+    ]).
+
+configure_provider_cashflow(ProviderID, CashFlow) ->
     ProviderRef = #domain_ProviderRef{id = ProviderID},
     #domain_Provider{} = Provider = ct_domain_config:get({provider, ProviderRef}),
     _ = ct_domain_config:upsert(
