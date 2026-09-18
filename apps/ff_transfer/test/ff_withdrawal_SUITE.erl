@@ -194,23 +194,6 @@ end_per_group(_, _) ->
 %%
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
-init_per_testcase(provider_guarantee_account_test = Name, C) ->
-    C1 = ct_helper:makeup_cfg(
-        [
-            ct_helper:test_case_name(Name),
-            ct_helper:woody_ctx()
-        ],
-        C
-    ),
-    ok = ct_helper:set_context(C1),
-    WasRevision = ct_domain_config:head(),
-    {SettlementAccountID, GuaranteeAccountID} = configure_provider_guarantee_account(),
-    [
-        {domain_revision, WasRevision},
-        {provider_settlement_account_id, SettlementAccountID},
-        {provider_guarantee_account_id, GuaranteeAccountID}
-        | C1
-    ];
 init_per_testcase(Name, C) ->
     C1 = ct_helper:makeup_cfg(
         [
@@ -223,15 +206,6 @@ init_per_testcase(Name, C) ->
     C1.
 
 -spec end_per_testcase(test_case_name(), config()) -> _.
-end_per_testcase(provider_guarantee_account_test, C) ->
-    _ =
-        case lists:keyfind(domain_revision, 1, C) of
-            {domain_revision, WasRevision} ->
-                _ = ct_domain_config:reset(WasRevision);
-            false ->
-                ok
-        end,
-    ok = ct_helper:unset_context();
 end_per_testcase(_Name, _C) ->
     ok = ct_helper:unset_context().
 
@@ -830,14 +804,14 @@ withdrawal_without_termset_test(C) ->
 
 -spec provider_guarantee_account_test(config()) -> test_return().
 provider_guarantee_account_test(C) ->
-    Cash = {300, <<"RUB">>},
+    %% 800 RUB is routed to provider 18 / terminal 1801, whose terms post the fee to guarantee
+    Cash = {800, <<"RUB">>},
     #{
         wallet_id := WalletID,
         destination_id := DestinationID,
         party_id := PartyID
     } = prepare_standard_environment(Cash, C),
-    GuaranteeAccountID = ct_helper:cfg(provider_guarantee_account_id, C),
-    SettlementAccountID = ct_helper:cfg(provider_settlement_account_id, C),
+    {SettlementAccountID, GuaranteeAccountID} = provider_account_ids(18),
     %% the settlement account is shared between the suite cases, so only its change is asserted
     SettlementBefore = get_account_amount(SettlementAccountID),
     GuaranteeBefore = get_account_amount(GuaranteeAccountID),
@@ -853,13 +827,13 @@ provider_guarantee_account_test(C) ->
     ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
     ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID)),
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
-    ?assertEqual(?FINAL_BALANCE(240, <<"RUB">>), get_destination_balance(DestinationID)),
+    ?assertEqual(?FINAL_BALANCE(640, <<"RUB">>), get_destination_balance(DestinationID)),
 
     Withdrawal = get_withdrawal(WithdrawalID),
     #{
         postings := Postings
     } = ff_withdrawal:effective_final_cash_flow(Withdrawal),
-    %% the provider fee is the lesser of 10 RUB and 5% of 300 RUB, posted to the guarantee account
+    %% the provider fee is the lesser of 10 RUB and 5% of 800 RUB, posted to the guarantee account
     [
         #{
             sender := #{type := {system, settlement}},
@@ -1129,33 +1103,11 @@ get_account_amount(AccountID) ->
     {Amount, _Range, _Currency} = get_account_balance(AccountID),
     Amount.
 
-configure_provider_guarantee_account() ->
-    ProviderID = 17,
+provider_account_ids(ProviderID) ->
     {ok, Provider} = ff_payouts_provider:get(ProviderID, ct_domain_config:head()),
-    ProviderAccounts = ff_payouts_provider:accounts(Provider),
-    #{settlement := SettlementAccount} = maps:get(<<"RUB">>, ProviderAccounts),
-    SettlementAccountID = ff_account:account_id(SettlementAccount),
-    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
-    CashFlow = [
-        ?cfpost(
-            {system, settlement},
-            {provider, guarantee},
-            {product,
-                {min_of,
-                    ?ordset([
-                        ?fixed(10, <<"RUB">>),
-                        ?share(5, 100, operation_amount, round_half_towards_zero)
-                    ])}}
-        )
-    ],
-    _ = ct_domain_config:upsert(
-        ct_domain:withdrawal_provider_with_guarantee(
-            ?prv(ProviderID),
-            GuaranteeAccountID,
-            ct_domain:withdrawal_terms(<<"RUB">>, CashFlow)
-        )
-    ),
-    {SettlementAccountID, GuaranteeAccountID}.
+    #{settlement := SettlementAccount, guarantee := GuaranteeAccount} =
+        maps:get(<<"RUB">>, ff_payouts_provider:accounts(Provider)),
+    {ff_account:account_id(SettlementAccount), ff_account:account_id(GuaranteeAccount)}.
 
 create_crypto_destination(PartyID, _C) ->
     ID = genlib:bsuuid(),

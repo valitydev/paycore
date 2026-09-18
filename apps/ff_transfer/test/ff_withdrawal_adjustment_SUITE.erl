@@ -398,7 +398,9 @@ adjustment_can_change_domain_revision_test(C) ->
 -spec adjustment_can_change_cash_flow_to_guarantee_account_test(config()) -> test_return().
 adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
     ProviderID = 1,
-    ProviderFee = 5,
+    %% provider 1 posts a fixed 2 RUB fee to settlement
+    InitialProviderFee = 2,
+    AdjustedProviderFee = 5,
     ?FINAL_BALANCE(StartProviderAmount, <<"RUB">>) = get_provider_balance(ProviderID, ct_domain_config:head()),
     #{
         withdrawal_id := WithdrawalID,
@@ -410,14 +412,13 @@ adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
     Withdrawal = get_withdrawal(WithdrawalID),
     #{provider_id := ProviderID} = ff_withdrawal:route(Withdrawal),
     DomainRevision = ff_withdrawal:domain_revision(Withdrawal),
-    %% provider fee is the lesser of 10 RUB and 5% of 100 RUB
     ?assertEqual(
-        ?FINAL_BALANCE(StartProviderAmount + ProviderFee, <<"RUB">>),
+        ?FINAL_BALANCE(StartProviderAmount + InitialProviderFee, <<"RUB">>),
         get_provider_balance(ProviderID, DomainRevision)
     ),
 
     %% switch the provider fee cash flow from the settlement to the guarantee account
-    GuaranteeRevision = configure_provider_guarantee_account(ProviderID),
+    GuaranteeRevision = configure_provider_guarantee_cashflow(ProviderID),
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_provider_balance(ProviderID, GuaranteeRevision, guarantee)),
 
     AdjustmentID = process_adjustment(WithdrawalID, #{
@@ -433,7 +434,7 @@ adjustment_can_change_cash_flow_to_guarantee_account_test(C) ->
         get_provider_balance(ProviderID, GuaranteeRevision, settlement)
     ),
     ?assertEqual(
-        ?FINAL_BALANCE(ProviderFee, <<"RUB">>),
+        ?FINAL_BALANCE(AdjustedProviderFee, <<"RUB">>),
         get_provider_balance(ProviderID, GuaranteeRevision, guarantee)
     ),
     ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
@@ -694,8 +695,7 @@ get_provider_balance(ProviderID, DomainRevision, AccountType) ->
     ProviderAccount = maps:get(<<"RUB">>, ProviderAccounts, #{}),
     get_account_balance(maps:get(AccountType, ProviderAccount, undefined)).
 
-configure_provider_guarantee_account(ProviderID) ->
-    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
+configure_provider_guarantee_cashflow(ProviderID) ->
     CashFlow = [
         ?cfpost(
             {system, settlement},
@@ -704,12 +704,27 @@ configure_provider_guarantee_account(ProviderID) ->
         )
     ],
     ProviderRef = #domain_ProviderRef{id = ProviderID},
+    #domain_Provider{} = Provider = ct_domain_config:get({provider, ProviderRef}),
     _ = ct_domain_config:upsert(
-        ct_domain:withdrawal_provider_with_guarantee(
-            ProviderRef,
-            GuaranteeAccountID,
-            ct_domain:withdrawal_terms(<<"RUB">>, CashFlow)
-        )
+        {provider, #domain_ProviderObject{
+            ref = ProviderRef,
+            data = Provider#domain_Provider{
+                terms = #domain_ProvisionTermSet{
+                    wallet = #domain_WalletProvisionTerms{
+                        withdrawals = #domain_WithdrawalProvisionTerms{
+                            currencies = {value, ?ordset([?cur(<<"RUB">>)])},
+                            cash_limit =
+                                {value,
+                                    ?cashrng(
+                                        {inclusive, ?cash(0, <<"RUB">>)},
+                                        {exclusive, ?cash(10000000, <<"RUB">>)}
+                                    )},
+                            cash_flow = {value, CashFlow}
+                        }
+                    }
+                }
+            }
+        }}
     ),
     ct_domain_config:head().
 

@@ -25,6 +25,7 @@
 
 -export_type([id/0]).
 -export_type([provider/0]).
+-export_type([provider_account/0]).
 -export_type([provider_ref/0]).
 -export_type([provision_terms/0]).
 -export_type([domain_revision/0]).

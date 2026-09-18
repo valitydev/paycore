@@ -1121,7 +1121,7 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
     #{provider_id := ProviderID} = Route,
     {ok, Provider} = ff_payouts_provider:get(ProviderID, DomainRevision),
     ProviderAccounts = ff_payouts_provider:accounts(Provider),
-    ProviderAccount = maps:get(CurrencyID, ProviderAccounts, undefined),
+    ProviderAccount = maps:get(CurrencyID, ProviderAccounts, #{}),
     ProviderSettlementAccount = maps:get(settlement, ProviderAccount, undefined),
     ProviderGuaranteeAccount = maps:get(guarantee, ProviderAccount, undefined),
 

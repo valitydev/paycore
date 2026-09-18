@@ -105,7 +105,7 @@ eunit:
 common-test:
 	$(REBAR) ct --cover
 
-common-hg-test.%: apps/hellgate/test/hg_%_SUITE.erl
+common-test.%: apps/hellgate/test/hg_%_tests_SUITE.erl
 	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
 
 common-ff-server-test.%: apps/ff_server/test/ff_%_SUITE.erl

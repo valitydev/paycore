@@ -1,4 +1,4 @@
--module(hg_invoice_cashflow_SUITE).
+-module(hg_invoice_cashflow_tests_SUITE).
 
 -include_lib("hellgate/include/hg_invoice.hrl").
 -include_lib("hellgate/include/payment_events.hrl").
@@ -19,7 +19,8 @@
 %% Tests
 -export([payment_with_provider_settlement_account/1]).
 -export([payment_with_provider_guarantee_account/1]).
--export([payment_undefined_provider_guarantee_accout/1]).
+-export([payment_undefined_provider_guarantee_account/1]).
+-export([payment_adjustment_to_provider_guarantee_account/1]).
 
 -type config() :: hg_ct_helper:config().
 -type test_case_name() :: hg_ct_helper:test_case_name().
@@ -40,7 +41,8 @@ all() ->
     [
         payment_with_provider_settlement_account,
         payment_with_provider_guarantee_account,
-        payment_undefined_provider_guarantee_accout
+        payment_undefined_provider_guarantee_account,
+        payment_adjustment_to_provider_guarantee_account
     ].
 
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
@@ -113,9 +115,10 @@ init_per_testcase(Name, C) ->
     C1 = [{client, Client} | C],
     case Name of
         payment_with_provider_guarantee_account ->
-            GuaranteeAccountID = configure_provider_guarantee_account(),
-            [{provider_guarantee_account_id, GuaranteeAccountID} | C1];
-        payment_undefined_provider_guarantee_accout ->
+            ok = configure_provider_guarantee_cashflow(),
+            C1;
+        payment_undefined_provider_guarantee_account ->
+            ok = unset_provider_guarantee_account(),
             ok = configure_provider_guarantee_cashflow(),
             C1;
         _ ->
@@ -133,9 +136,7 @@ end_per_testcase(_, C) ->
 payment_with_provider_settlement_account(C) ->
     Amount = 42000,
     {CashFlow, Route} = execute_payment(Amount, C),
-    #domain_Provider{accounts = ProviderAccounts} = hg_domain:get({provider, ?prv(1)}),
-    #domain_ProviderAccount{settlement = SettlementAccountID, guarantee = undefined} =
-        maps:get(?cur(<<"RUB">>), ProviderAccounts),
+    #domain_ProviderAccount{settlement = SettlementAccountID} = provider_rub_account(),
     [
         #domain_FinalCashFlowPosting{
             source = #domain_FinalCashFlowAccount{
@@ -158,7 +159,7 @@ payment_with_provider_settlement_account(C) ->
 -spec payment_with_provider_guarantee_account(config()) -> test_return().
 payment_with_provider_guarantee_account(C) ->
     Amount = 42000,
-    GuaranteeAccountID = cfg(provider_guarantee_account_id, C),
+    #domain_ProviderAccount{guarantee = GuaranteeAccountID} = provider_rub_account(),
     {CashFlow, Route} = execute_payment(Amount, C),
     [
         #domain_FinalCashFlowPosting{
@@ -181,11 +182,10 @@ payment_with_provider_guarantee_account(C) ->
     assert_route(Route),
     ok.
 
--spec payment_undefined_provider_guarantee_accout(config()) -> test_return().
-payment_undefined_provider_guarantee_accout(C) ->
+-spec payment_undefined_provider_guarantee_account(config()) -> test_return().
+payment_undefined_provider_guarantee_account(C) ->
     Client = cfg(client, C),
-    #domain_Provider{accounts = ProviderAccounts} = hg_domain:get({provider, ?prv(1)}),
-    #domain_ProviderAccount{guarantee = undefined} = maps:get(?cur(<<"RUB">>), ProviderAccounts),
+    #domain_ProviderAccount{guarantee = undefined} = provider_rub_account(),
 
     InvoiceID = hg_invoice_helper:start_invoice(
         <<"undefined provider guarantee account">>, hg_invoice_helper:make_due_date(10), 42000, C
@@ -195,14 +195,61 @@ payment_undefined_provider_guarantee_accout(C) ->
     Route = hg_invoice_helper:start_payment_ev(InvoiceID, Client),
     assert_route(Route),
 
-    %% The configured cash flow cannot be finalized without the provider guarantee account.
-    %% Cash-flow building fails with a misconfiguration error and emits no further payment event.
-    timeout = hg_invoice_helper:next_change(InvoiceID, 2000, Client),
+    ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
+        hg_invoice_helper:next_change(InvoiceID, Client),
+    #domain_Failure{
+        code = <<"misconfiguration">>,
+        sub = #domain_SubFailure{code = <<"cash_flow">>}
+    } = Failure,
     #payproc_InvoicePayment{
-        payment = #domain_InvoicePayment{status = ?pending()},
+        payment = #domain_InvoicePayment{status = ?failed({failure, Failure})},
         route = Route,
         cash_flow = undefined
     } = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ok.
+
+-spec payment_adjustment_to_provider_guarantee_account(config()) -> test_return().
+payment_adjustment_to_provider_guarantee_account(C) ->
+    Amount = 42000,
+    Client = cfg(client, C),
+    InvoiceID = hg_invoice_helper:start_invoice(
+        <<"provider cashflow adjustment">>, hg_invoice_helper:make_due_date(10), Amount, C
+    ),
+    PaymentParams = hg_invoice_helper:make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    PaymentID = hg_invoice_helper:execute_payment(InvoiceID, PaymentParams, Client),
+    #payproc_InvoicePayment{route = Route, cash_flow = CashFlow} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    [_] = lookup_posting(CashFlow, {provider, settlement}, {merchant, settlement}),
+    assert_route(Route),
+
+    ok = configure_provider_guarantee_cashflow(),
+    Params = #payproc_InvoicePaymentAdjustmentParams{
+        reason = <<"switch to provider guarantee">>,
+        scenario =
+            {cash_flow, #domain_InvoicePaymentAdjustmentCashFlow{
+                domain_revision = hg_domain:head()
+            }}
+    },
+    ?adjustment(AdjustmentID, ?adjustment_pending()) =
+        Adjustment =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, Params, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID, ?adjustment_created(Adjustment))) =
+        hg_invoice_helper:next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = hg_invoice_helper:next_changes(InvoiceID, 2, Client),
+
+    #domain_InvoicePaymentAdjustment{new_cash_flow = NewCashFlow} =
+        hg_client_invoicing:get_payment_adjustment(InvoiceID, PaymentID, AdjustmentID, Client),
+    #domain_ProviderAccount{guarantee = GuaranteeAccountID} = provider_rub_account(),
+    [
+        #domain_FinalCashFlowPosting{
+            source = #domain_FinalCashFlowAccount{account_id = GuaranteeAccountID}
+        }
+    ] = lookup_posting(NewCashFlow, {provider, guarantee}, {merchant, settlement}),
+    #{own_amount := GuaranteeBalance} = hg_accounting:get_balance(GuaranteeAccountID),
+    ?assertEqual(-Amount, GuaranteeBalance),
     ok.
 
 %% Internals
@@ -218,16 +265,18 @@ execute_payment(Amount, C) ->
         hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
     {CashFlow, Route}.
 
-configure_provider_guarantee_account() ->
+provider_rub_account() ->
+    #domain_Provider{accounts = ProviderAccounts} = hg_domain:get({provider, ?prv(1)}),
+    maps:get(?cur(<<"RUB">>), ProviderAccounts).
+
+unset_provider_guarantee_account() ->
     Currency = ?cur(<<"RUB">>),
-    GuaranteeAccountID = hg_accounting:create_account(<<"RUB">>),
     Provider0 = #domain_Provider{accounts = Accounts0} = hg_domain:get({provider, ?prv(1)}),
     ProviderAccount0 = maps:get(Currency, Accounts0),
-    ProviderAccount1 = ProviderAccount0#domain_ProviderAccount{guarantee = GuaranteeAccountID},
+    ProviderAccount1 = ProviderAccount0#domain_ProviderAccount{guarantee = undefined},
     Provider1 = Provider0#domain_Provider{accounts = Accounts0#{Currency => ProviderAccount1}},
     _ = hg_domain:upsert({provider, #domain_ProviderObject{ref = ?prv(1), data = Provider1}}),
-    ok = configure_provider_guarantee_cashflow(),
-    GuaranteeAccountID.
+    ok.
 
 configure_provider_guarantee_cashflow() ->
     Terminal0 = #domain_Terminal{terms = Terms0} = hg_domain:get({terminal, ?trm(1)}),
