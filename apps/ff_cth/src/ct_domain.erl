@@ -27,6 +27,7 @@
 -export([globals/2]).
 -export([withdrawal_provider/4]).
 -export([withdrawal_provider/5]).
+-export([withdrawal_provider/6]).
 -export([withdrawal_terminal/2]).
 -export([withdrawal_terminal/3]).
 
@@ -120,8 +121,8 @@ create_wallet(WalletID, PartyID, Currency, TermsRef, PaymentInstRef) ->
     ?DTP('ProvisionTermSet') | undefined
 ) -> object().
 withdrawal_provider(Ref, ProxyRef, Realm, TermSet) ->
-    {ok, AccountID} = ct_helper:create_account(<<"RUB">>),
-    withdrawal_provider(AccountID, Ref, ProxyRef, Realm, TermSet).
+    {ok, SettlementAccountID} = ct_helper:create_account(<<"RUB">>),
+    withdrawal_provider(SettlementAccountID, Ref, ProxyRef, Realm, TermSet).
 
 -spec withdrawal_provider(
     ff_account:account_id(),
@@ -130,7 +131,19 @@ withdrawal_provider(Ref, ProxyRef, Realm, TermSet) ->
     ?DTP('PaymentInstitutionRealm'),
     ?DTP('ProvisionTermSet') | undefined
 ) -> object().
-withdrawal_provider(AccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
+withdrawal_provider(AccountID, Ref, ProxyRef, Realm, TermSet) ->
+    {ok, GuaranteeAccountID} = ct_helper:create_account(<<"RUB">>),
+    withdrawal_provider(AccountID, GuaranteeAccountID, Ref, ProxyRef, Realm, TermSet).
+
+-spec withdrawal_provider(
+    ff_account:account_id(),
+    ff_account:account_id() | undefined,
+    ?DTP('ProviderRef'),
+    ?DTP('ProxyRef'),
+    ?DTP('PaymentInstitutionRealm'),
+    ?DTP('ProvisionTermSet') | undefined
+) -> object().
+withdrawal_provider(SettlementAccountID, GuaranteeAccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
     {provider, #domain_ProviderObject{
         ref = Ref,
         data = #domain_Provider{
@@ -140,7 +153,10 @@ withdrawal_provider(AccountID, ?prv(ID) = Ref, ProxyRef, Realm, TermSet) ->
             realm = Realm,
             terms = TermSet,
             accounts = #{
-                ?cur(<<"RUB">>) => #domain_ProviderAccount{settlement = AccountID}
+                ?cur(<<"RUB">>) => #domain_ProviderAccount{
+                    settlement = SettlementAccountID,
+                    guarantee = GuaranteeAccountID
+                }
             }
         }
     }}.

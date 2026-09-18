@@ -2353,14 +2353,33 @@ process_cash_flow_building(_Action, St) ->
         allocation => Allocation,
         exchange_context => ExchangeContext
     }),
-    FinalCashflow = calculate_cashflow(Context, Opts),
-    _ = rollback_unused_payment_limits(St),
-    _Clock = hg_accounting:hold(
-        construct_payment_plan_id(St),
-        {1, FinalCashflow}
-    ),
-    Events = [?cash_flow_changed(FinalCashflow)],
-    {next, {Events, timeout}}.
+    try calculate_cashflow(Context, Opts) of
+        FinalCashflow ->
+            _ = rollback_unused_payment_limits(St),
+            _Clock = hg_accounting:hold(
+                construct_payment_plan_id(St),
+                {1, FinalCashflow}
+            ),
+            {next, {[?cash_flow_changed(FinalCashflow)], timeout}}
+    catch
+        error:{misconfiguration, _} = Error ->
+            %% TODO Validate route-specific cash flow accounts during routing and consider
+            %% cascading to another candidate when the selected route is misconfigured.
+            ?LOG_MD(warning, "Cash flow building failed due to misconfiguration, route: ~p, error: ~p", [
+                Route, Error
+            ]),
+            Failure = construct_cashflow_failure(Error),
+            Routes = get_candidate_routes(St),
+            _ = rollback_payment_limits(Routes, get_iter(St), St, [ignore_business_error, ignore_not_found]),
+            {done, {[?payment_status_changed(?failed(Failure))], timeout}}
+    end.
+
+construct_cashflow_failure({misconfiguration, Details}) ->
+    {failure, #domain_Failure{
+        code = <<"misconfiguration">>,
+        sub = #domain_SubFailure{code = <<"cash_flow">>},
+        reason = genlib:format(Details)
+    }}.
 
 %%
 

@@ -118,10 +118,32 @@ final_cash_flow_symmetry_test() ->
             volume => {100, <<"EUR">>}
         }
     end,
+    ProviderGuaranteePosting = #{
+        sender => #{
+            account => #{
+                realm => test,
+                party_id => genlib:unique(),
+                currency => <<"RUB">>,
+                account_id => 456
+            },
+            type => {provider, settlement}
+        },
+        receiver => #{
+            account => #{
+                realm => test,
+                party_id => genlib:unique(),
+                currency => <<"RUB">>,
+                account_id => 789
+            },
+            type => {provider, guarantee}
+        },
+        volume => {100, <<"RUB">>}
+    },
     CashFlow = #{
         postings => [
             PostingFn(),
-            PostingFn()
+            PostingFn(),
+            ProviderGuaranteePosting
         ]
     },
     ?assertEqual(CashFlow, unmarshal(final_cash_flow, marshal(final_cash_flow, CashFlow))).

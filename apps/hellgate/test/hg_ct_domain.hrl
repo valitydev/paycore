@@ -47,6 +47,7 @@
 -define(cashrng(Lower, Upper), #domain_CashRange{lower = Lower, upper = Upper}).
 
 -define(prvacc(Stl), #domain_ProviderAccount{settlement = Stl}).
+-define(prvacc(Stl, Grt), #domain_ProviderAccount{settlement = Stl, guarantee = Grt}).
 -define(partycond(Ref, Def), {condition, {party, #domain_PartyCondition{party_ref = Ref, definition = Def}}}).
 
 -define(fixed(Amount, Currency),

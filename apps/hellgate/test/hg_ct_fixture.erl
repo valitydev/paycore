@@ -162,7 +162,7 @@ construct_provider_account_set(Currencies) ->
     ok = op_context:save(op_context:key(hellgate), op_context:create()),
     AccountSet = lists:foldl(
         fun(Cur = ?cur(Code), Acc) ->
-            Acc#{Cur => ?prvacc(hg_accounting:create_account(Code))}
+            Acc#{Cur => ?prvacc(hg_accounting:create_account(Code), hg_accounting:create_account(Code))}
         end,
         #{},
         Currencies

@@ -108,6 +108,15 @@ common-test:
 common-test.%: apps/hellgate/test/hg_%_tests_SUITE.erl
 	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
 
+common-ff-server-test.%: apps/ff_server/test/ff_%_SUITE.erl
+	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
+
+common-ff-transfer-test.%: apps/ff_transfer/test/ff_%_SUITE.erl
+	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
+
+common-fistful-test.%: apps/fistful/test/ff_%_SUITE.erl
+	$(REBAR) ct --cover --suite=$^ $(if $(CT_CASE),--case=$(strip $(CT_CASE)))
+
 cover:
 	$(REBAR) covertool generate
 
