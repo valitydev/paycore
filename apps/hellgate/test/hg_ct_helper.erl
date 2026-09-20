@@ -535,7 +535,7 @@ unblock_party(PartyConfigRef) ->
 change_party(PartyConfigRef, Fun) ->
     PartyConfig0 = hg_domain:get({party_config, PartyConfigRef}),
     PartyConfig1 = Fun(PartyConfig0),
-    _ = hg_domain:upsert(
+    _ = hg_domain:update(
         {party_config, #domain_PartyConfigObject{
             ref = PartyConfigRef,
             data = PartyConfig1
@@ -652,7 +652,7 @@ unblock_shop(ShopConfigRef) ->
 change_shop(ShopConfigRef, Fun) ->
     ShopConfig0 = hg_domain:get({shop_config, ShopConfigRef}),
     ShopConfig1 = Fun(ShopConfig0),
-    _ = hg_domain:upsert(
+    _ = hg_domain:update(
         {shop_config, #domain_ShopConfigObject{
             ref = ShopConfigRef,
             data = ShopConfig1

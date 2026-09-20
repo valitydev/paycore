@@ -87,8 +87,7 @@ end).
 all() ->
     [
         {group, default},
-        {group, non_parallel},
-        {group, withdrawal_without_termset}
+        {group, non_parallel}
     ].
 
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
@@ -119,7 +118,8 @@ groups() ->
             preserve_revisions_test,
             unknown_test,
             provider_callback_test,
-            provider_terminal_terms_merging_test
+            provider_terminal_terms_merging_test,
+            withdrawal_without_termset_test
         ]},
         %% Domain revision changes must run after all default cases finish.
         {non_parallel, [], [
@@ -135,13 +135,20 @@ groups() ->
 
 -spec init_per_suite(config()) -> config().
 init_per_suite(C) ->
-    ct_helper:makeup_cfg(
+    C1 = ct_helper:makeup_cfg(
         [
             ct_helper:test_case_name(init),
             ct_payment_system:setup()
         ],
         C
-    ).
+    ),
+    %% Publish the private fixture before any parallel case captures a revision.
+    ok = ct_helper:set_context(C1),
+    try
+        [{without_termset_fixture, without_termset_fixture()} | C1]
+    after
+        ok = ct_helper:unset_context()
+    end.
 
 -spec end_per_suite(config()) -> _.
 end_per_suite(C) ->
@@ -155,45 +162,22 @@ init_per_group(withdrawal_repair, C) ->
     TermsetHierarchy = ct_domain:term_set_hierarchy(?trms(1), Termset),
     _ = ct_domain_config:update(TermsetHierarchy),
     C;
-init_per_group(withdrawal_without_termset, C) ->
-    WasRevision = dmt_client:get_latest_version(),
-    #domain_conf_v2_VersionedObject{
-        object = {provider, ProviderObject}
-    } = dmt_client:checkout_object(WasRevision, {provider, ?prv(1)}),
-    Provider = ProviderObject#domain_ProviderObject.data,
-    #domain_Provider{
-        terms =
-            Terms = #domain_ProvisionTermSet{
-                wallet = Wallet
-            }
-    } = Provider,
-    ProviderUpd =
-        {provider, ProviderObject#domain_ProviderObject{
-            data = Provider#domain_Provider{
-                terms = Terms#domain_ProvisionTermSet{
-                    wallet = Wallet#domain_WalletProvisionTerms{
-                        withdrawals = undefined
-                    }
-                }
-            }
-        }},
-    _ = ct_domain_config:upsert(ProviderUpd),
-    [{domain_revision, WasRevision} | C];
 init_per_group(_, C) ->
     C.
 
 -spec end_per_group(group_name(), config()) -> _.
-end_per_group(withdrawal_without_termset, C) ->
-    WasRevision = proplists:get_value(domain_revision, C),
-    ct_domain_config:reset(WasRevision),
-    proplists:delete(domain_revision, C);
 end_per_group(_, _) ->
     ok.
 
 %%
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
-init_per_testcase(Name, C) ->
+init_per_testcase(Name, C0) ->
+    C =
+        case Name of
+            withdrawal_without_termset_test -> ct_helper:cfg(without_termset_fixture, C0) ++ C0;
+            _ -> C0
+        end,
     C1 = ct_helper:makeup_cfg(
         [
             ct_helper:test_case_name(Name),
@@ -786,9 +770,14 @@ withdrawal_without_termset_test(C) ->
     },
     ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
     Result = await_final_withdrawal_status(WithdrawalID),
-    Part1 = <<"{rejected_routes,[{{domain_ProviderRef,1},{domain_TerminalRef,1},">>,
-    Part2 = <<"{'WithdrawalProvisionTerms',not_found}}]}">>,
-    ExpectedReason = <<Part1/binary, Part2/binary>>,
+    ID = integer_to_binary(ct_helper:cfg(without_termset_route_id, C)),
+    ExpectedReason = <<
+        "{rejected_routes,[{{domain_ProviderRef,",
+        ID/binary,
+        "},{domain_TerminalRef,",
+        ID/binary,
+        "},{'WithdrawalProvisionTerms',not_found}}]}"
+    >>,
     ?assertEqual(
         {
             failed,
@@ -927,14 +916,58 @@ provider_terminal_terms_merging_test(C) ->
 
 %% Utils
 
+%% A single-route RUB scenario. Shared currencies and proxy definitions are
+%% immutable; provider terms, routing, wallet terms and accounts are private.
+without_termset_fixture() ->
+    ID = 1000000 + erlang:unique_integer([positive, monotonic]),
+    Provider = ct_domain_config:get({provider, ?prv(1)}),
+    #domain_Provider{terms = Terms = #domain_ProvisionTermSet{wallet = Wallet}} = Provider,
+    {ok, ProviderAccount} = ct_helper:create_account(<<"RUB">>),
+    PaymentInstitution = ct_domain_config:get({payment_institution, ?payinst(1)}),
+    WalletTerms = ct_domain_config:get({term_set_hierarchy, ?trms(1)}),
+    Fixture = [
+        {provider, #domain_ProviderObject{
+            ref = ?prv(ID),
+            data = Provider#domain_Provider{
+                accounts = #{?cur(<<"RUB">>) => #domain_ProviderAccount{settlement = ProviderAccount}},
+                terms = Terms#domain_ProvisionTermSet{
+                    wallet = Wallet#domain_WalletProvisionTerms{withdrawals = undefined}
+                }
+            }
+        }},
+        ct_domain:withdrawal_terminal(?trm(ID), ?prv(ID)),
+        ct_domain:system_account_set(?sas(ID), <<"Missing withdrawal terms">>, ?cur(<<"RUB">>)),
+        {term_set_hierarchy, #domain_TermSetHierarchyObject{ref = ?trms(ID), data = WalletTerms}},
+        {routing_rules, #domain_RoutingRulesObject{
+            ref = ?ruleset(ID),
+            data = #domain_RoutingRuleset{
+                name = <<"Missing withdrawal terms">>,
+                decisions = {candidates, [#domain_RoutingCandidate{allowed = {constant, true}, terminal = ?trm(ID)}]}
+            }
+        }},
+        {payment_institution, #domain_PaymentInstitutionObject{
+            ref = ?payinst(ID),
+            data = PaymentInstitution#domain_PaymentInstitution{
+                system_account_set = {value, ?sas(ID)},
+                wallet_system_account_set = {value, ?sas(ID)},
+                withdrawal_routing_rules = #domain_RoutingRules{
+                    policies = ?ruleset(ID),
+                    prohibitions = ?ruleset(0)
+                }
+            }
+        }}
+    ],
+    _ = ct_domain_config:insert(Fixture),
+    [{without_termset_route_id, ID}, {terms_ref, ?trms(ID)}, {payment_institution_ref, ?payinst(ID)}].
+
 prepare_standard_environment(WithdrawalCash, C) ->
     prepare_standard_environment(WithdrawalCash, undefined, C).
 
-prepare_standard_environment({_Amount, Currency} = WithdrawalCash, Token, _C) ->
+prepare_standard_environment({_Amount, Currency} = WithdrawalCash, Token, C) ->
     PartyID = ct_objects:create_party(),
-    WalletID = ct_objects:create_wallet(
-        PartyID, Currency, #domain_TermSetHierarchyRef{id = 1}, #domain_PaymentInstitutionRef{id = 1}
-    ),
+    TermsRef = ct_helper:cfg_with_default(terms_ref, C, ?trms(1)),
+    PaymentInstitutionRef = ct_helper:cfg_with_default(payment_institution_ref, C, ?payinst(1)),
+    WalletID = ct_objects:create_wallet(PartyID, Currency, TermsRef, PaymentInstitutionRef),
     ok = await_wallet_balance({0, Currency}, WalletID),
     DestinationID = ct_objects:create_destination(PartyID, Token),
     SourceID = ct_objects:create_source(PartyID, Currency),
