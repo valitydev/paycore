@@ -49,25 +49,26 @@
 
 -spec all() -> [test_case_name() | {group, atom()}].
 all() ->
-    [
-        create_invalid_shop,
-        create_invalid_party_status,
-        create_invalid_shop_status,
-        {group, create_templates},
-        get_invoice_template_anyhow,
-        update_invalid_party_status,
-        update_invalid_shop_status,
-        {group, update_templates},
-        delete_invalid_party_status,
-        delete_invalid_shop_status,
-        delete_invoice_template,
-        terms_retrieval
-    ].
+    [{group, templates}].
 
--spec groups() -> [{atom(), list(), [test_case_name()]}].
+-spec groups() -> [{atom(), list(), [test_case_name() | {group, atom()}]}].
 groups() ->
-    %% Status tests mutate the shared party/shop; terms_retrieval changes the domain.
     [
+        %% Each case owns its party, shop accounts and mutable terms.
+        {templates, [parallel], [
+            create_invalid_shop,
+            create_invalid_party_status,
+            create_invalid_shop_status,
+            {group, create_templates},
+            get_invoice_template_anyhow,
+            update_invalid_party_status,
+            update_invalid_shop_status,
+            {group, update_templates},
+            delete_invalid_party_status,
+            delete_invalid_shop_status,
+            delete_invoice_template,
+            terms_retrieval
+        ]},
         {create_templates, [parallel], [
             create_invalid_cost_fixed_amount,
             create_invalid_cost_fixed_currency,
@@ -111,11 +112,21 @@ init_per_suite(C) ->
     ok = op_context:save(op_context:key(hellgate), op_context:create()),
     ShopConfigRef =
         hg_ct_helper:create_party_and_shop(PartyConfigRef, ?cat(1), <<"RUB">>, ?trms(1), ?pinst(1), Client),
+    %% Allocate before the parallel group starts. The original shop is a control
+    %% for terms_retrieval, not a source of mutable fixtures for the other cases.
+    Cases = lists:usort([Name || {_, _, Tests} <- groups(), Name <- Tests, is_atom(Name)]),
+    Party = hg_domain:get({party_config, PartyConfigRef}),
+    Shop = hg_domain:get({shop_config, ShopConfigRef}),
+    Terms = hg_domain:get({term_set_hierarchy, ?trms(1)}),
+    Fixtures = [{Name, create_case_fixture(Party, Shop, Terms)} || Name <- Cases],
+    _ = hg_domain:insert(lists:append([Objects || {_, {_, Objects}} <- Fixtures])),
+    CaseFixtures = maps:from_list([{Name, Config} || {Name, {Config, _}} <- Fixtures]),
     ok = op_context:cleanup(hellgate),
     [
-        {party_config_ref, PartyConfigRef},
+        {case_fixtures, CaseFixtures},
+        {control_party_config_ref, PartyConfigRef},
+        {control_shop_config_ref, ShopConfigRef},
         {party_client, Client},
-        {shop_config_ref, ShopConfigRef},
         {root_url, RootUrl},
         {apps, Apps}
         | C
@@ -131,10 +142,10 @@ end_per_suite(C) ->
 %% tests
 
 -spec init_per_testcase(test_case_name(), config()) -> config().
-init_per_testcase(_Name, C) ->
+init_per_testcase(Name, C) ->
     RootUrl = cfg(root_url, C),
     Client = hg_client_invoice_templating:start_link(hg_ct_helper:create_client(RootUrl)),
-    [{client, Client} | C].
+    [{client, Client} | maps:get(Name, cfg(case_fixtures, C))] ++ C.
 
 -spec end_per_testcase(test_case_name(), config()) -> _.
 end_per_testcase(_Name, _C) ->
@@ -505,7 +516,16 @@ terms_retrieval(C) ->
         }
     } = TermSet1,
 
-    _ = hg_domain:update(construct_term_set_for_cost(5000, 11000)),
+    ControlC = [
+        {party_config_ref, cfg(control_party_config_ref, C)},
+        {shop_config_ref, cfg(control_shop_config_ref, C)}
+        | C
+    ],
+    ?invoice_tpl(ControlTplID) = create_invoice_tpl(ControlC),
+    TermSet1 = hg_client_invoice_templating:compute_terms(ControlTplID, Client),
+    _ = hg_domain:update(construct_term_set_for_cost(cfg(terms_ref, C), 5000, 11000)),
+    %% Updating one scenario must not change terms on the control shop.
+    TermSet1 = hg_client_invoice_templating:compute_terms(ControlTplID, Client),
 
     TermSet2 = hg_client_invoice_templating:compute_terms(TplID1, Client),
     #domain_TermSet{
@@ -530,6 +550,25 @@ terms_retrieval(C) ->
     } = TermSet3.
 
 %%
+
+create_case_fixture(Party, Shop, Terms) ->
+    PartyRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
+    ShopRef = #domain_ShopConfigRef{id = hg_utils:unique_id()},
+    TermsRef = ?trms(1000000 + erlang:unique_integer([positive, monotonic])),
+    Account = #domain_ShopAccount{
+        currency = ?cur(<<"RUB">>),
+        settlement = hg_accounting:create_account(<<"RUB">>),
+        guarantee = hg_accounting:create_account(<<"RUB">>)
+    },
+    Objects = [
+        {party_config, #domain_PartyConfigObject{ref = PartyRef, data = Party}},
+        {shop_config, #domain_ShopConfigObject{
+            ref = ShopRef,
+            data = Shop#domain_ShopConfig{party_ref = PartyRef, terms = TermsRef, account = Account}
+        }},
+        {term_set_hierarchy, #domain_TermSetHierarchyObject{ref = TermsRef, data = Terms}}
+    ],
+    {[{party_config_ref, PartyRef}, {shop_config_ref, ShopRef}, {terms_ref, TermsRef}], Objects}.
 
 create_invoice_tpl(Config) ->
     Client = cfg(client, Config),
@@ -638,7 +677,7 @@ construct_domain_fixture() ->
         }}
     ].
 
-construct_term_set_for_cost(LowerBound, UpperBound) ->
+construct_term_set_for_cost(TermsRef, LowerBound, UpperBound) ->
     TermSet = #domain_TermSet{
         payments = #domain_PaymentsServiceTerms{
             payment_methods =
@@ -669,7 +708,7 @@ construct_term_set_for_cost(LowerBound, UpperBound) ->
         }
     },
     {term_set_hierarchy, #domain_TermSetHierarchyObject{
-        ref = ?trms(1),
+        ref = TermsRef,
         data = #domain_TermSetHierarchy{
             parent_terms = undefined,
             term_set = TermSet

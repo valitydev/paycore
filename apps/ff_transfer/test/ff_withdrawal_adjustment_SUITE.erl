@@ -77,13 +77,16 @@ groups() ->
             adjustment_can_change_body_on_succeeded_test,
             adjustment_can_not_change_body_to_same,
             adjustment_can_not_increase_body,
-            adjustment_can_not_change_body_on_pending
-        ]},
-        %% These cases assert deltas on the shared provider account.
-        {non_parallel, [], [
-            adjustment_can_change_domain_revision_test,
+            adjustment_can_not_change_body_on_pending,
+            %% These scenarios keep all steps on their own wallet/destination.
+            %% Concurrent cases only insert entities; provider terms stay fixed.
             adjustment_change_cash_flow_then_change_body_test,
             adjustment_change_body_then_change_cash_flow_test
+        ]},
+        %% Preserve the shared provider's accumulated history from default.
+        %% Its balance delta must be checked after every concurrent case finishes.
+        {non_parallel, [], [
+            adjustment_can_change_domain_revision_test
         ]}
     ].
 
@@ -355,9 +358,12 @@ adjustment_can_not_change_domain_revision_with_failed_status(C) ->
     },
     ok = ff_withdrawal_machine:create(Params, ff_entity_context:new()),
     ?assertMatch({failed, _}, await_final_withdrawal_status(WithdrawalID)),
+    %% HEAD can advance in another case. Choose a different revision relative
+    %% to this withdrawal so the status guard, not the same-revision guard, runs.
+    PreviousRevision = ff_withdrawal:final_domain_revision(get_withdrawal(WithdrawalID)) - 1,
     Result = ff_withdrawal_machine:start_adjustment(WithdrawalID, #{
         id => genlib:bsuuid(),
-        change => {change_cash_flow, ct_domain_config:head() - 1}
+        change => {change_cash_flow, PreviousRevision}
     }),
     ?assertMatch({error, {invalid_cash_flow_change, {unavailable_status, {failed, #{code := _}}}}}, Result).
 
