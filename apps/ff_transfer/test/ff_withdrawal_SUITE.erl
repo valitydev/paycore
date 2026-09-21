@@ -50,6 +50,7 @@
 -export([provider_terminal_terms_merging_test/1]).
 -export([force_status_change_test/1]).
 -export([withdrawal_without_termset_test/1]).
+-export([provider_guarantee_account_test/1]).
 
 %% Internal types
 
@@ -123,7 +124,8 @@ groups() ->
         ]},
         %% Domain revision changes must run after all default cases finish.
         {non_parallel, [], [
-            use_quote_revisions_test
+            use_quote_revisions_test,
+            provider_guarantee_account_test
         ]},
         {withdrawal_repair, [], [
             force_status_change_test
@@ -801,6 +803,56 @@ withdrawal_without_termset_test(C) ->
     ),
     ok.
 
+-spec provider_guarantee_account_test(config()) -> test_return().
+provider_guarantee_account_test(C) ->
+    %% 800 RUB is routed to provider 18 / terminal 1801, whose terms post the fee to guarantee
+    Cash = {800, <<"RUB">>},
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment(Cash, C),
+    {SettlementAccountID, GuaranteeAccountID} = provider_account_ids(18),
+    %% the settlement account is shared between the suite cases, so only its change is asserted
+    SettlementBefore = get_account_amount(SettlementAccountID),
+    GuaranteeBefore = get_account_amount(GuaranteeAccountID),
+    WithdrawalID = genlib:bsuuid(),
+    WithdrawalParams = #{
+        id => WithdrawalID,
+        destination_id => DestinationID,
+        wallet_id => WalletID,
+        party_id => PartyID,
+        body => Cash,
+        external_id => WithdrawalID
+    },
+    ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
+    ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID)),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(640, <<"RUB">>), get_destination_balance(DestinationID)),
+
+    Withdrawal = get_withdrawal(WithdrawalID),
+    #{
+        postings := Postings
+    } = ff_withdrawal:effective_final_cash_flow(Withdrawal),
+    %% the provider fee is the lesser of 10 RUB and 5% of 800 RUB, posted to the guarantee account
+    [
+        #{
+            sender := #{type := {system, settlement}},
+            receiver := #{type := {provider, guarantee}, account := ReceiverAccount},
+            volume := Volume
+        }
+    ] = [
+        P
+     || #{receiver := #{type := {provider, guarantee}}} = P <- Postings
+    ],
+    ?assertEqual(GuaranteeAccountID, maps:get(account_id, ReceiverAccount)),
+    ?assertEqual({10, <<"RUB">>}, Volume),
+
+    %% the provider fee is credited to the guarantee account only, the settlement one is left intact
+    ?assertEqual(GuaranteeBefore + 10, get_account_amount(GuaranteeAccountID)),
+    ?assertEqual(SettlementBefore, get_account_amount(SettlementAccountID)),
+    ok.
+
 -spec unknown_test(config()) -> test_return().
 unknown_test(_C) ->
     WithdrawalID = <<"unknown_withdrawal">>,
@@ -1035,6 +1087,28 @@ await_wallet_balance({Amount, Currency}, ID) ->
 
 get_wallet_balance(ID) ->
     ct_objects:get_wallet_balance(ID).
+
+get_destination_balance(ID) ->
+    {ok, Machine} = ff_destination_machine:get(ID),
+    Destination = ff_destination_machine:destination(Machine),
+    get_account_balance(ff_destination:account(Destination)).
+
+get_account_balance(AccountID) when is_integer(AccountID) ->
+    {ok, {Amounts, Currency}} = ff_accounting:balance(AccountID, <<"RUB">>),
+    {ff_indef:current(Amounts), ff_indef:to_range(Amounts), Currency};
+get_account_balance(Account) ->
+    {ok, {Amounts, Currency}} = ff_accounting:balance(Account),
+    {ff_indef:current(Amounts), ff_indef:to_range(Amounts), Currency}.
+
+get_account_amount(AccountID) ->
+    {Amount, _Range, _Currency} = get_account_balance(AccountID),
+    Amount.
+
+provider_account_ids(ProviderID) ->
+    {ok, Provider} = ff_payouts_provider:get(ProviderID, ct_domain_config:head()),
+    #{settlement := SettlementAccount, guarantee := GuaranteeAccount} =
+        maps:get(<<"RUB">>, ff_payouts_provider:accounts(Provider)),
+    {ff_account:account_id(SettlementAccount), ff_account:account_id(GuaranteeAccount)}.
 
 create_crypto_destination(PartyID, _C) ->
     ID = genlib:bsuuid(),
