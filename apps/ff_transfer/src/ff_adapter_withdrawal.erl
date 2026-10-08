@@ -32,7 +32,8 @@
     sender => party_id(),
     receiver => party_id(),
     quote => quote(),
-    contact_info => ff_withdrawal:contact_info()
+    contact_info => ff_withdrawal:contact_info(),
+    client_info => ff_withdrawal:client_info()
 }.
 
 -type quote_params() :: #{

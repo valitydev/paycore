@@ -106,7 +106,8 @@ marshal(
         session_id = maybe_marshal(id, SessionID),
         quote = maybe_marshal(quote, Quote),
         auth_data = maybe_marshal(auth_data, DestAuthData),
-        contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined))
+        contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined)),
+        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined))
     };
 marshal(route, Route) ->
     #wthd_session_Route{
@@ -229,7 +230,8 @@ unmarshal(withdrawal, #wthd_session_Withdrawal{
     session_id = SessionID,
     quote = Quote,
     auth_data = DestAuthData,
-    contact_info = ContactInfo
+    contact_info = ContactInfo,
+    client_info = ClientInfo
 }) ->
     genlib_map:compact(#{
         id => unmarshal(id, WithdrawalID),
@@ -240,7 +242,8 @@ unmarshal(withdrawal, #wthd_session_Withdrawal{
         session_id => maybe_unmarshal(id, SessionID),
         quote => maybe_unmarshal(quote, Quote),
         dest_auth_data => maybe_unmarshal(auth_data, DestAuthData),
-        contact_info => maybe_unmarshal(contact_info, ContactInfo)
+        contact_info => maybe_unmarshal(contact_info, ContactInfo),
+        client_info => maybe_unmarshal(client_info, ClientInfo)
     });
 unmarshal(route, Route) ->
     genlib_map:compact(#{

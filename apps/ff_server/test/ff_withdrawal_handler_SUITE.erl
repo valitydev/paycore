@@ -267,6 +267,10 @@ create_withdrawal_ok_test(_C) ->
         phone_number = <<"1234567890">>,
         email = <<"test@mail.com">>
     },
+    ClientInfo = #fistful_base_ClientInfo{
+        ip_address = <<"10.10.10.10">>,
+        fingerprint = <<"fingerprint">>
+    },
     Params = #wthd_WithdrawalParams{
         id = WithdrawalID,
         party_id = PartyID,
@@ -275,7 +279,8 @@ create_withdrawal_ok_test(_C) ->
         body = Cash,
         metadata = Metadata,
         external_id = ExternalID,
-        contact_info = ContactInfo
+        contact_info = ContactInfo,
+        client_info = ClientInfo
     },
     {ok, WithdrawalState} = call_withdrawal('Create', {Params, Context}),
 
@@ -295,6 +300,7 @@ create_withdrawal_ok_test(_C) ->
         ff_codec:unmarshal(timestamp_ms, WithdrawalState#wthd_WithdrawalState.created_at)
     ),
     ?assertEqual(ContactInfo, WithdrawalState#wthd_WithdrawalState.contact_info),
+    ?assertEqual(ClientInfo, WithdrawalState#wthd_WithdrawalState.client_info),
 
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
     {ok, FinalWithdrawalState} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
