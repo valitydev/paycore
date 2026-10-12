@@ -44,7 +44,8 @@ marshal_withdrawal_params(Params) ->
         quote = maybe_marshal(quote, maps:get(quote, Params, undefined)),
         external_id = maybe_marshal(id, maps:get(external_id, Params, undefined)),
         metadata = maybe_marshal(ctx, maps:get(metadata, Params, undefined)),
-        contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined))
+        contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined)),
+        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined))
     }.
 
 -spec unmarshal_withdrawal_params(fistful_wthd_thrift:'WithdrawalParams'()) -> ff_withdrawal:params().
@@ -58,7 +59,8 @@ unmarshal_withdrawal_params(Params) ->
         quote => maybe_unmarshal(quote, Params#wthd_WithdrawalParams.quote),
         external_id => maybe_unmarshal(id, Params#wthd_WithdrawalParams.external_id),
         metadata => maybe_unmarshal(ctx, Params#wthd_WithdrawalParams.metadata),
-        contact_info => maybe_unmarshal(contact_info, Params#wthd_WithdrawalParams.contact_info)
+        contact_info => maybe_unmarshal(contact_info, Params#wthd_WithdrawalParams.contact_info),
+        client_info => maybe_unmarshal(client_info, Params#wthd_WithdrawalParams.client_info)
     }).
 
 -spec marshal_withdrawal_state(ff_withdrawal:withdrawal_state(), ff_entity_context:context()) ->
@@ -88,7 +90,8 @@ marshal_withdrawal_state(WithdrawalState, Context) ->
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(WithdrawalState)),
         withdrawal_validation = maybe_marshal(withdrawal_validation, ff_withdrawal:validation(WithdrawalState)),
         contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState)),
-        new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState))
+        new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState)),
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(WithdrawalState))
     }.
 
 -spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_thrift:'Event'().
@@ -159,7 +162,8 @@ marshal(withdrawal, Withdrawal) ->
         created_at = maybe_marshal(timestamp_ms, ff_withdrawal:created_at(Withdrawal)),
         metadata = maybe_marshal(ctx, ff_withdrawal:metadata(Withdrawal)),
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(Withdrawal)),
-        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(Withdrawal))
+        contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(Withdrawal)),
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(Withdrawal))
     };
 marshal(route, Route) ->
     #{
@@ -293,7 +297,8 @@ unmarshal(withdrawal, #wthd_Withdrawal{} = Withdrawal) ->
         domain_revision => maybe_unmarshal(domain_revision, Withdrawal#wthd_Withdrawal.domain_revision),
         created_at => maybe_unmarshal(timestamp_ms, Withdrawal#wthd_Withdrawal.created_at),
         metadata => maybe_unmarshal(ctx, Withdrawal#wthd_Withdrawal.metadata),
-        contact_info => maybe_unmarshal(contact_info, Withdrawal#wthd_Withdrawal.contact_info)
+        contact_info => maybe_unmarshal(contact_info, Withdrawal#wthd_Withdrawal.contact_info),
+        client_info => maybe_unmarshal(client_info, Withdrawal#wthd_Withdrawal.client_info)
     });
 unmarshal(route, Route) ->
     genlib_map:compact(#{

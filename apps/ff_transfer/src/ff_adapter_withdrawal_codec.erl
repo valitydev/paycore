@@ -242,6 +242,7 @@ marshal(
     SesID = maps:get(session_id, Withdrawal, undefined),
     DestAuthData = maps:get(dest_auth_data, Withdrawal, undefined),
     ContactInfo = maps:get(contact_info, Withdrawal, undefined),
+    ClientInfo = maps:get(client_info, Withdrawal, undefined),
     #wthd_provider_Withdrawal{
         id = ID,
         session_id = SesID,
@@ -251,7 +252,8 @@ marshal(
         receiver = #domain_PartyConfigRef{id = Receiver},
         auth_data = maybe_marshal(auth_data, DestAuthData),
         quote = maybe_marshal(quote, maps:get(quote, Withdrawal, undefined)),
-        contact_info = maybe_marshal(contact_info, ContactInfo)
+        contact_info = maybe_marshal(contact_info, ContactInfo),
+        client_info = maybe_marshal(client_info, ClientInfo)
     };
 marshal(transaction_info, TrxInfo) ->
     ff_dmsl_codec:marshal(transaction_info, TrxInfo);
@@ -263,6 +265,11 @@ marshal(auth_data, #{
         sender = SenderToken,
         receiver = ReceiverToken
     }};
+marshal(client_info, ClientInfo) ->
+    #wthd_domain_ClientInfo{
+        ip_address = maps:get(ip_address, ClientInfo, undefined),
+        fingerprint = maps:get(fingerprint, ClientInfo, undefined)
+    };
 marshal(contact_info, ContactInfo) ->
     #wthd_domain_ContactInfo{
         phone_number = maps:get(phone_number, ContactInfo, undefined),

@@ -266,6 +266,11 @@ marshal(contact_info, ContactInfo) ->
         phone_number = maps:get(phone_number, ContactInfo, undefined),
         email = maps:get(email, ContactInfo, undefined)
     };
+marshal(client_info, ClientInfo) ->
+    #fistful_base_ClientInfo{
+        ip_address = maps:get(ip_address, ClientInfo, undefined),
+        fingerprint = maps:get(fingerprint, ClientInfo, undefined)
+    };
 marshal(timer, {timeout, Timeout}) ->
     {timeout, marshal(integer, Timeout)};
 marshal(timer, {deadline, Deadline}) ->
@@ -546,6 +551,11 @@ unmarshal(contact_info, ContactInfo) ->
     genlib_map:compact(#{
         phone_number => ContactInfo#fistful_base_ContactInfo.phone_number,
         email => ContactInfo#fistful_base_ContactInfo.email
+    });
+unmarshal(client_info, ClientInfo) ->
+    genlib_map:compact(#{
+        ip_address => ClientInfo#fistful_base_ClientInfo.ip_address,
+        fingerprint => ClientInfo#fistful_base_ClientInfo.fingerprint
     });
 unmarshal(timestamp, Timestamp) when is_binary(Timestamp) ->
     parse_timestamp(Timestamp);
