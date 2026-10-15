@@ -446,10 +446,9 @@ customer_id_stored_test(C) ->
     Client = cfg(client, C),
     PartyConfigRef = cfg(party_config_ref, C),
     #customer_Customer{id = CustomerID} = hg_customer_client:create_customer(PartyConfigRef),
-    %% Parent payment with customer_id set
-    Invoice1ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    Payment1BaseParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    Payment1Params = Payment1BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerID},
+    %% Parent payment on an invoice identifying the customer
+    Invoice1ID = start_customer_invoice(CustomerID, <<"rubberduck">>, make_due_date(10), 42000, C),
+    Payment1Params = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, Payment1ID} = start_payment(Invoice1ID, Payment1Params, Client),
     Payment1ID = await_payment_capture(Invoice1ID, Payment1ID, Client),
     %% Child recurrent payment inherits customer_id from parent — not passed explicitly
@@ -468,9 +467,8 @@ customer_id_stored_no_parent_test(C) ->
     Client = cfg(client, C),
     PartyConfigRef = cfg(party_config_ref, C),
     #customer_Customer{id = CustomerID} = hg_customer_client:create_customer(PartyConfigRef),
-    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    BaseParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    PaymentParams = BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerID},
+    InvoiceID = start_customer_invoice(CustomerID, <<"rubberduck">>, make_due_date(10), 42000, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, PaymentID} = start_payment(InvoiceID, PaymentParams, Client),
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     #payproc_InvoicePayment{
@@ -486,16 +484,14 @@ different_customer_id_test(C) ->
     #customer_Customer{id = CustomerA} = hg_customer_client:create_customer(PartyConfigRef),
     #customer_Customer{id = CustomerB} = hg_customer_client:create_customer(PartyConfigRef),
     %% Parent payment with CustomerA
-    Invoice1ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    Payment1BaseParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    Payment1Params = Payment1BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerA},
+    Invoice1ID = start_customer_invoice(CustomerA, <<"rubberduck">>, make_due_date(10), 42000, C),
+    Payment1Params = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, Payment1ID} = start_payment(Invoice1ID, Payment1Params, Client),
     Payment1ID = await_payment_capture(Invoice1ID, Payment1ID, Client),
     %% Child recurrent payment with different CustomerB should be rejected
-    Invoice2ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
+    Invoice2ID = start_customer_invoice(CustomerB, <<"rubberduck">>, make_due_date(10), 42000, C),
     RecurrentParent = ?recurrent_parent(Invoice1ID, Payment1ID),
-    BaseParams = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
-    Payment2Params = BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerB},
+    Payment2Params = make_recurrent_payment_params(false, RecurrentParent, ?pmt_sys(<<"visa-ref">>)),
     {error, #payproc_InvalidRecurrentParentPayment{details = <<"Customer ID mismatch with parent">>}} =
         start_payment(Invoice2ID, Payment2Params, Client).
 
@@ -505,27 +501,25 @@ regular_payment_saves_to_cubasty_test(C) ->
     PartyConfigRef = cfg(party_config_ref, C),
     #customer_Customer{id = CustomerID} = hg_customer_client:create_customer(PartyConfigRef),
     %% Non-recurrent payment with customer_id — payment linked, no tokens saved
-    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    BaseParams = make_payment_params(false, undefined, ?pmt_sys(<<"visa-ref">>)),
-    PaymentParams = BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerID},
+    InvoiceID = start_customer_invoice(CustomerID, <<"rubberduck">>, make_due_date(10), 42000, C),
+    PaymentParams = make_payment_params(false, undefined, ?pmt_sys(<<"visa-ref">>)),
     {ok, PaymentID} = start_payment(InvoiceID, PaymentParams, Client),
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     %% Payment is linked to customer in cubasty
-    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID),
+    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID, PartyConfigRef),
     ?assertEqual(CustomerID, State#customer_CustomerState.customer#customer_Customer.id),
     %% But no recurrent tokens saved (make_recurrent=false)
-    [] = hg_customer_client:get_recurrent_tokens(InvoiceID, PaymentID).
+    [] = hg_customer_client:get_recurrent_tokens(InvoiceID, PaymentID, PartyConfigRef).
 
 -spec cascade_tokens_filter_success_test(config()) -> test_result().
 cascade_tokens_filter_success_test(C) ->
     Client = cfg(client, C),
     PartyConfigRef = cfg(party_config_ref, C),
     #customer_Customer{id = CustomerID} = hg_customer_client:create_customer(PartyConfigRef),
-    %% First payment with customer_id + make_recurrent=true
+    %% First payment on a customer invoice + make_recurrent=true
     %% Hellgate auto-saves bank card, recurrent token, and payment to cubasty
-    Invoice1ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    Payment1BaseParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    Payment1Params = Payment1BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerID},
+    Invoice1ID = start_customer_invoice(CustomerID, <<"rubberduck">>, make_due_date(10), 42000, C),
+    Payment1Params = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, Payment1ID} = start_payment(Invoice1ID, Payment1Params, Client),
     Payment1ID = await_payment_capture(Invoice1ID, Payment1ID, Client),
     %% Second recurrent payment: hellgate queries cubasty via GetByParentPayment,
@@ -544,12 +538,11 @@ cascade_tokens_filter_success_test(C) ->
 cascade_recurrent_payment_success_test(C) ->
     Client = cfg(client, C),
     PartyConfigRef = cfg(party_config_ref, C),
-    %% Step 1: Create customer, then parent payment with customer_id on ?prv(1)/?trm(1)
+    %% Step 1: Create customer, then parent payment on its invoice on ?prv(1)/?trm(1)
     %% Hellgate auto-saves bank card, recurrent token, and payment link to cubasty
     #customer_Customer{id = CustomerID} = hg_customer_client:create_customer(PartyConfigRef),
-    Invoice1ID = start_invoice(<<"rubberduck">>, make_due_date(10), 42000, C),
-    Payment1BaseParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
-    Payment1Params = Payment1BaseParams#payproc_InvoicePaymentParams{customer_id = CustomerID},
+    Invoice1ID = start_customer_invoice(CustomerID, <<"rubberduck">>, make_due_date(10), 42000, C),
+    Payment1Params = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     {ok, Payment1ID} = start_payment(Invoice1ID, Payment1Params, Client),
     Payment1ID = await_payment_capture(Invoice1ID, Payment1ID, Client),
     %% Verify parent payment route is ?prv(1)/?trm(1) and tokens are saved in cubasty
@@ -560,7 +553,7 @@ cascade_recurrent_payment_success_test(C) ->
     #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)} =
         Payment1St#payproc_InvoicePayment.route,
     [#customer_RecurrentToken{provider_ref = ?prv(1), terminal_ref = ?trm(1)}] =
-        hg_customer_client:get_recurrent_tokens(Invoice1ID, Payment1ID),
+        hg_customer_client:get_recurrent_tokens(Invoice1ID, Payment1ID, PartyConfigRef),
     %% Step 2: Make ?prv(1) always fail, add ?prv(2)/?trm(2) as cascade fallback
     _ = hg_domain:upsert(construct_cascade_fixture()),
     %% Step 3: Add cascade token for ?prv(2)/?trm(2) to existing bank card
@@ -809,6 +802,18 @@ start_invoice(ShopConfigRef, Product, Due, Amount, C) ->
     PartyConfigRef = cfg(party_config_ref, C),
     Cash = hg_ct_helper:make_cash(Amount, <<"RUB">>),
     InvoiceParams = hg_ct_helper:make_invoice_params(PartyConfigRef, ShopConfigRef, Product, Due, Cash),
+    InvoiceID = create_invoice(InvoiceParams, Client),
+    _Events = await_events(InvoiceID, [?evp(?invoice_created(?invoice_w_status(?invoice_unpaid())))], Client),
+    InvoiceID.
+
+start_customer_invoice(CustomerID, Product, Due, Amount, C) ->
+    Client = cfg(client, C),
+    PartyConfigRef = cfg(party_config_ref, C),
+    Cash = hg_ct_helper:make_cash(Amount, <<"RUB">>),
+    InvoiceParams0 = hg_ct_helper:make_invoice_params(PartyConfigRef, cfg(shop_config_ref, C), Product, Due, Cash),
+    InvoiceParams = InvoiceParams0#payproc_InvoiceParams{
+        client_identity = #domain_ClientIdentity{customer_id = CustomerID}
+    },
     InvoiceID = create_invoice(InvoiceParams, Client),
     _Events = await_events(InvoiceID, [?evp(?invoice_created(?invoice_w_status(?invoice_unpaid())))], Client),
     InvoiceID.
