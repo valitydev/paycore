@@ -104,7 +104,7 @@ email_customer(C) ->
     {InvoiceID, PaymentID, Payment, _Events} = pay(C),
     CustomerID = customer_id(Payment),
     ?assertNotEqual(undefined, CustomerID),
-    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID),
+    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID, cfg(party_config_ref, C)),
     ?assertEqual(CustomerID, (State#customer_CustomerState.customer)#customer_Customer.id).
 
 -spec first_and_second_payment(config()) -> _.
@@ -238,7 +238,7 @@ cubasty_failure_capture(C) ->
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual(2, customer_calls('BindTerminalAffinity')),
     ?assertEqual([Payment#payproc_InvoicePayment.route], history(Payment)),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% Without a binding the payment is recorded by AddPayment, and its failure is retried as well
 -spec cubasty_failure_add_payment(config()) -> _.
@@ -247,7 +247,7 @@ cubasty_failure_add_payment(C) ->
     fail_customer_calls(['AddPayment'], once),
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual(2, customer_calls('AddPayment')),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 -spec collector_affinity(config()) -> _.
 collector_affinity(_C) ->
@@ -328,7 +328,7 @@ cancelled_hold(C) ->
     Payment = hg_client_invoicing:get_payment(InvoiceID, PaymentID, cfg(client, C)),
     ?assertEqual([], history(Payment)),
     %% A cancelled hold binds nothing but is still recorded for the Customer, as before bindings
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% A Customer deleted between StartPayment and capture does not wedge the payment: there is
 %% nothing to bind it or record it in, and a retry of the step would get the same answer
@@ -367,7 +367,7 @@ negative_timeout(C) ->
     ]),
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual([], history(Payment)),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% The payment must reach the Customer exactly once down either branch: a binding
 %% remembers it with the same call, without one a separate AddPayment remains
@@ -379,7 +379,7 @@ payment_recorded_once(C) ->
     ?assertEqual([First#payproc_InvoicePayment.route], history(First)),
     ?assertEqual(1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
     ?assertEqual(0, meck:num_calls(hg_customer_client, add_payment, '_')),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(CustomerID)),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(CustomerID, C)),
     set_candidates([{1, 50, 0, false}, {2, 50, 0, false}]),
     {NextInvoiceID, NextPaymentID, Second, _} = pay(C),
     ?assertEqual(CustomerID, customer_id(Second)),
@@ -387,13 +387,13 @@ payment_recorded_once(C) ->
     ?assertEqual(1, meck:num_calls(hg_customer_client, add_payment, '_')),
     ?assertEqual(
         lists:sort([{InvoiceID, PaymentID}, {NextInvoiceID, NextPaymentID}]),
-        lists:sort(payment_refs(CustomerID))
+        lists:sort(payment_refs(CustomerID, C))
     ).
 
 cfg(Key, C) -> hg_ct_helper:cfg(Key, C).
 
-payment_refs(CustomerID) ->
-    {ok, State} = hg_woody_wrapper:call(customer_management, 'Get', {CustomerID}),
+payment_refs(CustomerID, C) ->
+    {ok, State} = hg_woody_wrapper:call(customer_management, 'Get', {CustomerID, cfg(party_config_ref, C)}),
     [
         {InvoiceID, PaymentID}
      || #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID} <-

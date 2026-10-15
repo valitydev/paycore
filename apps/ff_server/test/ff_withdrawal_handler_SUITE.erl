@@ -2,6 +2,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+-include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_session_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_adj_thrift.hrl").
@@ -271,6 +272,11 @@ create_withdrawal_ok_test(_C) ->
         ip_address = <<"10.10.10.10">>,
         fingerprint = <<"fingerprint">>
     },
+    CustomerID = create_customer(PartyID),
+    ClientIdentity = #fistful_base_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = <<"user">>
+    },
     Params = #wthd_WithdrawalParams{
         id = WithdrawalID,
         party_id = PartyID,
@@ -280,7 +286,8 @@ create_withdrawal_ok_test(_C) ->
         metadata = Metadata,
         external_id = ExternalID,
         contact_info = ContactInfo,
-        client_info = ClientInfo
+        client_info = ClientInfo,
+        client_identity = ClientIdentity
     },
     {ok, WithdrawalState} = call_withdrawal('Create', {Params, Context}),
 
@@ -301,13 +308,17 @@ create_withdrawal_ok_test(_C) ->
     ),
     ?assertEqual(ContactInfo, WithdrawalState#wthd_WithdrawalState.contact_info),
     ?assertEqual(ClientInfo, WithdrawalState#wthd_WithdrawalState.client_info),
+    ?assertEqual(ClientIdentity, WithdrawalState#wthd_WithdrawalState.client_identity),
 
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
     {ok, FinalWithdrawalState} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
     ?assertMatch(
         {succeeded, _},
         FinalWithdrawalState#wthd_WithdrawalState.status
-    ).
+    ),
+    %% A succeeded withdrawal is recorded for the Customer it identifies, in its party
+    {ok, #customer_CustomerState{customer = #customer_Customer{id = CustomerID}}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
 
 -spec create_withdrawal_with_changed_body_test(config()) -> test_return().
 create_withdrawal_with_changed_body_test(C) ->
@@ -1026,6 +1037,14 @@ call_withdrawal(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
+
+call_customer(Fun, Args) ->
+    ff_woody_client:call(customer_management, {{dmsl_customer_thrift, 'CustomerManagement'}, Fun, Args}).
+
+create_customer(PartyID) ->
+    Params = #customer_CustomerParams{party_ref = #domain_PartyConfigRef{id = PartyID}},
+    {ok, #customer_Customer{id = CustomerID}} = call_customer('Create', {Params}),
+    CustomerID.
 
 get_withdrawal(WithdrawalID) ->
     {ok, Machine} = ff_withdrawal_machine:get(WithdrawalID),

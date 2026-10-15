@@ -202,7 +202,8 @@ services(Options) ->
         partymgmt => "http://party-management:8022/v1/processing/partymgmt",
         binbase => "http://localhost:8222/binbase",
         limiter => "http://limiter:8022/v1/limiter",
-        party_config => "http://party-management:8022/v1/processing/partymgmt"
+        party_config => "http://party-management:8022/v1/processing/partymgmt",
+        customer_management => "http://cubasty:8022/v1/customer/management"
     },
     maps:get(services, Options, Default).
 
