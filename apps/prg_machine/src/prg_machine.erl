@@ -135,6 +135,7 @@
 -export([timestamp/0]).
 
 -export([unmarshal_event_body/2]).
+-export([decode_term/1]).
 
 %%
 
@@ -524,6 +525,7 @@ safe_env_leave(Binding) ->
 encode_term(Term) ->
     term_to_binary(Term).
 
+-spec decode_term(term()) -> term().
 decode_term(Term) when is_binary(Term) ->
     case binary_to_term(Term) of
         %% Legacy double envelope: old hg_machine wrote
