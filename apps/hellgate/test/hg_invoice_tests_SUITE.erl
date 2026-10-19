@@ -1,6 +1,5 @@
 %% TODO
 %%%  - Do not share state between test cases
-%%%  - Run cases in parallel
 
 -module(hg_invoice_tests_SUITE).
 
@@ -79,6 +78,8 @@
 -export([payment_adjustment_captured_from_failed/1]).
 -export([payment_adjustment_failed_from_captured/1]).
 -export([payment_adjustment_change_amount_and_captured/1]).
+-export([payment_adjustment_recalculates_changed_cost/1]).
+-export([payment_adjustment_new_amount_overrides_changed_cost/1]).
 -export([payment_adjustment_change_amount_and_refund_all/1]).
 -export([payment_adjustment_transaction_info_success/1]).
 -export([status_adjustment_of_partial_refunded_payment/1]).
@@ -268,17 +269,22 @@ all() ->
         consistent_account_balances
     ].
 
--spec groups() -> [{group_name(), list(), [test_case_name()]}].
+-type test_group() :: {group_name(), list(), [test_case_name() | {group, group_name()} | test_group()]}.
+
+-spec groups() -> [test_group()].
 groups() ->
     [
+        %% Keep the parent serial: children include domain and account mutations.
         {all_non_destructive_tests, [], [
             {group, base_payments},
             % {group, operation_limits_legacy},
             {group, operation_limits},
 
-            payment_risk_score_check,
-            payment_risk_score_check_fail,
-            payment_risk_score_check_timeout,
+            {risk_scores, [parallel], [
+                payment_risk_score_check,
+                payment_risk_score_check_fail,
+                payment_risk_score_check_timeout
+            ]},
 
             invalid_payment_w_deprived_party,
             external_account_posting,
@@ -299,42 +305,49 @@ groups() ->
             {group, proxy_provider_protocol}
         ]},
 
+        %% Serial fences protect shared balance deltas, domain overrides and fault-detector settings.
         {base_payments, [], [
-            invoice_creation_idempotency,
-            invalid_invoice_shop,
-            invalid_invoice_amount,
-            invalid_invoice_currency,
-            invalid_invoice_template_cost,
-            invalid_invoice_template_id,
-            invoice_w_template_idempotency,
-            invoice_w_template_amount_randomization,
-            invoice_w_template,
-            invoice_cancellation,
-            overdue_invoice_cancellation,
-            invoice_cancellation_after_payment_timeout,
-            invalid_payment_amount,
+            {independent_payments, [parallel], [
+                invoice_creation_idempotency,
+                invalid_invoice_shop,
+                invalid_invoice_amount,
+                invalid_invoice_currency,
+                invalid_invoice_template_cost,
+                invalid_invoice_template_id,
+                invoice_w_template_idempotency,
+                invoice_w_template_amount_randomization,
+                invoice_w_template,
+                invoice_cancellation,
+                overdue_invoice_cancellation,
+                invoice_cancellation_after_payment_timeout,
+                invalid_payment_amount,
 
-            payment_success_ruleset,
-            processing_deadline_reached_test,
-            payment_bank_card_category_condition,
-            payment_w_terminal_w_payment_service_success,
-            payment_success_on_second_try,
-            payment_success_with_increased_cost,
+                payment_success_ruleset,
+                processing_deadline_reached_test,
+                payment_bank_card_category_condition,
+                payment_w_terminal_w_payment_service_success,
+                payment_success_on_second_try,
+                payment_success_with_increased_cost
+            ]},
             refund_payment_with_increased_cost,
             payment_success_with_decreased_cost,
             refund_payment_with_decreased_cost,
-            payment_fail_after_silent_callback,
-            payment_session_changed_to_fail,
+            {payment_retries, [parallel], [
+                payment_fail_after_silent_callback,
+                payment_session_changed_to_fail,
 
-            payment_temporary_unavailability_retry_success,
-            payment_temporary_unavailability_too_many_retries,
-            invoice_success_on_third_payment,
+                payment_temporary_unavailability_retry_success,
+                payment_temporary_unavailability_too_many_retries,
+                invoice_success_on_third_payment
+            ]},
             payment_w_misconfigured_routing_failed,
-            payment_capture_failed,
-            payment_capture_retries_exceeded,
-            payment_partial_capture_success,
-            payment_error_in_cancel_session_does_not_cause_payment_failure,
-            payment_error_in_capture_session_does_not_cause_payment_failure,
+            {payment_captures, [parallel], [
+                payment_capture_failed,
+                payment_capture_retries_exceeded,
+                payment_partial_capture_success,
+                payment_error_in_cancel_session_does_not_cause_payment_failure,
+                payment_error_in_capture_session_does_not_cause_payment_failure
+            ]},
 
             payment_success_ruleset_provider_available,
             route_not_found_provider_unavailable,
@@ -351,44 +364,50 @@ groups() ->
             payment_adjustment_captured_from_failed,
             payment_adjustment_failed_from_captured,
             payment_adjustment_change_amount_and_captured,
+            payment_adjustment_recalculates_changed_cost,
+            payment_adjustment_new_amount_overrides_changed_cost,
             payment_adjustment_change_amount_and_refund_all,
             payment_adjustment_transaction_info_success,
             status_adjustment_of_partial_refunded_payment,
             registered_payment_adjustment_success
         ]},
 
+        %% The provision-terms override finishes before cases with private shop accounts start.
         {chargebacks, [], [
             create_chargeback_not_allowed,
             create_chargeback_provision_terms_not_allowed,
-            create_chargeback_inconsistent,
-            create_chargeback_exceeded,
-            create_chargeback_idempotency,
-            cancel_payment_chargeback,
-            cancel_partial_payment_chargeback,
-            cancel_partial_payment_chargeback_exceeded,
-            cancel_payment_chargeback_refund,
-            reject_payment_chargeback_inconsistent,
-            reject_payment_chargeback,
-            reject_payment_chargeback_no_fees,
-            reject_payment_chargeback_new_levy,
-            accept_payment_chargeback_inconsistent,
-            accept_payment_chargeback_exceeded,
-            accept_payment_chargeback_empty_params,
-            accept_payment_chargeback_twice,
-            accept_payment_chargeback_new_body,
-            accept_payment_chargeback_new_levy,
-            reopen_accepted_payment_chargeback_and_cancel_ok,
-            reopen_payment_chargeback_inconsistent,
-            reopen_payment_chargeback_exceeded,
-            reopen_payment_chargeback_cancel,
-            reopen_payment_chargeback_reject,
-            reopen_payment_chargeback_accept,
-            reopen_payment_chargeback_skip_stage_accept,
-            reopen_payment_chargeback_accept_new_levy,
-            reopen_payment_chargeback_arbitration,
-            reopen_payment_chargeback_arbitration_reopen_fails
+            {independent_chargebacks, [parallel], [
+                create_chargeback_inconsistent,
+                create_chargeback_exceeded,
+                create_chargeback_idempotency,
+                cancel_payment_chargeback,
+                cancel_partial_payment_chargeback,
+                cancel_partial_payment_chargeback_exceeded,
+                cancel_payment_chargeback_refund,
+                reject_payment_chargeback_inconsistent,
+                reject_payment_chargeback,
+                reject_payment_chargeback_no_fees,
+                reject_payment_chargeback_new_levy,
+                accept_payment_chargeback_inconsistent,
+                accept_payment_chargeback_exceeded,
+                accept_payment_chargeback_empty_params,
+                accept_payment_chargeback_twice,
+                accept_payment_chargeback_new_body,
+                accept_payment_chargeback_new_levy,
+                reopen_accepted_payment_chargeback_and_cancel_ok,
+                reopen_payment_chargeback_inconsistent,
+                reopen_payment_chargeback_exceeded,
+                reopen_payment_chargeback_cancel,
+                reopen_payment_chargeback_reject,
+                reopen_payment_chargeback_accept,
+                reopen_payment_chargeback_skip_stage_accept,
+                reopen_payment_chargeback_accept_new_levy,
+                reopen_payment_chargeback_arbitration,
+                reopen_payment_chargeback_arbitration_reopen_fails
+            ]}
         ]},
 
+        %% These cases accumulate limits and change their configuration in order.
         {operation_limits, [], [
             payment_limit_success,
             payment_shop_limit_success,
@@ -411,27 +430,29 @@ groups() ->
         {refunds, [], [
             invalid_refund_party_status,
             invalid_refund_shop_status,
-            %%{parallel, [], [
-            retry_temporary_unavailability_refund,
-            payment_refund_idempotency,
-            payment_refund_success,
-            payment_refund_failure,
-            payment_refund_success_after_callback,
-            payment_partial_refunds_success,
-            invalid_amount_payment_partial_refund,
-            invalid_amount_partial_capture_and_refund,
-            invalid_currency_payment_partial_refund,
-            cant_start_simultaneous_partial_refunds,
-            %% ]},
-            deadline_doesnt_affect_payment_refund,
+            {independent_refunds, [parallel], [
+                retry_temporary_unavailability_refund,
+                payment_refund_idempotency,
+                payment_refund_success,
+                payment_refund_failure,
+                payment_refund_success_after_callback,
+                payment_partial_refunds_success,
+                invalid_amount_payment_partial_refund,
+                invalid_amount_partial_capture_and_refund,
+                invalid_currency_payment_partial_refund,
+                cant_start_simultaneous_partial_refunds,
+                deadline_doesnt_affect_payment_refund
+            ]},
             ineligible_payment_partial_refund,
             payment_manual_refund,
-            payment_refund_id_types,
+            {refund_ids, [parallel], [
+                payment_refund_id_types,
 
-            registered_payment_manual_refund_success
+                registered_payment_manual_refund_success
+            ]}
         ]},
 
-        {holds_management, [], [
+        {holds_management, [parallel], [
             payment_hold_cancellation,
             payment_hold_double_cancellation,
             payment_hold_cancellation_captured,
@@ -453,11 +474,11 @@ groups() ->
             invalid_permit_partial_capture_in_provider
         ]},
 
-        {offsite_preauth_payment, [], [
+        {offsite_preauth_payment, [parallel], [
             payment_with_offsite_preauth_success,
             payment_with_offsite_preauth_failed
         ]},
-        {adhoc_repairs, [], [
+        {adhoc_repairs, [parallel], [
             adhoc_repair_working_failed,
             adhoc_repair_failed_succeeded,
             adhoc_repair_force_removal,
@@ -654,13 +675,22 @@ end_per_suite(C) ->
 -define(system_to_external_fixed, ?fixed(20, <<"RUB">>)).
 -define(merchant_to_system_fixed, ?fixed(100, <<"RUB">>)).
 
--define(assertRouteNotFound(Failure, Sub, ReasonSubstring), begin
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({no_route_found, Sub}) -> ok end),
+-define(assertFailure(Failure, TupleMask), ?assertMatch(TupleMask, failure_to_tuple(Failure))).
+
+-define(assertFailure(Failure, TupleMask, ReasonSubstring), begin
+    FailureTuple = failure_to_tuple(Failure),
+    ?assertMatch(TupleMask, FailureTuple),
     Reason = Failure#domain_Failure.reason,
     ?assert(
         nomatch =/= binary:match(Reason, ReasonSubstring),
-        <<"Failure reason '", Reason/binary, "' for 'no_route_found' doesn't match '", ReasonSubstring/binary, "'">>
+        iolist_to_binary(
+            io_lib:format("Failure reason '~s' for '~p' doesn't match '~s'", [Reason, FailureTuple, ReasonSubstring])
+        )
     )
+end).
+
+-define(assertRouteNotFound(Failure, Sub, ReasonSubstring), begin
+    ?assertFailure(Failure, {no_route_found, Sub}, ReasonSubstring)
 end).
 
 -spec init_per_group(group_name(), config()) -> config().
@@ -693,6 +723,8 @@ init_per_testcase(Name, C) when
     Name == payment_adjustment_captured_from_failed;
     Name == payment_adjustment_failed_from_captured;
     Name == payment_adjustment_change_amount_and_captured;
+    Name == payment_adjustment_recalculates_changed_cost;
+    Name == payment_adjustment_new_amount_overrides_changed_cost;
     Name == payment_adjustment_change_amount_and_refund_all;
     Name == payment_adjustment_transaction_info_success;
     Name == registered_payment_adjustment_success
@@ -1246,11 +1278,7 @@ payment_shop_limit_overflow(C) ->
     Failure = create_payment_shop_limit_overflow(
         PartyConfigRef, ShopConfigRef, PaymentAmount, Client, ?pmt_sys(<<"visa-ref">>)
     ),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun(
-        {authorization_failed, {shop_limit_exceeded, {unknown, _}}}
-    ) ->
-        ok
-    end).
+    ?assertFailure(Failure, {authorization_failed, {shop_limit_exceeded, {unknown, _}}}).
 
 -spec payment_shop_limit_more_overflow(config()) -> test_return().
 payment_shop_limit_more_overflow(C) ->
@@ -1277,11 +1305,7 @@ payment_shop_limit_more_overflow(C) ->
     Failure = create_payment_shop_limit_overflow(
         PartyConfigRef, ShopConfigRef, PaymentAmount, Client, ?pmt_sys(<<"visa-ref">>)
     ),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun(
-        {authorization_failed, {shop_limit_exceeded, {unknown, _}}}
-    ) ->
-        ok
-    end).
+    ?assertFailure(Failure, {authorization_failed, {shop_limit_exceeded, {unknown, _}}}).
 
 -spec payment_routes_limit_values(config()) -> test_return().
 payment_routes_limit_values(C) ->
@@ -1360,11 +1384,10 @@ payment_limit_overflow(C) ->
     ok = hg_limiter_helper:assert_payment_limit_amount(
         ?LIMIT_ID, configured_limit_version(C), PaymentAmount, Payment, Invoice
     ),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({no_route_found, {rejected, {limit_overflow, _}}}) -> ok end
-    ).
+    %% NOTE We expect binary value of limit id to match exixting atom, so helper
+    %% fun inside an assert will translate it to it.
+    ExpectedLimitID = binary_to_existing_atom(?LIMIT_ID),
+    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, {ExpectedLimitID, undefined}}}}).
 
 -spec limit_hold_currency_error(config()) -> test_return().
 limit_hold_currency_error(C) ->
@@ -1385,7 +1408,13 @@ limit_hold_payment_tool_not_supported(C) ->
 -spec limit_hold_two_routes_failure(config()) -> test_return().
 limit_hold_two_routes_failure(C) ->
     Failure = payment_route_not_found(C),
-    ?assertRouteNotFound(Failure, {rejected, {limit_overflow, _}}, <<"[{">>).
+    ?assertRouteNotFound(
+        Failure,
+        {rejected, {limit_overflow, _}},
+        %% NOTE Start of long and nested list of tuples describing route with
+        %% corresponding limit's states
+        <<"[{">>
+    ).
 
 payment_route_not_found(C) ->
     PmtSys = ?pmt_sys(<<"visa-ref">>),
@@ -1484,11 +1513,7 @@ refund_limit_success(C) ->
     ?payment(PaymentID) = Payment,
 
     Failure = create_payment_limit_overflow(PartyConfigRef, ShopConfigRef, 50000, Client, PmtSys),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({no_route_found, {rejected, {limit_overflow, _}}}) -> ok end
-    ),
+    ?assertFailure(Failure, {no_route_found, {rejected, {limit_overflow, _}}}),
     % create a refund finally
     RefundParams = make_refund_params(),
     RefundID = execute_payment_refund(InvoiceID, PaymentID, RefundParams, Client),
@@ -1612,11 +1637,7 @@ processing_deadline_reached_test(C) ->
         ?payment_ev(PaymentID, ?payment_rollback_started({failure, Failure})),
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID, 2, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({authorization_failed, {processing_deadline_reached, _}}) -> ok end
-    ).
+    ?assertFailure(Failure, {authorization_failed, {processing_deadline_reached, _}}).
 
 -spec payment_w_misconfigured_routing_failed(config()) -> test_return().
 payment_w_misconfigured_routing_failed(C) ->
@@ -1634,7 +1655,7 @@ payment_w_misconfigured_routing_failed(C) ->
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID, 5, Client),
     Reason = genlib:format({routing_decisions, {delegates, []}}),
-    ?assertRouteNotFound(Failure, {unknown, {{unknown_error, <<"misconfiguration">>}, _}}, Reason).
+    ?assertRouteNotFound(Failure, {unknown, {misconfiguration, _}}, Reason).
 
 payment_w_misconfigured_routing_failed_fixture(_Revision, _C) ->
     [
@@ -2341,12 +2362,13 @@ payment_session_changed_to_fail(C) ->
     %% Payment w/ preauth for suspend w/ user interaction occurrence.
     PaymentID = start_payment(InvoiceID, make_tds_payment_params(instant, ?pmt_sys(<<"visa-ref">>)), Client),
     UserInteraction = await_payment_process_interaction(InvoiceID, PaymentID, Client),
-
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {operation_blocked, ?err_gen_failure()}},
-        genlib:unique()
-    ),
+    Failure = #domain_Failure{
+        reason = genlib:unique(),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{
+            code = <<"operation_blocked">>
+        }
+    },
     Change = #proxy_provider_PaymentSessionChange{status = {failure, Failure}},
 
     %% Unknown session callback tag
@@ -2535,11 +2557,7 @@ payment_risk_score_check(C) ->
         ?payment_ev(PaymentID3, ?risk_score_changed(fatal)),
         ?payment_ev(PaymentID3, ?payment_status_changed(?failed({failure, Failure})))
     ] = next_changes(InvoiceID3, 5, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({no_route_found, _}) -> ok end
-    ).
+    ?assertFailure(Failure, {no_route_found, _}).
 
 -spec payment_risk_score_check_fail(config()) -> test_return().
 payment_risk_score_check_fail(C) ->
@@ -3116,6 +3134,140 @@ payment_adjustment_change_amount_and_captured(C) ->
     ?assertEqual(PrvDiff2, maps:get(own_amount, PrvAccount3) - maps:get(own_amount, PrvAccount2)),
     ?assertEqual(SysDiff2, maps:get(own_amount, SysAccount3) - maps:get(own_amount, SysAccount2)).
 
+-spec payment_adjustment_recalculates_changed_cost(config()) -> test_return().
+payment_adjustment_recalculates_changed_cost(C) ->
+    Client = cfg(client, C),
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(initial)),
+    OriginalAmount = 100000,
+    ChangedAmount = 200000,
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), OriginalAmount, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    PaymentID = await_payment_started(InvoiceID, PaymentID, Client),
+    {_CF, _Route} = await_payment_cash_flow(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
+    PaymentID = await_payment_process_finish(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+
+    AdjustmentParams1 = make_adjustment_params(<<"change payment amount">>, undefined, ChangedAmount),
+    ?adjustment(AdjustmentID1, ?adjustment_pending()) =
+        Adjustment1 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams1, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_created(Adjustment1))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(OriginalAmount, <<"RUB">>), ?cash(ChangedAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment1) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(ChangedAmount, <<"RUB">>)
+        },
+        Payment1
+    ),
+
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(actual)),
+    ExpectedRevision = hg_domain:head(),
+    #payproc_InvoicePayment{cash_flow = CashFlowBefore} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    AdjustmentParams = make_adjustment_params(<<"recalculate changed cost">>),
+    AdjustmentID = execute_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams, Client),
+    #domain_InvoicePaymentAdjustment{
+        old_cash_flow_inverse = OldCashFlowInverse,
+        new_cash_flow = NewCashFlow,
+        domain_revision = AdjustmentRevision
+    } = hg_client_invoicing:get_payment_adjustment(InvoiceID, PaymentID, AdjustmentID, Client),
+    #payproc_InvoicePayment{cash_flow = CashFlowAfter} =
+        hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertEqual(ExpectedRevision, AdjustmentRevision),
+    ?assertEqual(hg_cashflow:revert(CashFlowBefore), OldCashFlowInverse),
+    ?assertEqual(NewCashFlow, CashFlowAfter),
+    ?assertEqual(
+        [
+            % ?merchant_to_system_share_1 ?share(45, 1000, operation_amount)
+            {{merchant, settlement}, {system, settlement}, 9000},
+            % ?share(1, 1, operation_amount)
+            {{provider, settlement}, {merchant, settlement}, ChangedAmount},
+            % ?system_to_provider_share_actual ?share(16, 1000, operation_amount)
+            {{system, settlement}, {provider, settlement}, 3200},
+            % ?system_to_external_fixed ?fixed(20, <<"RUB">>)
+            {{system, settlement}, {external, outcome}, 20}
+        ],
+        get_payment_cashflow_mapped(InvoiceID, PaymentID, Client)
+    ).
+
+-spec payment_adjustment_new_amount_overrides_changed_cost(config()) -> test_return().
+payment_adjustment_new_amount_overrides_changed_cost(C) ->
+    Client = cfg(client, C),
+    OriginalAmount = 100000,
+    FirstAmount = 200000,
+    SecondAmount = 150000,
+    InvoiceID = start_invoice(<<"rubberduck">>, make_due_date(10), OriginalAmount, C),
+    PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
+    ?payment_state(?payment(PaymentID)) = hg_client_invoicing:start_payment(InvoiceID, PaymentParams, Client),
+    PaymentID = await_payment_started(InvoiceID, PaymentID, Client),
+    {_CF, _Route} = await_payment_cash_flow(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
+    PaymentID = await_payment_process_finish(InvoiceID, PaymentID, Client),
+    PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
+
+    ok = update_payment_terms_cashflow(?prv(100), get_payment_adjustment_provider_cashflow(actual)),
+    AdjustmentParams1 = make_adjustment_params(<<"change amount first">>, undefined, FirstAmount),
+    ?adjustment(AdjustmentID1, ?adjustment_pending()) =
+        Adjustment1 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams1, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_created(Adjustment1))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(OriginalAmount, <<"RUB">>), ?cash(FirstAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID1, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment1) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(FirstAmount, <<"RUB">>)
+        },
+        Payment1
+    ),
+
+    AdjustmentParams2 = make_adjustment_params(<<"override changed cost">>, undefined, SecondAmount),
+    ?adjustment(AdjustmentID2, ?adjustment_pending()) =
+        Adjustment2 =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams2, Client),
+    ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_created(Adjustment2))) =
+        next_change(InvoiceID, Client),
+    [
+        ?payment_ev(PaymentID, ?cash_changed(?cash(FirstAmount, <<"RUB">>), ?cash(SecondAmount, <<"RUB">>))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_status_changed(?adjustment_processed()))),
+        ?payment_ev(PaymentID, ?adjustment_ev(AdjustmentID2, ?adjustment_status_changed(?adjustment_captured(_))))
+    ] = next_changes(InvoiceID, 3, Client),
+    ?payment_state(Payment2) = hg_client_invoicing:get_payment(InvoiceID, PaymentID, Client),
+    ?assertMatch(
+        #domain_InvoicePayment{
+            cost = ?cash(OriginalAmount, <<"RUB">>),
+            changed_cost = ?cash(SecondAmount, <<"RUB">>)
+        },
+        Payment2
+    ),
+    ?assertEqual(
+        [
+            % ?merchant_to_system_share_1 ?share(45, 1000, operation_amount)
+            {{merchant, settlement}, {system, settlement}, 6750},
+            % ?share(1, 1, operation_amount)
+            {{provider, settlement}, {merchant, settlement}, SecondAmount},
+            % ?system_to_provider_share_actual ?share(16, 1000, operation_amount)
+            {{system, settlement}, {provider, settlement}, 2400},
+            % ?system_to_external_fixed ?fixed(20, <<"RUB">>)
+            {{system, settlement}, {external, outcome}, 20}
+        ],
+        get_payment_cashflow_mapped(InvoiceID, PaymentID, Client)
+    ).
+
 -spec payment_adjustment_change_amount_and_refund_all(config()) -> test_return().
 payment_adjustment_change_amount_and_refund_all(C) ->
     %% NOTE See share definitions macro
@@ -3398,11 +3550,7 @@ payment_temporary_unavailability_too_many_retries(C) ->
     PaymentID = await_payment_session_started(InvoiceID, PaymentID, Client, ?processed()),
     {failed, PaymentID, {failure, Failure}} =
         await_payment_process_failure(InvoiceID, PaymentID, Client, 3),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({authorization_failed, {temporarily_unavailable, _}}) -> ok end
-    ).
+    ?assertFailure(Failure, {authorization_failed, {temporarily_unavailable, _}}).
 
 update_payment_terms_cashflow(ProviderRef, CashFlow) ->
     Provider = hg_domain:get({provider, ProviderRef}),
@@ -4723,11 +4871,9 @@ payment_refund_success(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     Failure =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4768,11 +4914,9 @@ payment_refund_failure(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4880,11 +5024,9 @@ deadline_doesnt_affect_payment_refund(C) ->
     timer:sleep(ProcessingDeadline),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment(InvoiceID, PaymentID, RefundParams, Client),
     PaymentID = await_refund_created(InvoiceID, PaymentID, RefundID0, Client),
@@ -4922,11 +5064,9 @@ payment_manual_refund(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
     % not enough funds on the merchant account
     NoFunds =
-        {failure,
-            payproc_errors:construct(
-                'RefundFailure',
-                {terms_violated, {insufficient_merchant_funds, ?err_gen_failure()}}
-            )},
+        {failure, #domain_Failure{
+            code = <<"terms_violated">>, sub = #domain_SubFailure{code = <<"insufficient_merchant_funds">>}
+        }},
     Refund0 =
         ?refund_id(RefundID0) =
         hg_client_invoicing:refund_payment_manual(InvoiceID, PaymentID, RefundParams, Client),
@@ -5608,10 +5748,7 @@ adhoc_repair_force_invalid_transition(C) ->
     PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     PaymentID = execute_payment(InvoiceID, PaymentParams, Client),
     _ = ?assertEqual(ok, hg_invoice:fail(InvoiceID)),
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {unknown, ?err_gen_failure()}}
-    ),
+    Failure = #domain_Failure{code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"unknown">>}},
     InvalidChanges = [
         ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))),
         ?invoice_status_changed(?invoice_unpaid())
@@ -5676,7 +5813,7 @@ payment_with_offsite_preauth_failed(C) ->
         next_change(InvoiceID, 8000, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, 8000, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({authorization_failed, _}) -> ok end),
+    ?assertFailure(Failure, {authorization_failed, _}),
     ?invoice_status_changed(?invoice_cancelled(<<"overdue">>)) = next_change(InvoiceID, Client).
 
 -spec payment_with_tokenized_bank_card(config()) -> test_return().
@@ -5821,11 +5958,11 @@ repair_fail_session_on_processed_succeeded(C) ->
 
     timeout = next_change(InvoiceID, 2000, Client),
 
-    Failure = payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {security_policy_violated, ?err_gen_failure()}},
-        genlib:unique()
-    ),
+    Failure = #domain_Failure{
+        reason = genlib:unique(),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{code = <<"security_policy_violated">>}
+    },
     ok = repair_invoice_with_scenario(InvoiceID, {fail_session, Failure}, Client),
 
     [
@@ -6005,10 +6142,7 @@ repair_fulfill_session_with_trx_succeeded(C) ->
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client).
 
 construct_authorization_failure() ->
-    payproc_errors:construct(
-        'PaymentFailure',
-        {authorization_failed, {unknown, ?err_gen_failure()}}
-    ).
+    #domain_Failure{code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"unknown">>}}.
 
 %%
 
@@ -6439,11 +6573,7 @@ payment_cascade_success(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {Route1, _Candidates1, _CashFlow1, TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure1,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS NOT failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(PaymentInterim)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -6829,7 +6959,7 @@ payment_cascade_limit_overflow(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure1, {authorization_failed, {unknown, _}}),
     %% And again but no route found
     [
         ?payment_ev(PaymentID, ?route_changed(Route2, Candidates2)),
@@ -6840,7 +6970,7 @@ payment_cascade_limit_overflow(C) ->
     ?assertNotEqual(Route1, Route2),
     ?assertNot(lists:member(Route1, Candidates2)),
     %% No route found and so we pass original failure from previous attempt
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure2, {authorization_failed, {unknown, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(FinalPayment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -6890,11 +7020,7 @@ payment_big_cascade_success(C) ->
         (fun() ->
             {Route, Candidates, _CashFlow, _TrxID, Failure} =
                 await_cascade_triggering(InvoiceID, PaymentID, Client),
-            ok = payproc_errors:match(
-                'PaymentFailure',
-                Failure,
-                fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-            ),
+            ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
             _ = [
                 ?assertMatch(
                     HoldValue when HoldValue =:= 0 orelse HoldValue =:= Amount,
@@ -7180,7 +7306,7 @@ payment_cascade_fail_ui(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({authorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure1, {authorization_failed, {unknown, _}}),
     %% And again with UI
     [
         ?payment_ev(PaymentID, ?route_changed(_Route2)),
@@ -7201,7 +7327,7 @@ payment_cascade_fail_ui(C) ->
         next_changes(InvoiceID, 3, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({preauthorization_failed, {unknown, _}}) -> ok end),
+    ?assertFailure(Failure2, {preauthorization_failed, {unknown, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7385,7 +7511,7 @@ payment_cascade_fail_wo_available_attempt_limit(C) ->
         await_cascade_triggering(InvoiceID, PaymentID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7473,13 +7599,13 @@ payment_cascade_failures(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% And again
     {_Route2, _Candidates2, _CashFlow2, _TrxID2, Failure2} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure2, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure2, {preauthorization_failed, {card_blocked, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7574,7 +7700,7 @@ payment_cascade_deadline_failures(C) ->
     ] = next_changes(InvoiceID, 4, Client),
     {_Route1, _Candidates1, _CashFlow1, _TrxID1, Failure1} =
         await_cascade_triggering(InvoiceID, PaymentID, Client),
-    ok = payproc_errors:match('PaymentFailure', Failure1, fun({preauthorization_failed, {card_blocked, _}}) -> ok end),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     %% And again
     ?payment_ev(PaymentID, ?route_changed(_Route2)) =
         next_change(InvoiceID, Client),
@@ -7584,11 +7710,7 @@ payment_cascade_deadline_failures(C) ->
         next_change(InvoiceID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure2}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure2,
-        fun({authorization_failed, {processing_deadline_reached, _}}) -> ok end
-    ),
+    ?assertFailure(Failure2, {authorization_failed, {processing_deadline_reached, _}}),
     %% Assert payment status IS failed
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
@@ -7813,11 +7935,7 @@ payment_recurrent_cascade_success(C) ->
         #domain_PaymentRoute{provider = ?prv(?CASCADE_ID_RANGE(?PAYMENT_RECURRENT_CASCADE_SUCCESS_ID + 1))},
         Route1
     ),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure1,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure1, {preauthorization_failed, {card_blocked, _}}),
     [
         ?payment_ev(PaymentID, ?route_changed(Route2)),
         ?payment_ev(PaymentID, ?cash_flow_changed(_CashFlow2))
@@ -7870,11 +7988,7 @@ payment_recurrent_cascade_fail(C) ->
         next_change(InvoiceID, Client),
     ?payment_ev(PaymentID, ?payment_status_changed(?failed({failure, Failure}))) =
         next_change(InvoiceID, Client),
-    ok = payproc_errors:match(
-        'PaymentFailure',
-        Failure,
-        fun({preauthorization_failed, {card_blocked, _}}) -> ok end
-    ),
+    ?assertFailure(Failure, {preauthorization_failed, {card_blocked, _}}),
     ?invoice_state(?invoice_w_status(_), [?payment_state(Payment)]) =
         hg_client_invoicing:get(InvoiceID, Client),
     ?assertMatch(#domain_InvoicePayment{status = {failed, _}}, Payment).
@@ -8160,7 +8274,7 @@ repair_invoice(InvoiceID, Changes, Action, Params, Client) ->
     hg_client_invoicing:repair(InvoiceID, Changes, Action, Params, Client).
 
 create_repair_scenario(fail_pre_processing) ->
-    Failure = payproc_errors:construct('PaymentFailure', {no_route_found, {unknown, ?err_gen_failure()}}),
+    Failure = #domain_Failure{code = <<"no_route_found">>, sub = #domain_SubFailure{code = <<"unknown">>}},
     {'fail_pre_processing', #'payproc_InvoiceRepairFailPreProcessing'{failure = Failure}};
 create_repair_scenario(skip_inspector) ->
     {'skip_inspector', #'payproc_InvoiceRepairSkipInspector'{risk_score = low}};
@@ -10729,3 +10843,17 @@ mock_fault_detector(SupPid) ->
 
 configured_limit_version(C) ->
     genlib:define(cfg(original_domain_revision, C), cfg(base_limits_domain_revision, C)).
+
+failure_to_tuple(undefined) -> undefined;
+failure_to_tuple(?subfailure(Code, SubFailure)) -> failure_to_tuple_(Code, SubFailure);
+failure_to_tuple(?failure(Code, _, SubFailure)) -> failure_to_tuple_(Code, SubFailure).
+
+failure_to_tuple_(Code, SubFailure) ->
+    {normalize_failure_code(Code), failure_to_tuple(SubFailure)}.
+normalize_failure_code(Code) ->
+    try
+        erlang:binary_to_existing_atom(Code, utf8)
+    catch
+        error:badarg ->
+            {unknown_error, Code}
+    end.

@@ -452,7 +452,7 @@ init_(PaymentID, Params, #{timestamp := CreatedAt} = Opts) ->
         context = Context,
         external_id = ExternalID,
         processing_deadline = Deadline,
-        customer_id = InheritedCustomerID
+        customer_id = resolve_customer_id(InheritedCustomerID, PartyConfigRef, get_contact_info(Payer))
     },
     CascadeTokenEvents =
         case PayerParams of
@@ -473,6 +473,29 @@ init_(PaymentID, Params, #{timestamp := CreatedAt} = Opts) ->
         end,
     Events = [?payment_started(Payment2)] ++ CascadeTokenEvents,
     {collapse_changes(Events, undefined, #{}), {Events, timeout}}.
+
+resolve_customer_id(undefined, PartyRef, ContactInfo) ->
+    case customer_email(ContactInfo) of
+        undefined ->
+            undefined;
+        Email ->
+            hg_customer_client:find_or_create_customer_by_email(PartyRef, Email)
+    end;
+resolve_customer_id(CustomerID, _PartyRef, _ContactInfo) ->
+    CustomerID.
+
+customer_email(#domain_ContactInfo{email = Email}) when is_binary(Email) ->
+    case unicode:characters_to_list(Email, utf8) of
+        Chars when is_list(Chars) ->
+            case string:trim(Chars) of
+                [] -> undefined;
+                Trimmed -> unicode:characters_to_binary(Trimmed)
+            end;
+        _ ->
+            undefined
+    end;
+customer_email(_) ->
+    undefined.
 
 seed_bank_card_from_parent(PartyConfigRef, BCT, #{parent_payment := ParentPayment}) ->
     case get_recurrent_token(ParentPayment) of
@@ -1048,11 +1071,9 @@ validate_processing_deadline(#domain_InvoicePayment{processing_deadline = Deadli
         ok ->
             ok;
         {error, deadline_reached} ->
-            {failure,
-                payproc_errors:construct(
-                    'PaymentFailure',
-                    {authorization_failed, {processing_deadline_reached, #payproc_error_GeneralFailure{}}}
-                )}
+            {failure, #domain_Failure{
+                code = <<"authorization_failed">>, sub = #domain_SubFailure{code = <<"processing_deadline_reached">>}
+            }}
     end;
 validate_processing_deadline(_, _TargetType) ->
     ok.
@@ -1421,8 +1442,9 @@ create_cash_flow_adjustment(Timestamp, Params, DomainRevision, St, Opts) ->
     OldCashFlow = get_final_cashflow(St),
     VS = collect_validation_varset(St, Opts),
     Allocation = get_allocation(St),
+    Payment0 = Payment#domain_InvoicePayment{cost = get_payment_cost(Payment)},
     {Payment1, AdditionalEvents} = maybe_inject_new_cost_amount(
-        Payment, Params#payproc_InvoicePaymentAdjustmentParams.scenario
+        Payment0, Params#payproc_InvoicePaymentAdjustmentParams.scenario
     ),
     ExchangeContext = get_exchange_context(St),
     Context = genlib_map:compact(#{
@@ -1941,11 +1963,26 @@ process_callback(Tag, Payload, Session, St) when Session /= undefined ->
     case {hg_session:status(Session), hg_session:tags(Session)} of
         {suspended, [Tag | _]} ->
             handle_callback(get_activity(St), Payload, Session, St);
-        _ ->
-            throw(invalid_callback)
+        {suspended, [ExpectedTag | _]} ->
+            reject_callback(
+                genlib:format("Callback tag mismatch: received_tag=~ts, expected_tag=~ts", [Tag, ExpectedTag]),
+                St
+            );
+        {suspended, []} ->
+            reject_callback(<<"No callback tag registered for the suspended session">>, St);
+        {Status, _} ->
+            reject_callback(genlib:format("Session is not suspended: session_status=~p", [Status]), St)
     end;
-process_callback(_Tag, _Payload, undefined, _St) ->
-    throw(invalid_callback).
+process_callback(_Tag, _Payload, undefined, St) ->
+    reject_callback(<<"No active session">>, St).
+
+-spec reject_callback(binary(), st()) -> no_return().
+reject_callback(Reason, #st{payment = Payment, activity = Activity}) ->
+    Details = genlib:format(
+        "~ts; payment_id=~ts, payment_status=~p, activity=~0p",
+        [Reason, Payment#domain_InvoicePayment.id, element(1, Payment#domain_InvoicePayment.status), Activity]
+    ),
+    throw({invalid_callback, Details}).
 
 process_session_change(Tag, SessionChange, Session0, St) when Session0 /= undefined ->
     %% NOTE Change allowed only for suspended session. Not suspended
@@ -1969,8 +2006,8 @@ process_shop_limit_initialization(_Action, St) ->
     case check_shop_limits(Opts, St) of
         ok ->
             {next, {[?shop_limit_initiated()], timeout}};
-        {error, {limit_overflow = Error, IDs}} ->
-            Failure = construct_shop_limit_failure(Error, IDs),
+        {error, {limit_overflow = Error, LimitIDs}} ->
+            Failure = construct_shop_limit_failure(Error, LimitIDs),
             Events = [
                 ?shop_limit_initiated(),
                 ?payment_rollback_started(Failure)
@@ -1978,10 +2015,18 @@ process_shop_limit_initialization(_Action, St) ->
             {next, {Events, timeout}}
     end.
 
-construct_shop_limit_failure(limit_overflow, IDs) ->
-    Error = mk_static_error([authorization_failed, shop_limit_exceeded, unknown]),
-    Reason = genlib:format("Limits with following IDs overflowed: ~p", [IDs]),
-    {failure, payproc_errors:construct('PaymentFailure', Error, Reason)}.
+construct_shop_limit_failure(limit_overflow, LimitIDs) ->
+    {failure, #domain_Failure{
+        reason = genlib:format("Limits ~p overflowed", [LimitIDs]),
+        code = <<"authorization_failed">>,
+        sub = #domain_SubFailure{
+            code = <<"shop_limit_exceeded">>,
+            sub = #domain_SubFailure{
+                code = <<"unknown">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
+        }
+    }}.
 
 process_shop_limit_failure(_Action, #st{failure = Failure} = St) ->
     Opts = get_opts(St),
@@ -2019,8 +2064,10 @@ process_routing(Action, St) ->
         #{error := Error} ->
             ok = log_misconfigurations(Error),
             handle_choose_route_error(Error, [], St, Action);
-        #{routes := _Routes} = GetResult ->
-            FilterResult0 = hg_routing_ctx:from_result(GetResult),
+        #{routes := Routes0} = GetResult ->
+            {Affinities, AffinityEvents} = load_terminal_affinities(GetResult, St),
+            Routes = hg_route_affinity:fill(Affinities, Routes0, erlang:system_time(millisecond)),
+            FilterResult0 = hg_routing_ctx:from_result(GetResult#{routes => Routes}),
             %% NOTE Since this is routing step then current attempt is not yet
             %% accounted for in `St`.
             NewIter = get_iter(St) + 1,
@@ -2035,16 +2082,50 @@ process_routing(Action, St) ->
             ok = log_rejected_route_groups(FilterResult, VS),
             case hg_routing_ctx:candidates(FilterResult) of
                 [] ->
-                    handle_filtered_routes_exhaustion(FilterResult, Revision, St, Action);
+                    {Result, {FailureEvents, FailureAction}} =
+                        handle_filtered_routes_exhaustion(FilterResult, Revision, St, Action),
+                    {Result, {AffinityEvents ++ FailureEvents, FailureAction}};
                 FilteredRoutes ->
-                    {ChosenRoute, ChoiceMeta} = hg_routing:choose_route(FilteredRoutes),
+                    BalancedRoutes = hg_route_balancer:fill(FilteredRoutes),
+                    BalancedResult = hg_routing_ctx:append_rejected_routes(balanced, BalancedRoutes, [], FilterResult),
+                    {ChosenRoute, ChoiceMeta} = hg_routing:choose_route(BalancedRoutes),
+                    record_affinity_choice(ChosenRoute, St),
                     Events = produce_routing_events(
-                        hg_routing_ctx:build_route_selection_context(ChosenRoute, ChoiceMeta, FilterResult),
+                        hg_routing_ctx:build_route_selection_context(ChosenRoute, ChoiceMeta, BalancedResult),
                         Revision,
                         St
                     ),
-                    {next, {Events, timeout}}
+                    {next, {AffinityEvents ++ Events, timeout}}
             end
+    end.
+
+load_terminal_affinities(GetResult, #st{terminal_affinities = undefined, payment = Payment}) ->
+    Routes = maps:get(routes, GetResult) ++ lists:append(maps:values(maps:get(rejections, GetResult, #{}))),
+    CustomerID = Payment#domain_InvoicePayment.customer_id,
+    %% The event is written only when a binding takes part in the payment at all.
+    %% Otherwise every payment would get one, and a rollback of the release would break
+    %% reading the history even where the feature is unused: the previous protocol does
+    %% not know this change variant.
+    case hg_route_affinity:enabled(Routes) andalso CustomerID =/= undefined of
+        true ->
+            hg_customer_metrics:affinity(enabled),
+            Affinities = hg_customer_client:get_terminal_affinities(CustomerID),
+            {Affinities, [?terminal_affinities_loaded(Affinities)]};
+        false ->
+            {[], []}
+    end;
+load_terminal_affinities(_GetResult, #st{terminal_affinities = Affinities}) ->
+    {Affinities, []}.
+
+record_affinity_choice(Route, #st{payment = #domain_InvoicePayment{customer_id = CustomerID}}) ->
+    case hg_route:affinity(Route) =/= undefined andalso CustomerID =/= undefined of
+        true ->
+            case hg_route:affinity_rank(Route) of
+                0 -> hg_customer_metrics:affinity(miss);
+                _ -> hg_customer_metrics:affinity(hit)
+            end;
+        false ->
+            ok
     end.
 
 produce_routing_events(#{error := Error} = Ctx, Revision, St) when Error =/= undefined ->
@@ -2060,7 +2141,7 @@ produce_routing_events(#{error := Error} = Ctx, Revision, St) when Error =/= und
         ordsets:from_list([hg_route:to_payment_route(R) || R <- RollbackableCandidates]),
     RouteScores = hg_routing_ctx:route_scores(Ctx),
     RouteLimits = hg_routing_ctx:route_limits(Ctx),
-    Decision = build_route_decision_context(Route, Revision),
+    Decision = build_route_decision_context(hd(RollbackableCandidates), Revision),
     %% For protocol compatability we set choosen route in route_changed event.
     %% It doesn't influence cash_flow building because this step will be
     %% skipped. And all limit's 'hold' operations will be rolled back.
@@ -2075,7 +2156,7 @@ produce_routing_events(Ctx, Revision, _St) ->
         ordsets:from_list([hg_route:to_payment_route(R) || R <- hg_routing_ctx:considered_candidates(Ctx)]),
     RouteScores = hg_routing_ctx:route_scores(Ctx),
     RouteLimits = hg_routing_ctx:route_limits(Ctx),
-    Decision = build_route_decision_context(Route, Revision),
+    Decision = build_route_decision_context(ChoosenRoute, Revision),
     [?route_changed(Route, Candidates, RouteScores, RouteLimits, Decision)] ++
         maybe_exchange_context_changed(ChoosenRoute).
 
@@ -2085,7 +2166,7 @@ maybe_exchange_context_changed(_) ->
     [].
 
 build_route_decision_context(Route, Revision) ->
-    ProvisionTerms = hg_party:get_route_provision_terms(Route, #{}, Revision),
+    ProvisionTerms = hg_party:get_route_provision_terms(hg_route:to_payment_route(Route), #{}, Revision),
     SkipRecurrent =
         case ProvisionTerms#domain_ProvisionTermSet.extension of
             #domain_ExtendedProvisionTerms{skip_recurrent = true} ->
@@ -2093,7 +2174,15 @@ build_route_decision_context(Route, Revision) ->
             _ ->
                 undefined
         end,
-    #payproc_RouteDecisionContext{skip_recurrent = SkipRecurrent}.
+    #payproc_RouteDecisionContext{
+        skip_recurrent = SkipRecurrent,
+        terminal_affinity = hg_route:affinity(Route) =/= undefined,
+        affinity_ttl =
+            case hg_route:affinity(Route) of
+                #domain_RoutingAffinity{ttl = Ttl} -> Ttl;
+                undefined -> undefined
+            end
+    }.
 
 route_args(St) ->
     Opts = get_opts(St),
@@ -2190,19 +2279,44 @@ log_rejected_route_groups(Result, VS) ->
 
 construct_routing_failure({rejected_routes, {SubCode, RejectedRoutes}}) when
     SubCode =:= limit_misconfiguration orelse
-        SubCode =:= limit_overflow orelse
         SubCode =:= adapter_unavailable orelse
         SubCode =:= provider_conversion_is_too_low
 ->
-    construct_routing_failure([rejected, SubCode], genlib:format(normalize_rejected_routes(RejectedRoutes)));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"rejected">>, sub = #domain_SubFailure{code = atom_to_binary(SubCode)}},
+        genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
+construct_routing_failure({rejected_routes, {limit_overflow, RejectedRoutes}}) ->
+    %% NOTE See reason-tuple construction in `get_limit_overflow_routes/4`.
+    LimitIDs = ordsets:from_list(
+        lists:flatten([
+            LimitIDs
+         || {_PrvRef, _TrmRef, {'LimitOverflow', LimitIDs}} <- normalize_rejected_routes(RejectedRoutes)
+        ])
+    ),
+    construct_routing_failure(
+        #domain_SubFailure{
+            code = <<"rejected">>,
+            sub = #domain_SubFailure{
+                code = <<"limit_overflow">>,
+                sub = #domain_SubFailure{code = genlib_string:join($,, LimitIDs)}
+            }
+        },
+        genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
 construct_routing_failure({rejected_routes, {_SubCode, RejectedRoutes}}) ->
-    construct_routing_failure([forbidden], genlib:format(normalize_rejected_routes(RejectedRoutes)));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"forbidden">>}, genlib:format(normalize_rejected_routes(RejectedRoutes))
+    );
 construct_routing_failure({misconfiguration = Code, Details}) ->
-    construct_routing_failure([unknown, {unknown_error, atom_to_binary(Code)}], genlib:format(Details));
+    construct_routing_failure(
+        #domain_SubFailure{code = <<"unknown">>, sub = #domain_SubFailure{code = atom_to_binary(Code)}},
+        genlib:format(Details)
+    );
 construct_routing_failure(risk_score_is_too_high = Code) ->
-    construct_routing_failure([Code], undefined);
+    construct_routing_failure(#domain_SubFailure{code = atom_to_binary(Code)}, undefined);
 construct_routing_failure(Error) when is_atom(Error) ->
-    construct_routing_failure([{unknown_error, Error}], undefined).
+    construct_routing_failure(#domain_SubFailure{code = atom_to_binary(Error)}, undefined).
 
 normalize_rejected_routes(RejectedRoutes) ->
     [normalize_rejected_route(Route) || Route <- RejectedRoutes].
@@ -2214,12 +2328,8 @@ normalize_rejected_route(#{provider_ref := _, terminal_ref := _, rejection_reaso
 normalize_rejected_route(Route) ->
     Route.
 
-construct_routing_failure(Codes, Reason) ->
-    {failure, payproc_errors:construct('PaymentFailure', mk_static_error([no_route_found | Codes]), Reason)}.
-
-mk_static_error([_ | _] = Codes) -> mk_static_error_(#payproc_error_GeneralFailure{}, lists:reverse(Codes)).
-mk_static_error_(T, []) -> T;
-mk_static_error_(Sub, [Code | Codes]) -> mk_static_error_({Code, Sub}, Codes).
+construct_routing_failure(SubFailure, Reason) ->
+    {failure, #domain_Failure{reason = Reason, code = <<"no_route_found">>, sub = SubFailure}}.
 
 -spec process_cash_flow_building(action(), st()) -> machine_result().
 process_cash_flow_building(_Action, St) ->
@@ -2243,14 +2353,33 @@ process_cash_flow_building(_Action, St) ->
         allocation => Allocation,
         exchange_context => ExchangeContext
     }),
-    FinalCashflow = calculate_cashflow(Context, Opts),
-    _ = rollback_unused_payment_limits(St),
-    _Clock = hg_accounting:hold(
-        construct_payment_plan_id(St),
-        {1, FinalCashflow}
-    ),
-    Events = [?cash_flow_changed(FinalCashflow)],
-    {next, {Events, timeout}}.
+    try calculate_cashflow(Context, Opts) of
+        FinalCashflow ->
+            _ = rollback_unused_payment_limits(St),
+            _Clock = hg_accounting:hold(
+                construct_payment_plan_id(St),
+                {1, FinalCashflow}
+            ),
+            {next, {[?cash_flow_changed(FinalCashflow)], timeout}}
+    catch
+        error:{misconfiguration, _} = Error ->
+            %% TODO Validate route-specific cash flow accounts during routing and consider
+            %% cascading to another candidate when the selected route is misconfigured.
+            ?LOG_MD(warning, "Cash flow building failed due to misconfiguration, route: ~p, error: ~p", [
+                Route, Error
+            ]),
+            Failure = construct_cashflow_failure(Error),
+            Routes = get_candidate_routes(St),
+            _ = rollback_payment_limits(Routes, get_iter(St), St, [ignore_business_error, ignore_not_found]),
+            {done, {[?payment_status_changed(?failed(Failure))], timeout}}
+    end.
+
+construct_cashflow_failure({misconfiguration, Details}) ->
+    {failure, #domain_Failure{
+        code = <<"misconfiguration">>,
+        sub = #domain_SubFailure{code = <<"cash_flow">>},
+        reason = genlib:format(Details)
+    }}.
 
 %%
 
@@ -2509,7 +2638,15 @@ process_result({payment, finalizing_accounter}, Action, St) ->
                 rollback_payment_cashflow(St)
         end,
     check_recurrent_token(St),
-    _ = maybe_save_recurrent_token_to_customer(St),
+    %% Only a captured payment binds. The binding goes first: it also remembers the payment
+    %% for the Customer, and only its outcome tells whether a separate AddPayment is needed.
+    %% A cancelled hold still saves its token and is recorded, as it was before bindings
+    Bound =
+        case Target of
+            ?captured() -> maybe_bind_terminal_affinity(St);
+            ?cancelled() -> not_bound
+        end,
+    _ = maybe_save_recurrent_token_to_customer(Bound, St),
     NewAction = get_action(Target, Action, St),
     {done, {[?payment_status_changed(Target)], NewAction}}.
 
@@ -2569,7 +2706,35 @@ check_recurrent_token(#st{
 check_recurrent_token(_) ->
     ok.
 
+-spec maybe_bind_terminal_affinity(st()) -> bound | not_bound.
+maybe_bind_terminal_affinity(
+    #st{
+        route_affinity = true,
+        affinity_ttl = Ttl,
+        payment = #domain_InvoicePayment{id = PaymentID, customer_id = CustomerID}
+    } = St
+) when CustomerID =/= undefined ->
+    Route = get_route(St),
+    case hg_terminal_affinity:can_bind(Ttl, erlang:system_time(millisecond)) of
+        true ->
+            InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
+            case hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}) of
+                ok ->
+                    _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
+                    bound;
+                %% The Customer was deleted mid-payment, or cubasty rejected the request: there
+                %% is nothing to bind, and a retry of the step would get the same answer
+                {error, Reason} when Reason =:= customer_not_found; Reason =:= invalid_request ->
+                    not_bound
+            end;
+        false ->
+            not_bound
+    end;
+maybe_bind_terminal_affinity(_) ->
+    not_bound.
+
 maybe_save_recurrent_token_to_customer(
+    Bound,
     #st{
         payment = #domain_InvoicePayment{
             id = PaymentID,
@@ -2580,10 +2745,18 @@ maybe_save_recurrent_token_to_customer(
     } = St
 ) when CustomerID =/= undefined ->
     InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
-    hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID),
+    %% A binding remembers the payment for the Customer with the same call, so AddPayment
+    %% is needed only when there was no binding: without it the payment is lost to the
+    %% personal account
+    ok =
+        case Bound of
+            bound -> ok;
+            not_bound -> hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID)
+        end,
     _ = maybe_save_recurrent_token_to_bankcard(RecToken, Payer, St),
     maybe_link_bankcard_to_customer(CustomerID, Payer);
 maybe_save_recurrent_token_to_customer(
+    _Bound,
     #st{
         payment = #domain_InvoicePayment{
             payer = Payer
@@ -2626,12 +2799,7 @@ get_bank_card_token(?recurrent_payer({bank_card, #domain_BankCard{token = Token}
 get_bank_card_token(_) ->
     undefined.
 
-choose_fd_operation_status_for_failure({failure, Failure}) ->
-    payproc_errors:match('PaymentFailure', Failure, fun do_choose_fd_operation_status_for_failure/1);
-choose_fd_operation_status_for_failure(_Failure) ->
-    finish.
-
-do_choose_fd_operation_status_for_failure({authorization_failed, {FailType, _}}) ->
+choose_fd_operation_status_for_failure({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(FailType0, _))}) ->
     DefaultBenignFailures = [
         insufficient_funds,
         rejected_by_issuer,
@@ -2640,11 +2808,17 @@ do_choose_fd_operation_status_for_failure({authorization_failed, {FailType, _}})
     FDConfig = genlib_app:env(hellgate, fault_detector, #{}),
     Config = genlib_map:get(conversion, FDConfig, #{}),
     BenignFailures = genlib_map:get(benign_failures, Config, DefaultBenignFailures),
-    case lists:member(FailType, BenignFailures) of
+    FailType1 =
+        try
+            erlang:binary_to_existing_atom(FailType0, utf8)
+        catch
+            error:badarg -> undefined
+        end,
+    case lists:member(FailType1, BenignFailures) of
         false -> error;
         true -> finish
     end;
-do_choose_fd_operation_status_for_failure(_Failure) ->
+choose_fd_operation_status_for_failure(_) ->
     finish.
 
 maybe_notify_fault_detector({payment, processing_session}, processed, Status, St) ->
@@ -2686,7 +2860,7 @@ get_initial_retry_strategy(TargetType) ->
     St :: st(),
     Timeout :: non_neg_integer().
 check_retry_possibility(Target, Failure, St) ->
-    case check_failure_type(Target, Failure) of
+    case check_failure_type(Failure) of
         transient ->
             RetryStrategy = get_actual_retry_strategy(Target, St),
             case hg_retry:next_step(RetryStrategy) of
@@ -2701,20 +2875,10 @@ check_retry_possibility(Target, Failure, St) ->
             fatal
     end.
 
--spec check_failure_type(target(), failure()) -> transient | fatal.
-check_failure_type(Target, {failure, Failure}) ->
-    payproc_errors:match(get_error_class(Target), Failure, fun do_check_failure_type/1);
-check_failure_type(_Target, _Other) ->
-    fatal.
-
-get_error_class({Target, _}) when Target =:= processed; Target =:= captured; Target =:= cancelled ->
-    'PaymentFailure';
-get_error_class(Target) ->
-    error({unsupported_target, Target}).
-
-do_check_failure_type({authorization_failed, {temporarily_unavailable, _}}) ->
+-spec check_failure_type(failure()) -> transient | fatal.
+check_failure_type({failure, ?failure(<<"authorization_failed">>, _, ?subfailure(<<"temporarily_unavailable">>, _))}) ->
     transient;
-do_check_failure_type(_Failure) ->
+check_failure_type(_) ->
     fatal.
 
 get_action(?processed(), _Action, St) ->
@@ -2796,8 +2960,8 @@ get_limit_overflow_routes(Routes, VS, Iter, St) ->
             case hg_limiter:check_limits(TurnoverLimits, Invoice, Payment, Session, PaymentRoute, Iter) of
                 {ok, Limits} ->
                     {[Route | RoutesNoOverflowIn], RejectedIn, LimitsIn#{PaymentRoute => Limits}};
-                {error, {limit_overflow, IDs, Limits}} ->
-                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', IDs}, Route),
+                {error, {limit_overflow, LimitIDs}, Limits} ->
+                    RejectedRoute = hg_route:set_rejection_reason({'LimitOverflow', LimitIDs}, Route),
                     {RoutesNoOverflowIn, [RejectedRoute | RejectedIn], LimitsIn#{PaymentRoute => Limits}}
             end
         end,
@@ -3371,7 +3535,17 @@ merge_change(
         activity = {payment, cash_flow_building},
         route_scores = hg_maybe:apply(fun(S) -> maps:merge(RouteScores, S) end, Scores, RouteScores),
         route_limits = hg_maybe:apply(fun(L) -> maps:merge(RouteLimits, L) end, Limits, RouteLimits),
-        payment = Payment1
+        payment = Payment1,
+        affinity_ttl =
+            case Decision of
+                #payproc_RouteDecisionContext{affinity_ttl = Ttl} -> Ttl;
+                undefined -> undefined
+            end,
+        route_affinity =
+            case Decision of
+                #payproc_RouteDecisionContext{terminal_affinity = true} -> true;
+                _ -> false
+            end
     };
 merge_change(
     Change = ?invoice_payment_exchange_context_changed(ExchangeContext),
@@ -3425,6 +3599,8 @@ merge_change(Change = ?cash_flow_changed(CashFlow), #st{activity = Activity} = S
 merge_change(Change = ?rec_token_acquired(Token), #st{} = St, Opts) ->
     _ = validate_transition([{payment, processing_session}, {payment, finalizing_session}], Change, St, Opts),
     St#st{recurrent_token = Token};
+merge_change(?terminal_affinities_loaded(Affinities), #st{} = St, _Opts) ->
+    St#st{terminal_affinities = Affinities};
 merge_change(?cascade_tokens_loaded(Tokens), #st{} = St, _Opts) ->
     St#st{cascade_recurrent_tokens = hg_customer_client:tokens_to_map(Tokens)};
 merge_change(Change = ?cash_changed(_OldCash, NewCash), #st{} = St, Opts) ->
@@ -4181,10 +4357,7 @@ format_status_details(_) ->
 format_failure({operation_timeout, _}) ->
     [<<"timeout">>];
 format_failure({failure, Failure}) ->
-    format_domain_failure(Failure).
-
-format_domain_failure(Failure) ->
-    payproc_errors:format_raw(Failure).
+    hg_invoice_utils:format_failure(Failure).
 
 get_account_key({AccountParty, AccountType}) ->
     hg_utils:join(AccountParty, $., AccountType).
@@ -4226,10 +4399,57 @@ get_route_cascade_behaviour(Route, Revision) ->
     Behaviour.
 
 -ifdef(TEST).
+-include("invoice_events.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("hellgate/test/hg_ct_domain.hrl").
 
 -spec test() -> _.
+
+%% Each generated test deliberately calls a callback rejection branch.
+-dialyzer({no_fail_call, invalid_callback_details_test_/0}).
+
+-spec invalid_callback_details_test_() -> [_].
+invalid_callback_details_test_() ->
+    St = #st{
+        activity = {payment, processing_session},
+        payment = #domain_InvoicePayment{
+            id = <<"1">>,
+            created_at = <<"2026-09-08T11:23:08Z">>,
+            status = ?pending(),
+            cost = ?cash(1000, <<"KZT">>),
+            domain_revision = 1,
+            flow = ?invoice_payment_flow_instant(),
+            payer = ?payment_resource_payer(
+                #domain_DisposablePaymentResource{payment_tool = {payment_terminal, #domain_PaymentTerminal{}}},
+                #domain_ContactInfo{}
+            )
+        }
+    },
+    Session = hg_session:apply_event(hg_session:create(), undefined, #{
+        target => ?processed(),
+        route => #domain_PaymentRoute{provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}},
+        invoice_id => <<"invoice">>,
+        payment_id => <<"1">>,
+        timestamp => 0
+    }),
+    Cases = [
+        {undefined, <<"No active session">>},
+        {Session, <<"Session is not suspended: session_status=active">>},
+        {Session#{status => finished}, <<"Session is not suspended: session_status=finished">>},
+        {Session#{status => suspended}, <<"No callback tag registered for the suspended session">>},
+        {
+            Session#{status => suspended, tags => [<<"new-tag">>, <<"old-tag">>]},
+            <<"Callback tag mismatch: received_tag=old-tag, expected_tag=new-tag">>
+        }
+    ],
+    lists:map(
+        fun({CurrentSession, Reason}) ->
+            Details =
+                <<Reason/binary, "; payment_id=1, payment_status=pending, activity={payment,processing_session}">>,
+            ?_assertThrow({invalid_callback, Details}, process_callback(<<"old-tag">>, <<>>, CurrentSession, St))
+        end,
+        Cases
+    ).
 
 -spec filter_attempted_routes_test_() -> [_].
 filter_attempted_routes_test_() ->
@@ -4390,5 +4610,362 @@ shop_limits_regression_test() ->
         #st{},
         collapse_changes(Events, undefined, ChangeOpts)
     ).
+
+-spec customer_email_test_() -> [_].
+customer_email_test_() ->
+    [
+        ?_assertEqual(undefined, customer_email(undefined)),
+        ?_assertEqual(undefined, customer_email(#domain_ContactInfo{})),
+        ?_assertEqual(undefined, customer_email(#domain_ContactInfo{email = <<" \t\n">>})),
+        ?_assertEqual(undefined, customer_email(#domain_ContactInfo{email = <<255>>})),
+        ?_assertEqual(undefined, customer_email(#domain_ContactInfo{email = <<195>>})),
+        ?_assertEqual(<<"A@example.test">>, customer_email(#domain_ContactInfo{email = <<"  A@example.test ">>}))
+    ].
+
+-spec terminal_affinities_snapshot_test_() -> _.
+terminal_affinities_snapshot_test_() ->
+    {setup,
+        fun() ->
+            {ok, _} = application:ensure_all_started(prometheus),
+            hg_customer_metrics:setup(),
+            ok = meck:new([hg_customer_client, hg_party], [passthrough]),
+            meck:expect(hg_party, get_route_provision_terms, fun(_, _, _) ->
+                #domain_ProvisionTermSet{extension = #domain_ExtendedProvisionTerms{skip_recurrent = true}}
+            end)
+        end,
+        fun(_) -> meck:unload([hg_customer_client, hg_party]) end, [
+            ?_test(terminal_affinities_snapshot()),
+            ?_test(customer_resolution()),
+            ?_test(route_affinity_replay()),
+            {timeout, 30, ?_test(customer_finalization())}
+        ]}.
+
+-dialyzer({nowarn_function, terminal_affinities_snapshot/0}).
+terminal_affinities_snapshot() ->
+    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{}))#{affinity => #domain_RoutingAffinity{}},
+    GetResult = #{routes => [Route]},
+    St = (customer_finalization_state())#st{activity = {payment, processing_failure}},
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [] end),
+    {[], [Event]} = load_terminal_affinities(GetResult, St),
+    St1 = merge_change(Event, St, #{validation => strict}),
+    ?assertEqual({[], []}, load_terminal_affinities(GetResult, St1)),
+    ?assertEqual(1, meck:num_calls(hg_customer_client, get_terminal_affinities, '_')),
+    ?assertEqual(St1, merge_change(Event, St, #{validation => strict})),
+    Affinity = #customer_TerminalAffinity{
+        provider_ref = ?prv(1),
+        terminal_ref = ?trm(1),
+        bind_seq = 1,
+        bound_at = <<"2026-01-01T00:00:00Z">>,
+        last_used_at = <<"2026-01-01T00:00:00Z">>
+    },
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [Affinity] end),
+    {[Affinity], [Loaded]} = load_terminal_affinities(GetResult, St),
+    Replay = merge_change(Loaded, St, #{validation => strict}),
+    ?assertEqual({[Affinity], []}, load_terminal_affinities(GetResult, Replay)),
+    ?assertEqual(
+        1,
+        hg_route:affinity_rank(
+            hd(hg_route_affinity:fill(Replay#st.terminal_affinities, [Route], erlang:system_time(millisecond)))
+        )
+    ),
+    Before = meck:num_calls(hg_customer_client, get_terminal_affinities, '_'),
+    %% When no binding takes part in the payment, no event is written at all: otherwise
+    %% every payment would get one and a rollback of the release would break reading
+    %% other people's histories
+    ?assertEqual({[], []}, load_terminal_affinities(#{routes => []}, St)),
+    ?assertEqual(
+        {[], []},
+        load_terminal_affinities(
+            GetResult,
+            St#st{payment = (St#st.payment)#domain_InvoicePayment{customer_id = undefined}}
+        )
+    ),
+    ?assertEqual(Before, meck:num_calls(hg_customer_client, get_terminal_affinities, '_')),
+    %% And when one does take part it is written, empty history included
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [] end),
+    ?assertEqual({[], [?terminal_affinities_loaded([])]}, load_terminal_affinities(GetResult, St)),
+    %% A failing cubasty fails the step and writes nothing: the retried step loads again
+    ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) ->
+        error({woody_error, {internal, resource_unavailable, <<"timeout">>}})
+    end),
+    ?assertError({woody_error, _}, load_terminal_affinities(GetResult, St)).
+
+-dialyzer({nowarn_function, customer_resolution/0}).
+customer_resolution() ->
+    PartyRef = #domain_PartyConfigRef{id = <<"party">>},
+    Contact = #domain_ContactInfo{email = <<" a@example.test ">>},
+    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(Party, Email) ->
+        ?assertEqual(PartyRef, Party),
+        ?assertEqual(<<"a@example.test">>, Email),
+        <<"resolved">>
+    end),
+    ?assertEqual(<<"resolved">>, resolve_customer_id(undefined, PartyRef, Contact)),
+    ?assertEqual(<<"explicit">>, resolve_customer_id(<<"explicit">>, PartyRef, Contact)),
+    Parent0 = customer_finalization_state(),
+    Parent = Parent0#st{payment = (Parent0#st.payment)#domain_InvoicePayment{customer_id = <<"parent">>}},
+    Inherited = inherit_or_validate_customer_id(undefined, #{parent_payment => Parent}),
+    ?assertEqual(<<"parent">>, resolve_customer_id(Inherited, PartyRef, Contact)),
+    ?assertEqual(1, meck:num_calls(hg_customer_client, find_or_create_customer_by_email, '_')),
+    %% With no email there is nothing to resolve, and cubasty is not called at all
+    ?assertEqual(undefined, resolve_customer_id(undefined, PartyRef, #domain_ContactInfo{email = <<"  ">>})),
+    ?assertEqual(1, meck:num_calls(hg_customer_client, find_or_create_customer_by_email, '_')),
+    %% An address cubasty does not accept identifies no payer
+    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(_, _) -> undefined end),
+    ?assertEqual(undefined, resolve_customer_id(undefined, PartyRef, Contact)),
+    %% A failing cubasty fails the payment creation rather than creating it without a Customer
+    ok = meck:expect(hg_customer_client, find_or_create_customer_by_email, fun(_, _) ->
+        error({woody_error, {internal, resource_unavailable, <<"timeout">>}})
+    end),
+    ?assertError({woody_error, _}, resolve_customer_id(undefined, PartyRef, Contact)).
+
+route_affinity_replay() ->
+    St0 = customer_finalization_state(),
+    lists:foreach(
+        fun(Ttl) ->
+            St = replay_route_affinity(#domain_RoutingAffinity{ttl = Ttl}, St0),
+            ?assertEqual(Ttl, St#st.affinity_ttl),
+            ?assert(St#st.route_affinity),
+            Disabled = replay_route_affinity(undefined, St),
+            ?assertEqual(undefined, Disabled#st.affinity_ttl),
+            ?assertNot(Disabled#st.route_affinity),
+            ?assertEqual(true, (get_payment(Disabled))#domain_InvoicePayment.skip_recurrent)
+        end,
+        [undefined, {since_bound, 3600}, {since_last_use, 1800}, {deadline, <<"2030-01-01T00:00:00Z">>}]
+    ),
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, ok),
+    Before = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
+    Legacy = #payproc_RouteDecisionContext{terminal_affinity = true},
+    St1 = replay_route_decision(Legacy, St0#st{affinity_ttl = {since_bound, 3600}}),
+    ?assertEqual(undefined, St1#st.affinity_ttl),
+    ?assertEqual(bound, maybe_bind_terminal_affinity(St1)),
+    ?assertEqual(Before + 1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
+    ?assert(
+        meck:called(hg_customer_client, bind_terminal_affinity, [
+            <<"customer">>, get_route(St1), undefined, {<<"invoice">>, <<"payment">>}
+        ])
+    ),
+    lists:foreach(
+        fun(Decision) ->
+            St2 = replay_route_decision(Decision, St0#st{affinity_ttl = {since_bound, 3600}}),
+            ?assertNot(St2#st.route_affinity),
+            ?assertEqual(undefined, St2#st.affinity_ttl),
+            ?assertEqual(not_bound, maybe_bind_terminal_affinity(St2))
+        end,
+        [undefined, #payproc_RouteDecisionContext{}, #payproc_RouteDecisionContext{terminal_affinity = false}]
+    ),
+    ?assertEqual(Before + 1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')).
+
+replay_route_affinity(Affinity, St) ->
+    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{}))#{affinity => Affinity},
+    replay_route_decision(build_route_decision_context(Route, 1), St).
+
+replay_route_decision(Decision, St) ->
+    Route = get_route(St),
+    Changed = ?route_changed(Route, [Route], #{}, #{}, Decision),
+    Changes = [?payment_ev(<<"payment">>, Changed)],
+    Timestamp = {calendar:universal_time(), 0},
+    {1, Bin} = hg_invoice:marshal_event_body(Timestamp, Changes),
+    ?assertEqual(Changes, hg_invoice:unmarshal_event_body(Bin)),
+    InitialChanges = [
+        ?invoice_created(get_invoice(get_opts(St))),
+        ?payment_ev(<<"payment">>, ?payment_started(get_payment(St))),
+        ?payment_ev(<<"payment">>, ?risk_score_changed(low))
+    ],
+    {1, InitialBin} = hg_invoice:marshal_event_body(Timestamp, InitialChanges),
+    History = [
+        {1, Timestamp, hg_invoice:unmarshal_event_body(InitialBin)},
+        {2, Timestamp, hg_invoice:unmarshal_event_body(Bin)}
+    ],
+    {ok, Restored} = hg_invoice:get_payment(
+        <<"payment">>,
+        prg_machine:collapse(hg_invoice, #{
+            namespace => invoice, id => <<"invoice">>, history => History, aux_state => #{}
+        })
+    ),
+    Replayed = lists:foldl(
+        fun(?payment_ev(_, Change), Acc) -> merge_change(Change, Acc, #{}) end,
+        St#st{activity = {payment, routing}},
+        hg_invoice:unmarshal_event_body(Bin)
+    ),
+    ?assertEqual(Replayed#st.affinity_ttl, Restored#st.affinity_ttl),
+    ?assertEqual(Replayed#st.route_affinity, Restored#st.route_affinity),
+    Replayed#st{activity = St#st.activity, cash_flow = St#st.cash_flow}.
+
+-dialyzer({nowarn_function, customer_finalization/0}).
+customer_finalization() ->
+    Modules = [hg_limiter, hg_accounting, hg_invoice_utils, hg_payment_institution, hg_route_collector],
+    ok = meck:new(Modules, [passthrough]),
+    try
+        St0 = customer_finalization_state(),
+        St = replay_route_affinity(#domain_RoutingAffinity{}, St0),
+        Shop = #domain_ShopConfig{
+            name = <<"shop">>,
+            category = ?cat(1),
+            payment_institution = ?pinst(1),
+            terms = ?trms(1),
+            block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"2026-01-01T00:00:00Z">>}},
+            suspension = {active, #domain_Active{since = <<"2026-01-01T00:00:00Z">>}},
+            account = #domain_ShopAccount{currency = ?cur(<<"RUB">>), settlement = 1, guarantee = 2},
+            party_ref = #domain_PartyConfigRef{id = <<"party">>},
+            location = {url, <<"https://example.test">>}
+        },
+        ok = meck:expect(hg_party, get_shop, fun(Ref, _, _) -> {Ref, Shop} end),
+        ok = meck:expect(hg_party, get_route_payment_terms, fun(_, _, _) -> #domain_PaymentsProvisionTerms{} end),
+        ok = meck:expect(hg_invoice_utils, compute_shop_terms, fun(_, _, _) ->
+            #domain_TermSet{payments = #domain_PaymentsServiceTerms{}}
+        end),
+        ok = meck:expect(hg_payment_institution, compute_payment_institution, fun(_, _, _) ->
+            #domain_PaymentInstitution{
+                name = <<"test">>,
+                realm = test,
+                residences = [],
+                system_account_set = {value, ?sas(1)},
+                inspector = {value, ?insp(1)}
+            }
+        end),
+        ok = meck:expect(hg_limiter, commit_payment_limits, 7, ok),
+        ok = meck:expect(hg_limiter, rollback_payment_limits, 7, ok),
+        ok = meck:expect(hg_accounting, commit, 2, ok),
+        ok = meck:expect(hg_accounting, rollback, 2, ok),
+        ok = meck:expect(hg_route_collector, get_routes, 4, #{routes => []}),
+        lists:foreach(
+            fun(Ttl) ->
+                assert_customer_finalization(replay_route_affinity(#domain_RoutingAffinity{ttl = Ttl}, St0))
+            end,
+            [undefined, {since_bound, 3600}, {since_last_use, 1800}, {deadline, <<"2100-01-01T00:00:00Z">>}]
+        ),
+        Before = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
+        BeforeAddPayment = meck:num_calls(hg_customer_client, add_payment, '_'),
+        Expired = replay_route_affinity(
+            #domain_RoutingAffinity{ttl = {deadline, <<"2000-01-01T00:00:00Z">>}}, St0
+        ),
+        Negative = replay_route_affinity(#domain_RoutingAffinity{ttl = {since_bound, -1}}, St0),
+        %% There was no binding at all — the payment is remembered for the Customer by a
+        %% separate call, otherwise it is lost to the personal account
+        lists:foreach(
+            fun(NotBound) ->
+                ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, NotBound))
+            end,
+            [St#st{route_affinity = false}, Expired, Negative]
+        ),
+        ?assertEqual(Before, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
+        ?assertEqual(BeforeAddPayment + 3, meck:num_calls(hg_customer_client, add_payment, '_')),
+        %% The Customer was deleted mid-payment, or cubasty rejected the bind: the step completes
+        %% without a binding, and the payment goes on to AddPayment
+        lists:foreach(
+            fun(Rejection) ->
+                ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, {error, Rejection}),
+                BeforeRejected = meck:num_calls(hg_customer_client, add_payment, '_'),
+                ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, St)),
+                ?assertEqual(BeforeRejected + 1, meck:num_calls(hg_customer_client, add_payment, '_'))
+            end,
+            [customer_not_found, invalid_request]
+        ),
+        %% A cancelled hold binds nothing but is still recorded for the Customer, as before
+        BeforeBind = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
+        BeforeCancelled = meck:num_calls(hg_customer_client, add_payment, '_'),
+        Cancelled = ?cancelled_with_reason(<<"cancel">>),
+        ?assertEqual(
+            {done, {[?payment_status_changed(Cancelled)], idle}},
+            process_result({payment, finalizing_accounter}, idle, St#st{target = Cancelled})
+        ),
+        ?assertEqual(BeforeBind, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
+        ?assertEqual(BeforeCancelled + 1, meck:num_calls(hg_customer_client, add_payment, '_')),
+        ?assertEqual(0, meck:num_calls(hg_route_collector, get_routes, '_')),
+        %% Nothing is swallowed: a failing customer operation fails the step after the commits,
+        %% and the retried step commits again idempotently and repeats the calls
+        Timeout = {woody_error, {internal, resource_unavailable, <<"timeout">>}},
+        lists:foreach(
+            fun({Op, Fail, Failing}) ->
+                ok = customer_operations_succeed(),
+                ok = meck:expect(hg_customer_client, Op, Fail),
+                ?assertError({woody_error, _}, process_result({payment, finalizing_accounter}, idle, Failing))
+            end,
+            [
+                {bind_terminal_affinity, fun(_, _, _, _) -> erlang:error(Timeout) end, St},
+                {add_payment, fun(_, _, _) -> erlang:error(Timeout) end, St#st{route_affinity = false}},
+                {link_bank_card, fun(_, _) -> erlang:error(Timeout) end, St}
+            ]
+        )
+    after
+        ok = meck:unload(Modules)
+    end.
+
+assert_customer_finalization(St) ->
+    Ref = make_ref(),
+    Caller = self(),
+    ok = meck:expect(hg_accounting, commit, fun(_, _) ->
+        Caller ! {Ref, committed},
+        ok
+    end),
+    ok = customer_operations_succeed(),
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, fun(CustomerID, Route, Ttl, Payment) ->
+        Caller ! {Ref, bind, CustomerID, Route, Ttl, Payment},
+        ok
+    end),
+    BeforeAddPayment = meck:num_calls(hg_customer_client, add_payment, '_'),
+    ?assertEqual(
+        {done, {[?payment_status_changed(St#st.target)], idle}},
+        process_result({payment, finalizing_accounter}, idle, St)
+    ),
+    receive
+        {Ref, committed} -> ok
+    after 0 -> error(accounting_not_committed)
+    end,
+    ExpectedTtl = St#st.affinity_ttl,
+    receive
+        {Ref, bind, <<"customer">>, #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}, ExpectedTtl,
+            {<<"invoice">>, <<"payment">>}} ->
+            ok
+    after 0 -> error(affinity_not_bound)
+    end,
+    %% A binding that went through has already remembered the payment for the Customer
+    ?assertEqual(BeforeAddPayment, meck:num_calls(hg_customer_client, add_payment, '_')).
+
+customer_operations_succeed() ->
+    ok = meck:expect(hg_customer_client, add_payment, 3, ok),
+    ok = meck:expect(hg_customer_client, link_bank_card, 2, ok),
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, ok).
+
+customer_finalization_state() ->
+    Cash = ?cash(1000, <<"RUB">>),
+    #st{
+        activity = {payment, finalizing_accounter},
+        target = ?captured(<<"capture">>, Cash),
+        route_affinity = true,
+        routes = [#domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}],
+        capture_data = #payproc_InvoicePaymentCaptureData{reason = <<"capture">>, cash = Cash},
+        cash_flow = [],
+        payment = #domain_InvoicePayment{
+            id = <<"payment">>,
+            status = ?pending(),
+            customer_id = <<"customer">>,
+            domain_revision = 1,
+            cost = Cash,
+            created_at = <<"2026-01-01T00:00:00Z">>,
+            flow = ?invoice_payment_flow_instant(),
+            payer = ?payment_resource_payer(
+                #domain_DisposablePaymentResource{
+                    payment_tool =
+                        {bank_card, #domain_BankCard{token = <<"card">>, bin = <<"424242">>, last_digits = <<"4242">>}}
+                },
+                #domain_ContactInfo{}
+            )
+        },
+        opts = #{
+            party_config_ref => #domain_PartyConfigRef{id = <<"party">>},
+            invoice => #domain_Invoice{
+                id = <<"invoice">>,
+                shop_ref = #domain_ShopConfigRef{id = <<"shop">>},
+                domain_revision = 1,
+                party_ref = #domain_PartyConfigRef{id = <<"party">>},
+                created_at = <<"2026-01-01T00:00:00Z">>,
+                due = <<"2026-01-02T00:00:00Z">>,
+                status = {unpaid, #domain_InvoiceUnpaid{}},
+                details = #domain_InvoiceDetails{product = <<"test">>},
+                cost = Cash
+            }
+        }
+    }.
 
 -endif.

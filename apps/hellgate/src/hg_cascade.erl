@@ -72,10 +72,10 @@ is_mapped_errors_triggered(#domain_CascadeOnMappedErrors{}, {operation_timeout, 
 failure_matches_any_transient(Failure, TransientErrorsList) ->
     lists:any(
         fun(ExpectNotation) ->
-            payproc_errors:match_notation(Failure, fun
-                (Notation) when binary_part(Notation, {0, byte_size(ExpectNotation)}) =:= ExpectNotation -> true;
-                (_) -> false
-            end)
+            case iolist_to_binary(hg_invoice_utils:format_failure(Failure)) of
+                Notation when binary_part(Notation, {0, byte_size(ExpectNotation)}) =:= ExpectNotation -> true;
+                _ -> false
+            end
         end,
         TransientErrorsList
     ).

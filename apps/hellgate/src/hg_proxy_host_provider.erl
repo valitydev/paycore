@@ -59,9 +59,35 @@ handle_callback_result(ok) ->
     ok;
 handle_callback_result({ok, Response}) ->
     Response;
+handle_callback_result({error, {invalid_callback, Details}}) ->
+    %% Woody truncates individual strings in business error logs.
+    _ = logger:warning("Invalid callback: ~ts", [Details]),
+    hg_woody_service_wrapper:raise(#'base_InvalidRequest'{errors = [<<"Invalid callback">>, Details]});
 handle_callback_result({error, invalid_callback}) ->
     hg_woody_service_wrapper:raise(#'base_InvalidRequest'{errors = [<<"Invalid callback">>]});
 handle_callback_result({error, notfound}) ->
     hg_woody_service_wrapper:raise(#'base_InvalidRequest'{errors = [<<"Not found">>]});
 handle_callback_result({error, Reason}) ->
     error(Reason).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+-spec test() -> _.
+
+%% These calls deliberately exercise the branches that always throw.
+-dialyzer({no_fail_call, invalid_callback_details_test/0}).
+
+-spec invalid_callback_details_test() -> _.
+invalid_callback_details_test() ->
+    Details = <<"No active payment: invoice_id=invoice, invoice_status=paid">>,
+    ?assertThrow(
+        #'base_InvalidRequest'{errors = [<<"Invalid callback">>, Details]},
+        handle_callback_result({error, {invalid_callback, Details}})
+    ),
+    ?assertThrow(
+        #'base_InvalidRequest'{errors = [<<"Invalid callback">>]},
+        handle_callback_result({error, invalid_callback})
+    ).
+
+-endif.

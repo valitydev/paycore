@@ -32,8 +32,9 @@
 -type shop_config_ref() :: dmsl_domain_thrift:'ShopConfigRef'().
 -type party_config_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type route() :: hg_route:payment_route().
+-type exchange_context() :: hg_invoice_payment:exchange_context().
 -type options() :: #{
-    exchange_context => hg_invoice_payment:exchange_context()
+    exchange_context => exchange_context()
 }.
 
 %%
@@ -43,6 +44,7 @@
 -export([revert/1]).
 
 -export([compute_volume/2]).
+-export([compute_volume/3]).
 
 -export([get_partial_remainders/1]).
 
@@ -85,7 +87,7 @@ compute_postings(CF, Context, AccountMap, Opts) ->
         ?final_posting(
             construct_final_account(Source, AccountMap),
             construct_final_account(Destination, AccountMap),
-            hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, compute_volume(Volume, Context)),
+            compute_volume(Volume, Context, ExchangeContext),
             Details,
             ExchangeContext
         )
@@ -172,14 +174,20 @@ revert_details(Details) ->
 -define(rational(P, Q), #base_Rational{p = P, q = Q}).
 
 -spec compute_volume(cash_volume(), context()) -> cash() | no_return().
-compute_volume(?fixed(Cash), _Context) ->
-    Cash;
-compute_volume(?share(P, Q, Of, RoundingMethod), Context) ->
+compute_volume(Volume, Context) ->
+    compute_volume(Volume, Context, undefined).
+
+-spec compute_volume(cash_volume(), context(), exchange_context() | undefined) -> cash() | no_return().
+compute_volume(?fixed(Cash), _Context, ExchangeContext) ->
+    %% if posting currency differs from payment currency
+    %% needs re-convert it into payment currency
+    hg_currency_converter:maybe_reverse_convert_cash(ExchangeContext, Cash);
+compute_volume(?share(P, Q, Of, RoundingMethod), Context, _ExchangeContext) ->
     compute_parts_of(P, Q, resolve_constant(Of, Context), RoundingMethod);
-compute_volume(?product(Fun, CVs) = CV0, Context) ->
+compute_volume(?product(Fun, CVs) = CV0, Context, ExchangeContext) ->
     case ordsets:size(CVs) of
         N when N > 0 ->
-            compute_product(Fun, ordsets:to_list(CVs), CV0, Context);
+            compute_product(Fun, ordsets:to_list(CVs), CV0, Context, ExchangeContext);
         0 ->
             error({misconfiguration, {'Cash volume product over empty set', CV0}})
     end.
@@ -195,15 +203,22 @@ compute_parts_of(P, Q, #domain_Cash{amount = Amount} = Cash, RoundingMethod) ->
         )
     }.
 
-compute_product(Fun, [CV | CVRest], CV0, Context) ->
+compute_product(Fun, [CV | CVRest], CV0, Context, ExchangeContext) ->
     lists:foldl(
-        fun(CVN, CVMin) -> compute_product(Fun, CVN, CVMin, CV0, Context) end,
-        compute_volume(CV, Context),
+        fun(CVN, CVMin) -> compute_product(Fun, CVN, CVMin, CV0, Context, ExchangeContext) end,
+        compute_volume(CV, Context, ExchangeContext),
         CVRest
     ).
 
-compute_product(Fun, CV, #domain_Cash{amount = AmountMin, currency = Currency} = CVMin, CV0, Context) ->
-    case compute_volume(CV, Context) of
+compute_product(
+    Fun,
+    CV,
+    #domain_Cash{amount = AmountMin, currency = Currency} = CVMin,
+    CV0,
+    Context,
+    ExchangeContext
+) ->
+    case compute_volume(CV, Context, ExchangeContext) of
         #domain_Cash{amount = Amount, currency = Currency} ->
             CVMin#domain_Cash{amount = compute_product_fun(Fun, AmountMin, Amount)};
         _ ->
@@ -273,22 +288,22 @@ modify_remainder(#domain_FinalCashFlowAccount{account_type = AccountType}, ?cash
 
 compute_volume_test() ->
     Cash = ?cash(100, <<"RUB">>),
-    ?assertEqual(Cash, compute_volume(?fixed(Cash), #{})),
+    ?assertEqual(Cash, compute_volume(?fixed(Cash), #{}, undefined)),
     ?assertEqual(
         ?cash(1, <<"RUB">>),
-        compute_volume(?share(1, 100, operation_amount, undefined), #{operation_amount => Cash})
+        compute_volume(?share(1, 100, operation_amount, undefined), #{operation_amount => Cash}, undefined)
     ),
     ?assertEqual(
         Cash,
-        compute_volume(?product(min_of, [?fixed(Cash), ?fixed(?cash(200, <<"RUB">>))]), #{})
+        compute_volume(?product(min_of, [?fixed(Cash), ?fixed(?cash(200, <<"RUB">>))]), #{}, undefined)
     ),
     ?assertEqual(
         Cash,
-        compute_volume(?product(max_of, [?fixed(Cash), ?fixed(?cash(50, <<"RUB">>))]), #{})
+        compute_volume(?product(max_of, [?fixed(Cash), ?fixed(?cash(50, <<"RUB">>))]), #{}, undefined)
     ),
     ?assertEqual(
         ?cash(200, <<"RUB">>),
-        compute_volume(?product(sum_of, [?fixed(Cash), ?fixed(Cash)]), #{})
+        compute_volume(?product(sum_of, [?fixed(Cash), ?fixed(Cash)]), #{}, undefined)
     ).
 
 -endif.

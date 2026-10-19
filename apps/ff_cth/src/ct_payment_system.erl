@@ -405,6 +405,38 @@ domain_config(Config, Options) ->
             }
         }
     },
+    GuaranteeProviderTermSet = #domain_ProvisionTermSet{
+        wallet = #domain_WalletProvisionTerms{
+            withdrawals = #domain_WithdrawalProvisionTerms{
+                currencies = {value, ?ordset([?cur(<<"RUB">>)])},
+                cash_limit =
+                    {value,
+                        ?cashrng(
+                            {inclusive, ?cash(0, <<"RUB">>)},
+                            {exclusive, ?cash(10000000, <<"RUB">>)}
+                        )},
+                cash_flow =
+                    {decisions, [
+                        #domain_CashFlowDecision{
+                            if_ = {condition, {currency_is, ?cur(<<"RUB">>)}},
+                            then_ =
+                                {value, [
+                                    ?cfpost(
+                                        {system, settlement},
+                                        {provider, guarantee},
+                                        {product,
+                                            {min_of,
+                                                ?ordset([
+                                                    ?fixed(10, <<"RUB">>),
+                                                    ?share(5, 100, operation_amount, round_half_towards_zero)
+                                                ])}}
+                                    )
+                                ]}
+                        }
+                    ]}
+            }
+        }
+    },
     Default = [
         ct_domain:globals(?eas(1), [?payinst(1)]),
         ct_domain:external_account_set(?eas(1), <<"Default">>, ?cur(<<"RUB">>)),
@@ -455,6 +487,10 @@ domain_config(Config, Options) ->
         routing_ruleset(
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 4),
             {delegates, [
+                delegate(
+                    condition(cost_in, {800, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 50)
+                ),
                 delegate(
                     condition(cost_in, {300, 302, <<"RUB">>}),
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 5)
@@ -755,6 +791,13 @@ domain_config(Config, Options) ->
         ),
 
         routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 50),
+            {candidates, [
+                candidate({constant, true}, ?trm(1801))
+            ]}
+        ),
+
+        routing_ruleset(
             ?ruleset(?PAYINST1_ROUTING_PROHIBITIONS),
             <<"PayInst1 Withdrawal Prohibitions">>,
             {candidates, [
@@ -979,6 +1022,7 @@ domain_config(Config, Options) ->
         ct_domain:withdrawal_provider(?prv(11), ?prx(8), live, ProviderTermSet),
         ct_domain:withdrawal_provider(?prv(16), ?prx(2), live, undefined),
         ct_domain:withdrawal_provider(?prv(17), ?prx(2), live, ProviderTermSet),
+        ct_domain:withdrawal_provider(?prv(18), ?prx(2), live, GuaranteeProviderTermSet),
 
         ct_domain:term_set_hierarchy(?trms(1), default_termset(Options)),
         ct_domain:term_set_hierarchy(?trms(2), company_termset(Options)),
@@ -1023,6 +1067,7 @@ domain_config(Config, Options) ->
         ct_domain:withdrawal_terminal(?trm(1101), ?prv(11)),
 
         ct_domain:withdrawal_terminal(?trm(1701), ?prv(17)),
+        ct_domain:withdrawal_terminal(?trm(1801), ?prv(18)),
         ct_domain:withdrawal_terminal(
             ?trm(1708),
             ?prv(17),

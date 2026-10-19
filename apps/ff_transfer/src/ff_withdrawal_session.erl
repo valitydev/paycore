@@ -81,7 +81,9 @@
     cash := ff_accounting:body(),
     sender := party_id(),
     receiver := party_id(),
-    quote_data => ff_adapter_withdrawal:quote_data()
+    quote_data => ff_adapter_withdrawal:quote_data(),
+    contact_info => ff_withdrawal:contact_info(),
+    client_info => ff_withdrawal:client_info()
 }.
 
 -type route() :: ff_withdrawal_routing:route().

@@ -216,12 +216,13 @@ collect_routes(Candidates, Revision, Ctx) ->
                 terminal = TerminalRef,
                 priority = Priority,
                 weight = Weight,
-                pin = Pin
+                pin = Pin,
+                affinity = Affinity
             } = Candidate,
             #domain_Terminal{provider_ref = ProviderRef} = hg_domain:get(Revision, {terminal, TerminalRef}),
             GatheredPinInfo = gather_pin_info(Pin, Ctx),
             Route = hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, GatheredPinInfo),
-            [Route | Routes]
+            [Route#{affinity => Affinity} | Routes]
         end,
         [],
         Candidates

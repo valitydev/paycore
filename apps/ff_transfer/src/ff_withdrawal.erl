@@ -26,6 +26,7 @@
     external_id => id(),
     validation => withdrawal_validation(),
     contact_info => contact_info(),
+    client_info => client_info(),
     new_body => body(),
     p_transfer_rebuild_needed => boolean()
 }.
@@ -40,7 +41,8 @@
     route => route(),
     metadata => metadata(),
     external_id => id(),
-    contact_info => contact_info()
+    contact_info => contact_info(),
+    client_info => client_info()
 }.
 
 -type params() :: #{
@@ -52,7 +54,8 @@
     external_id => id(),
     quote => quote(),
     metadata => metadata(),
-    contact_info => contact_info()
+    contact_info => contact_info(),
+    client_info => client_info()
 }.
 
 -type status() ::
@@ -68,6 +71,11 @@
 -type contact_info() :: #{
     phone_number => binary(),
     email => binary()
+}.
+
+-type client_info() :: #{
+    ip_address => binary(),
+    fingerprint => binary()
 }.
 
 -type validation_result() ::
@@ -210,6 +218,7 @@
 -export_type([limit_check_details/0]).
 -export_type([activity/0]).
 -export_type([contact_info/0]).
+-export_type([client_info/0]).
 
 %% Transfer logic callbacks
 
@@ -240,6 +249,7 @@
 -export([activity/1]).
 -export([validation/1]).
 -export([contact_info/1]).
+-export([client_info/1]).
 
 %% API
 
@@ -435,6 +445,12 @@ contact_info(#{contact_info := ContactInfo}) ->
 contact_info(_) ->
     undefined.
 
+-spec client_info(withdrawal_state()) -> client_info() | undefined.
+client_info(#{client_info := ClientInfo}) ->
+    ClientInfo;
+client_info(_) ->
+    undefined.
+
 %% API
 
 -spec create(params()) ->
@@ -485,7 +501,8 @@ create(Params) ->
                     domain_revision => DomainRevision,
                     external_id => maps:get(external_id, Params, undefined),
                     metadata => maps:get(metadata, Params, undefined),
-                    contact_info => maps:get(contact_info, Params, undefined)
+                    contact_info => maps:get(contact_info, Params, undefined),
+                    client_info => maps:get(client_info, Params, undefined)
                 })},
             {status_changed, pending},
             {resource_got, Resource}
@@ -1014,7 +1031,8 @@ process_session_creation(Withdrawal) ->
         sender => ff_account:party_id(WalletAccount),
         receiver => ff_account:party_id(DestinationAccount),
         quote => build_session_quote(quote(Withdrawal)),
-        contact_info => contact_info(Withdrawal)
+        contact_info => contact_info(Withdrawal),
+        client_info => client_info(Withdrawal)
     }),
     AuthData = ff_destination:auth_data(Destination),
     SessionParams = #{
@@ -1121,7 +1139,9 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
     #{provider_id := ProviderID} = Route,
     {ok, Provider} = ff_payouts_provider:get(ProviderID, DomainRevision),
     ProviderAccounts = ff_payouts_provider:accounts(Provider),
-    ProviderAccount = maps:get(CurrencyID, ProviderAccounts, undefined),
+    ProviderAccount = maps:get(CurrencyID, ProviderAccounts, #{}),
+    ProviderSettlementAccount = maps:get(settlement, ProviderAccount, undefined),
+    ProviderGuaranteeAccount = maps:get(guarantee, ProviderAccount, undefined),
 
     #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
     {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
@@ -1144,7 +1164,8 @@ make_final_cash_flow(DomainRevision, Withdrawal) ->
         {wallet, receiver_destination} => DestinationAccount,
         {system, settlement} => SettlementAccount,
         {system, subagent} => SubagentAccount,
-        {provider, settlement} => ProviderAccount
+        {provider, settlement} => ProviderSettlementAccount,
+        {provider, guarantee} => ProviderGuaranteeAccount
     }),
     {ok, FinalCashFlow} = ff_cash_flow:finalize(CashFlowPlan, Accounts, Constants),
 
@@ -1929,10 +1950,11 @@ build_failure({route_not_found, []}, _Withdrawal) ->
         code => <<"no_route_found">>
     };
 build_failure({route_not_found, RejectedRoutes}, _Withdrawal) ->
-    #{
+    genlib_map:compact(#{
         code => <<"no_route_found">>,
-        reason => genlib:format({rejected_routes, RejectedRoutes})
-    };
+        reason => genlib:format({rejected_routes, RejectedRoutes}),
+        sub => build_route_not_found_sub_failure(RejectedRoutes)
+    });
 build_failure({inconsistent_quote_route, {Type, FoundID}}, Withdrawal) ->
     Details =
         {inconsistent_quote_route, #{
@@ -1947,6 +1969,25 @@ build_failure(session, Withdrawal) ->
     Result = get_session_result(Withdrawal),
     {failed, Failure} = Result,
     Failure.
+
+-define(rejected_route(Reason), {_PrvRef, _TrmRef, Reason}).
+
+build_route_not_found_sub_failure([]) ->
+    undefined;
+%% NOTE If limit overflow reason present in any rejected route See reason-tuple
+%% construction in `ff_withdrawal_routing:validate_turnover_limits/4` and
+%% `ff_limiter:check_limits/4`.
+build_route_not_found_sub_failure([
+    ?rejected_route({terms_violation, {overflow, OverflowedLimits}}) | _
+]) ->
+    #{
+        code => <<"limit_overflow">>,
+        sub => #{
+            code => genlib_string:join($,, [LimitID || {LimitID, _Amount, _Boundary} <- OverflowedLimits])
+        }
+    };
+build_route_not_found_sub_failure([_H | Rest]) ->
+    build_route_not_found_sub_failure(Rest).
 
 get_quote_field(provider_id, #{route := Route}) ->
     ff_withdrawal_routing:get_provider(Route);

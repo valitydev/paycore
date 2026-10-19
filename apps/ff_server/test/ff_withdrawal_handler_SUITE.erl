@@ -9,6 +9,7 @@
 -include_lib("fistful_proto/include/fistful_fistful_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_cashflow_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_account_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_transfer_thrift.hrl").
 -include_lib("ff_cth/include/ct_domain.hrl").
 
@@ -48,6 +49,7 @@
 -export([create_adjustment_invalid_operation_amount_error_test/1]).
 -export([create_adjustment_change_body_ok_test/1]).
 -export([withdrawal_state_content_test/1]).
+-export([withdrawal_with_provider_guarantee_account_test/1]).
 -export([trace_withdrawal_test/1]).
 -export([create_withdrawal_with_changed_body_test/1]).
 
@@ -71,7 +73,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             session_unknown_test,
             session_get_context_test,
             session_get_events_test,
@@ -98,7 +100,8 @@ groups() ->
             create_adjustment_already_has_body_error_test,
             create_adjustment_invalid_operation_amount_error_test,
             create_adjustment_change_body_ok_test,
-            withdrawal_state_content_test
+            withdrawal_state_content_test,
+            withdrawal_with_provider_guarantee_account_test
         ]}
     ].
 
@@ -264,6 +267,10 @@ create_withdrawal_ok_test(_C) ->
         phone_number = <<"1234567890">>,
         email = <<"test@mail.com">>
     },
+    ClientInfo = #fistful_base_ClientInfo{
+        ip_address = <<"10.10.10.10">>,
+        fingerprint = <<"fingerprint">>
+    },
     Params = #wthd_WithdrawalParams{
         id = WithdrawalID,
         party_id = PartyID,
@@ -272,7 +279,8 @@ create_withdrawal_ok_test(_C) ->
         body = Cash,
         metadata = Metadata,
         external_id = ExternalID,
-        contact_info = ContactInfo
+        contact_info = ContactInfo,
+        client_info = ClientInfo
     },
     {ok, WithdrawalState} = call_withdrawal('Create', {Params, Context}),
 
@@ -292,6 +300,7 @@ create_withdrawal_ok_test(_C) ->
         ff_codec:unmarshal(timestamp_ms, WithdrawalState#wthd_WithdrawalState.created_at)
     ),
     ?assertEqual(ContactInfo, WithdrawalState#wthd_WithdrawalState.contact_info),
+    ?assertEqual(ClientInfo, WithdrawalState#wthd_WithdrawalState.client_info),
 
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
     {ok, FinalWithdrawalState} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
@@ -936,6 +945,68 @@ withdrawal_state_content_test(_C) ->
     ?assertNotEqual(undefined, WithdrawalState#wthd_WithdrawalState.effective_route),
     ?assertNotEqual(undefined, WithdrawalState#wthd_WithdrawalState.status).
 
+-spec withdrawal_with_provider_guarantee_account_test(config()) -> test_return().
+withdrawal_with_provider_guarantee_account_test(_C) ->
+    %% 800 RUB is routed to provider 18 / terminal 1801, whose terms post the fee to guarantee
+    Cash = make_cash({800, <<"RUB">>}),
+    GuaranteeAccountID = provider_guarantee_account_id(18),
+    Ctx = ct_objects:build_default_ctx(),
+    #{withdrawal_id := WithdrawalID} = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+
+    %% the provider fee is the lesser of 10 RUB and 5% of 800 RUB, posted to the guarantee account
+    {ok, #wthd_WithdrawalState{
+        effective_final_cash_flow = #cashflow_FinalCashFlow{postings = Postings}
+    }} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
+    [
+        #cashflow_FinalCashFlowPosting{
+            source = #cashflow_FinalCashFlowAccount{account_type = {system, settlement}},
+            destination = #cashflow_FinalCashFlowAccount{
+                account_type = {provider, guarantee},
+                account = #'account_Account'{account_id = GuaranteeAccountID}
+            },
+            volume = #fistful_base_Cash{amount = 10, currency = #'fistful_base_CurrencyRef'{symbolic_code = <<"RUB">>}}
+        }
+    ] = [
+        P
+     || #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        } = P <-
+            Postings
+    ],
+
+    %% the same posting must survive in the serialized transfer event
+    Range = {undefined, undefined},
+    EncodedRange = ff_codec:marshal(event_range, Range),
+    {ok, Events} = call_withdrawal('GetEvents', {WithdrawalID, EncodedRange}),
+    [CreatedEvent] = [
+        E
+     || #wthd_Event{change = {transfer, #wthd_TransferChange{payload = {created, _}}}} = E <- Events
+    ],
+    #wthd_Event{
+        change =
+            {transfer, #wthd_TransferChange{
+                payload =
+                    {created, #transfer_CreatedChange{
+                        transfer = #transfer_Transfer{
+                            cashflow = #cashflow_FinalCashFlow{postings = EventPostings}
+                        }
+                    }}
+            }}
+    } = CreatedEvent,
+    [
+        #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        }
+    ] = [
+        P
+     || #cashflow_FinalCashFlowPosting{
+            destination = #cashflow_FinalCashFlowAccount{account_type = {provider, guarantee}}
+        } = P <-
+            EventPostings
+    ],
+    ok.
+
 %%  Internals
 
 call_withdrawal_session(Fun, Args) ->
@@ -969,3 +1040,8 @@ make_cash({Amount, Currency}) ->
         amount = Amount,
         currency = #'fistful_base_CurrencyRef'{symbolic_code = Currency}
     }.
+
+provider_guarantee_account_id(ProviderID) ->
+    {ok, Provider} = ff_payouts_provider:get(ProviderID, ct_domain_config:head()),
+    #{guarantee := GuaranteeAccount} = maps:get(<<"RUB">>, ff_payouts_provider:accounts(Provider)),
+    ff_account:account_id(GuaranteeAccount).

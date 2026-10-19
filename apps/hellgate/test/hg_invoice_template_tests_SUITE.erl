@@ -3,6 +3,7 @@
 -include("hg_ct_domain.hrl").
 
 -export([all/0]).
+-export([groups/0]).
 -export([init_per_suite/1]).
 -export([end_per_suite/1]).
 -export([init_per_testcase/2]).
@@ -46,30 +47,42 @@
 
 -define(invoice_tpl(ID), #domain_InvoiceTemplate{id = ID}).
 
--spec all() -> [test_case_name()].
+-spec all() -> [test_case_name() | {group, atom()}].
 all() ->
     [
         create_invalid_shop,
         create_invalid_party_status,
         create_invalid_shop_status,
-        create_invalid_cost_fixed_amount,
-        create_invalid_cost_fixed_currency,
-        create_invalid_cost_range,
-        create_invoice_template,
-        create_invoice_template_with_mutations,
+        {group, create_templates},
         get_invoice_template_anyhow,
         update_invalid_party_status,
         update_invalid_shop_status,
-        update_invalid_cost_fixed_amount,
-        update_invalid_cost_fixed_currency,
-        update_invalid_cost_range,
-        update_invoice_template,
-        update_with_cart,
-        update_with_mutations,
+        {group, update_templates},
         delete_invalid_party_status,
         delete_invalid_shop_status,
         delete_invoice_template,
         terms_retrieval
+    ].
+
+-spec groups() -> [{atom(), list(), [test_case_name()]}].
+groups() ->
+    %% Status tests mutate the shared party/shop; terms_retrieval changes the domain.
+    [
+        {create_templates, [parallel], [
+            create_invalid_cost_fixed_amount,
+            create_invalid_cost_fixed_currency,
+            create_invalid_cost_range,
+            create_invoice_template,
+            create_invoice_template_with_mutations
+        ]},
+        {update_templates, [parallel], [
+            update_invalid_cost_fixed_amount,
+            update_invalid_cost_fixed_currency,
+            update_invalid_cost_range,
+            update_invoice_template,
+            update_with_cart,
+            update_with_mutations
+        ]}
     ].
 
 %% starting/stopping

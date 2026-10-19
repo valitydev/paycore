@@ -33,7 +33,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             get_source_events_ok_test,
             get_source_context_ok_test,
             create_source_ok_test,

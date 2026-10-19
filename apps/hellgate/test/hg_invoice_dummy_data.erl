@@ -242,7 +242,12 @@ payment_provision_terms(Currency, Category) ->
                 ?cfpost(
                     {system, settlement},
                     {provider, settlement},
-                    ?fixed(10, Currency)
+                    {product,
+                        {min_of,
+                            ?ordset([
+                                ?share(60, 1000, operation_amount),
+                                ?fixed(10, Currency)
+                            ])}}
                 )
             ]
         },

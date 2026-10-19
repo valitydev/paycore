@@ -125,11 +125,18 @@ collect_merchant_account_map(PartyConfigRef, {ShopConfigRef, #domain_ShopConfig{
 -spec collect_provider_account_map(payment(), provider(), route(), map()) -> map().
 collect_provider_account_map(Payment, #domain_Provider{accounts = ProviderAccounts}, Route, Acc) ->
     Currency = get_currency(get_payment_cost(Payment)),
-    ProviderAccount = hg_payment_institution:choose_provider_account(Currency, ProviderAccounts),
-    Acc#{
-        provider => Route,
-        {provider, settlement} => ProviderAccount#domain_ProviderAccount.settlement
-    }.
+    #domain_ProviderAccount{
+        settlement = Settlement,
+        guarantee = Guarantee
+    } = hg_payment_institution:choose_provider_account(Currency, ProviderAccounts),
+    maps:merge(
+        Acc,
+        genlib_map:compact(#{
+            provider => Route,
+            {provider, settlement} => Settlement,
+            {provider, guarantee} => Guarantee
+        })
+    ).
 
 -spec collect_system_account_map(payment(), payment_institution(), revision(), map()) -> map().
 collect_system_account_map(Payment, PaymentInstitution, Revision, Acc) ->

@@ -449,7 +449,7 @@ build_chargeback_final_cash_flow(State, Opts) ->
     },
     AccountMap = hg_accounting:collect_account_map(CollectAccountContext),
     ServiceContext = build_service_cash_flow_context(State),
-    ProviderContext = build_provider_cash_flow_context(State, ProviderFees),
+    ProviderContext = build_provider_cash_flow_context(State, ProviderFees, ExchangeContext),
     ServiceFinalCF = hg_cashflow:finalize(ServiceCashFlow, ServiceContext, AccountMap),
     ProviderFinalCF = hg_cashflow:finalize(ProviderCashFlow, ProviderContext, AccountMap, ProviderOpts),
     ServiceFinalCF ++ ProviderFinalCF.
@@ -457,9 +457,9 @@ build_chargeback_final_cash_flow(State, Opts) ->
 build_service_cash_flow_context(State) ->
     #{operation_amount => get_body(State), surplus => get_levy(State)}.
 
-build_provider_cash_flow_context(State, Fees) ->
+build_provider_cash_flow_context(State, Fees, ExchangeContext) ->
     FeesContext = #{operation_amount => get_body(State)},
-    ComputedFees = maps:map(fun(_K, V) -> hg_cashflow:compute_volume(V, FeesContext) end, Fees),
+    ComputedFees = maps:map(fun(_K, V) -> hg_cashflow:compute_volume(V, FeesContext, ExchangeContext) end, Fees),
     case get_target_status(State) of
         ?chargeback_status_rejected() ->
             ?cash(_Amount, SymCode) = get_body(State),

@@ -415,7 +415,7 @@ get_failure_scenario_step(Scenario, Step) ->
     lists:nth(Step, Scenario).
 
 process_refund(_State, PaymentInfo, #{<<"always_fail">> := FailureCode, <<"override">> := ProviderCode} = CtxOpts, _) ->
-    Failure = payproc_errors:from_notation(FailureCode, <<"sub failure by ", ProviderCode/binary>>),
+    Failure = from_notation(FailureCode, <<"sub failure by ", ProviderCode/binary>>),
     TrxID = hg_utils:construct_complex_id([get_payment_id(PaymentInfo), get_ctx_opts_override(CtxOpts)]),
     result(?finish({failure, Failure}), undefined, mk_trx(TrxID, PaymentInfo));
 process_refund(undefined, PaymentInfo, CtxOpts, _) ->
@@ -472,7 +472,7 @@ result(Intent, NextState, Trx) ->
 maybe_fail(PaymentInfo, #{<<"always_fail">> := FailureCode, <<"override">> := ProviderCode} = CtxOpts, _OrElse) ->
     _ = maybe_sleep(CtxOpts),
     Reason = <<"sub failure by ", ProviderCode/binary>>,
-    Failure = payproc_errors:from_notation(FailureCode, <<"sub failure by ", ProviderCode/binary>>),
+    Failure = from_notation(FailureCode, <<"sub failure by ", ProviderCode/binary>>),
     TrxID = hg_utils:construct_complex_id([get_payment_id(PaymentInfo), get_ctx_opts_override(CtxOpts)]),
     result(?finish({failure, Failure}), <<"state: ", Reason/binary>>, mk_trx(TrxID, PaymentInfo));
 maybe_fail(_PaymentInfo, _CtxOpts, OrElse) ->
@@ -524,11 +524,7 @@ failure(Code) when is_atom(Code) ->
     failure(Code, unknown).
 
 failure(Code, Sub) when is_atom(Code), is_atom(Sub) ->
-    {failure,
-        payproc_errors:construct(
-            'PaymentFailure',
-            {Code, {Sub, #payproc_error_GeneralFailure{}}}
-        )}.
+    {failure, #domain_Failure{code = atom_to_binary(Code), sub = #domain_SubFailure{code = atom_to_binary(Sub)}}}.
 
 get_payment_id(#proxy_provider_PaymentInfo{payment = Payment}) ->
     Payment#proxy_provider_InvoicePayment.id.
@@ -916,3 +912,14 @@ maybe_sleep(_Opts) ->
 
 get_ctx_opts_override(CtxOpts) ->
     maps:get(<<"override">>, CtxOpts, <<"">>).
+
+from_notation(Notation, Reason) when is_binary(Notation) ->
+    Codes = lists:reverse(binary:split(Notation, <<$:>>, [global])),
+    do_construct_from_notation(Codes, Reason, undefined).
+
+do_construct_from_notation([<<"">>], _Reason, _SubFailure) ->
+    undefined;
+do_construct_from_notation([Code], Reason, SubFailure) ->
+    #domain_Failure{code = Code, reason = Reason, sub = SubFailure};
+do_construct_from_notation([SubCode | Codes], Reason, SubFailure) ->
+    do_construct_from_notation(Codes, Reason, #domain_SubFailure{code = SubCode, sub = SubFailure}).

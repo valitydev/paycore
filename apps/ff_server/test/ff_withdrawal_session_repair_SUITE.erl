@@ -29,7 +29,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             repair_failed_session_with_success,
             repair_failed_session_with_failure
         ]}

@@ -11,7 +11,12 @@
 }.
 
 -type id() :: dmsl_domain_thrift:'ObjectID'().
--type accounts() :: #{ff_currency:id() => ff_account:account()}.
+-type accounts() :: #{ff_currency:id() => provider_account()}.
+
+-type provider_account() :: #{
+    settlement := ff_account:account(),
+    guarantee => ff_account:account()
+}.
 
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type term_set() :: dmsl_domain_thrift:'ProvisionTermSet'().
@@ -20,6 +25,7 @@
 
 -export_type([id/0]).
 -export_type([provider/0]).
+-export_type([provider_account/0]).
 -export_type([provider_ref/0]).
 -export_type([provision_terms/0]).
 -export_type([domain_revision/0]).
@@ -115,13 +121,29 @@ decode_accounts(Realm, Accounts) ->
     maps:fold(
         fun(CurrencyRef, ProviderAccount, Acc) ->
             #domain_CurrencyRef{symbolic_code = CurrencyID} = CurrencyRef,
-            #domain_ProviderAccount{settlement = AccountID} = ProviderAccount,
-            Account = ff_account:build(Realm, AccountID, CurrencyID),
-            Acc#{CurrencyID => Account}
+            Acc#{CurrencyID => decode_provider_account(ProviderAccount, CurrencyID, Realm)}
         end,
         #{},
         Accounts
     ).
+
+decode_provider_account(
+    #domain_ProviderAccount{
+        settlement = SettlementID,
+        guarantee = GuaranteeID
+    },
+    CurrencyID,
+    Realm
+) ->
+    genlib_map:compact(#{
+        settlement => decode_account(SettlementID, CurrencyID, Realm),
+        guarantee => decode_account(GuaranteeID, CurrencyID, Realm)
+    }).
+
+decode_account(undefined, _CurrencyID, _Realm) ->
+    undefined;
+decode_account(AccountID, CurrencyID, Realm) ->
+    ff_account:build(Realm, AccountID, CurrencyID).
 
 decode_adapter(#domain_Proxy{ref = ProxyRef, additional = ProviderOpts}) ->
     Proxy = unwrap(ff_domain_config:object({proxy, ProxyRef})),

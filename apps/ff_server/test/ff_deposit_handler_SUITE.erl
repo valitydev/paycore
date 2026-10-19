@@ -48,7 +48,7 @@ all() ->
 -spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [], [
+        {default, [parallel], [
             create_bad_amount_test,
             create_currency_validation_error_test,
             create_source_notfound_test,

@@ -38,10 +38,10 @@ all() ->
         {group, default}
     ].
 
--spec groups() -> [{group_name(), [test_case_name()]}].
+-spec groups() -> [{group_name(), list(), [test_case_name()]}].
 groups() ->
     [
-        {default, [
+        {default, [parallel], [
             withdrawal_routes_found_test,
             withdrawal_no_routes_found_test,
             withdrawal_rejected_by_prohibitions_table_test,
