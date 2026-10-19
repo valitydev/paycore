@@ -212,28 +212,19 @@ marshal_withdrawal(Withdrawal) ->
 
 -spec get_batch(request(), context()) -> [limit()] | no_return().
 get_batch(Request, Context) ->
-    {ok, Limits} = call_w_request('GetBatch', Request, Context),
-    Limits.
+    handle_result(limiter:get_batch(Request, Context, woody_ctx())).
 
 -spec hold_batch(request(), context()) -> [limit()] | no_return().
 hold_batch(Request, Context) ->
-    {ok, Limits} = call_w_request('HoldBatch', Request, Context),
-    Limits.
+    handle_result(limiter:hold_batch(Request, Context, woody_ctx())).
 
 -spec commit_batch(request(), context()) -> ok | no_return().
 commit_batch(Request, Context) ->
-    {ok, ok} = call_w_request('CommitBatch', Request, Context),
-    ok.
+    handle_result(limiter:commit_batch(Request, Context, woody_ctx())).
 
 -spec rollback_batch(request(), context()) -> ok | no_return().
 rollback_batch(Request, Context) ->
-    {ok, ok} = call_w_request('RollbackBatch', Request, Context),
-    ok.
-
-call(Func, Args) ->
-    Service = {limproto_limiter_thrift, 'Limiter'},
-    Request = {Service, Func, Args},
-    ff_woody_client:call(limiter, Request).
+    handle_result(limiter:rollback_batch(Request, Context, woody_ctx())).
 
 mk_limit_log_attributes(#limiter_LimitContext{
     withdrawal_processing = #context_withdrawal_Context{withdrawal = Wthd}
@@ -262,19 +253,21 @@ mk_limit_log_attributes(#limiter_LimitContext{
         }
     }.
 
-call_w_request(Function, Request, Context) ->
-    case call(Function, {Request, Context}) of
-        {exception, #limiter_LimitNotFound{}} ->
-            error(not_found);
-        {exception, #base_InvalidRequest{errors = Errors}} ->
-            error({invalid_request, Errors});
-        {exception, Exception} ->
-            %% NOTE Uniform handling of more specific exceptions:
-            %% LimitChangeNotFound
-            %% InvalidOperationCurrency
-            %% OperationContextNotSupported
-            %% PaymentToolNotSupported
-            error(Exception);
-        {ok, _} = Result ->
-            Result
-    end.
+woody_ctx() ->
+    op_context:get_woody_context(op_context:load(op_context:key(fistful))).
+
+handle_result({error, #limiter_LimitNotFound{}}) ->
+    error(not_found);
+handle_result({error, #base_InvalidRequest{errors = Errors}}) ->
+    error({invalid_request, Errors});
+handle_result({error, Exception}) ->
+    %% NOTE Uniform handling of more specific exceptions:
+    %% LimitChangeNotFound
+    %% InvalidOperationCurrency
+    %% OperationContextNotSupported
+    %% PaymentToolNotSupported
+    error(Exception);
+handle_result(ok) ->
+    ok;
+handle_result({ok, Result}) ->
+    Result.
