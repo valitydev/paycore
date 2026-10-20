@@ -396,8 +396,6 @@ from_collector_route(Route) ->
         weight => weight_or_zero(hg_route:weight(Route))
     }.
 
-weight_or_zero(undefined) ->
-    0;
 weight_or_zero(Weight) ->
     Weight.
 
@@ -488,7 +486,7 @@ exclude_routes(#{routes := Routes, reject_context := RejectContext}, ExcludeRout
                     State#{routes => ValidRoutes1};
                 false ->
                     RejectedRoutes0 = maps:get(rejected_routes, RejectContext0),
-                    RejectedRoutes1 = [{ProviderRef, TerminalRef, member_of_exlude_list} | RejectedRoutes0],
+                    RejectedRoutes1 = [{ProviderRef, TerminalRef, member_of_exclude_list} | RejectedRoutes0],
                     RejectContext1 = maps:put(rejected_routes, RejectedRoutes1, RejectContext0),
                     State#{reject_context => RejectContext1}
             end
@@ -599,6 +597,7 @@ validate_cash_limit(_NotReducedSelector, _VS) ->
 
 -spec validate_turnover_limits(turnover_limit_selector(), party_varset(), route(), routing_context()) ->
     {ok, valid}
+    | {held, Error :: term()}
     | {error, Error :: term()}.
 validate_turnover_limits(undefined, _VS, _Route, _RoutingContext) ->
     {ok, valid};
@@ -763,7 +762,7 @@ withdrawal_balancer_enabled_after_filters_test() ->
                 fun() ->
                     meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
                     meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
-                    Context = (test_context())#{withdrawal => #{id => <<"w">>}},
+                    Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
                     Gathered = gather_routes(test_varset(), Context),
                     ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
                     ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
@@ -901,7 +900,7 @@ gather_routes_keeps_weight_priority_test() ->
         fun default_resolve/2,
         fun default_terms/4,
         fun() ->
-            Context = (test_context())#{withdrawal => #{id => <<"w">>}},
+            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
             Gathered = gather_routes(test_varset(), Context),
             ok = assert_weight_priority(Gathered),
             Overflow = filter_limit_overflow_routes(Gathered, test_varset(), Context),
@@ -931,7 +930,7 @@ accounted_includes_overflow_routes_test() ->
                 (_, _, _, _) ->
                     {ok, []}
             end),
-            Context = (test_context())#{withdrawal => #{id => <<"w">>}},
+            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
             Gathered = gather_routes(test_varset(), Context),
             Filtered = filter_limit_overflow_routes(Gathered, test_varset(), Context),
             Accounted = accounted_candidates(Filtered),
@@ -968,13 +967,13 @@ withdrawal_allowed_constant_false_legacy_test() ->
 withdrawal_compute_rpc_retryable_test() ->
     Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
     with_collector_mocks(
-        fun(_, _, _) -> erlang:error(Timeout) end,
+        fun(_, _, _) -> raise(Timeout) end,
         fun default_resolve/2,
         fun default_terms/4,
         fun() ->
             ok = assert_timeout_propagates(fun() -> gather_routes(test_varset(), test_context()) end, Timeout),
             ok = assert_timeout_propagates(
-                fun() -> ff_withdrawal:process_transfer(test_withdrawal_state()) end,
+                fun() -> ff_withdrawal:process_transfer(ff_withdrawal:test_withdrawal_state()) end,
                 Timeout
             )
         end
@@ -984,8 +983,6 @@ assert_timeout_propagates(Fun, Timeout) ->
     try
         Result = Fun(),
         case Result of
-            {error, {route_not_found, _}} ->
-                erlang:error(mapped_to_route_not_found);
             {_, Events} when is_list(Events) ->
                 case lists:keyfind(status_changed, 1, Events) of
                     {status_changed, {failed, _}} ->
@@ -1110,7 +1107,11 @@ false_allowed_compute(Ref, VS, Rev) ->
     default_compute(Ref, VS, Rev).
 
 default_resolve(#domain_TerminalRef{id = ID}, _Revision) ->
-    {ok, #domain_Terminal{provider_ref = #domain_ProviderRef{id = ID}}}.
+    {ok, #domain_Terminal{
+        name = <<"terminal">>,
+        description = <<"terminal">>,
+        provider_ref = #domain_ProviderRef{id = ID}
+    }}.
 
 default_terms(_ProviderRef, _TerminalRef, _VS, _Rev) ->
     Currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
@@ -1159,7 +1160,25 @@ test_payment_institution() ->
     }.
 
 test_wallet() ->
-    #domain_WalletConfig{payment_institution = #domain_PaymentInstitutionRef{id = 1}}.
+    #domain_WalletConfig{
+        name = <<"wallet">>,
+        block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
+        suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
+        terms = #domain_TermSetHierarchyRef{id = 1},
+        account = #domain_WalletAccount{
+            currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+            settlement = 1
+        },
+        payment_institution = #domain_PaymentInstitutionRef{id = 1},
+        party_ref = #domain_PartyConfigRef{id = <<"party">>}
+    }.
+
+%% erlang:error/1 alone is a no-return fun, which dialyzer flags.
+raise(Reason) ->
+    case get('$dialyzer_raise') of
+        true -> ok;
+        _ -> erlang:error(Reason)
+    end.
 
 test_context() ->
     #{wallet => test_wallet(), domain_revision => 1, iteration => 1}.
@@ -1170,30 +1189,6 @@ test_varset() ->
         currency => Currency,
         cost => #domain_Cash{amount = 100, currency = Currency},
         party_id => <<"party">>
-    }.
-
-test_withdrawal_state() ->
-    #{
-        id => <<"w-1">>,
-        body => {100, <<"RUB">>},
-        params => #{
-            party_id => <<"party">>,
-            wallet_id => <<"wallet">>,
-            destination_id => <<"dest">>
-        },
-        created_at => 1,
-        domain_revision => 42,
-        attempts => ff_withdrawal_route_attempt_utils:new(),
-        status => pending,
-        validation => skipped,
-        resource =>
-            {bank_card, #{
-                bank_card => #{
-                    token => <<"tok">>,
-                    bin => <<"424242">>,
-                    masked_pan => <<"4242">>
-                }
-            }}
     }.
 
 -endif.

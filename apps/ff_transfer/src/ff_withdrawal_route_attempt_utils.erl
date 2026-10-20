@@ -21,6 +21,7 @@
 -export([next_route/3]).
 -export([next_routes/3]).
 -export([get_index/1]).
+-export([set_index/2]).
 -export([get_current_session/1]).
 -export([get_current_p_transfer/1]).
 -export([get_current_p_transfer_status/1]).
@@ -113,6 +114,10 @@ get_index(undefined) ->
     ?DEFAULT_INDEX;
 get_index(#{index := Index}) ->
     Index.
+
+-spec set_index(index(), attempts()) -> attempts().
+set_index(Index, Attempts) ->
+    Attempts#{index => Index}.
 
 -spec get_current_session(attempts()) -> undefined | session().
 get_current_session(Attempts) ->

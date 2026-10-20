@@ -303,9 +303,9 @@ collector_missing_terminal_misconfiguration_test() ->
 -spec collector_rpc_error_not_misconfig_test() -> _.
 collector_rpc_error_not_misconfig_test() ->
     Woody = {woody_error, {system, resource_unavailable, rpc}},
-    ErrorCallbacks = callbacks_with_compute(fun(_, _, _) -> erlang:error(Woody) end),
+    ErrorCallbacks = callbacks_with_compute(fun(_, _, _) -> raise(error, Woody) end),
     ok = assert_rpc_propagates(ErrorCallbacks),
-    ThrowCallbacks = callbacks_with_compute(fun(_, _, _) -> erlang:throw(Woody) end),
+    ThrowCallbacks = callbacks_with_compute(fun(_, _, _) -> raise(throw, Woody) end),
     ok = assert_rpc_propagates(ThrowCallbacks).
 
 -spec assert_rpc_propagates(callbacks()) -> ok.
@@ -328,7 +328,7 @@ assert_rpc_propagates(Callbacks) ->
 
 -spec collector_timeout_not_route_not_found_test() -> _.
 collector_timeout_not_route_not_found_test() ->
-    Callbacks = callbacks_with_compute(fun(_, _, _) -> erlang:error(timeout) end),
+    Callbacks = callbacks_with_compute(fun(_, _, _) -> raise(error, timeout) end),
     try
         _ = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
         erlang:error(expected_timeout)
@@ -378,5 +378,16 @@ callbacks_with_compute(Compute) ->
         resolve_terminal => fun default_resolve/2,
         allowed_policy => payment
     }.
+
+raise(error, Reason) ->
+    case get('$dialyzer_raise') of
+        true -> ok;
+        _ -> erlang:error(Reason)
+    end;
+raise(throw, Reason) ->
+    case get('$dialyzer_raise') of
+        true -> ok;
+        _ -> erlang:throw(Reason)
+    end.
 
 -endif.
