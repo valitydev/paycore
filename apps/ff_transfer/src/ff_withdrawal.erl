@@ -2729,7 +2729,7 @@ withdrawal_hold_retry_lost_batch_ack_test() ->
             Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
             put(hold_fail_once, Timeout),
             State = test_withdrawal_state(),
-            {'EXIT', _} = (catch process_transfer(State)),
+            assert_process_crashes(State),
             {timeout, [{route_changed, Chosen, _}]} = process_transfer(State),
             Holds = get(hold_calls),
             [{_, RouteA, IterA} | Rest] = lists:reverse(Holds),
@@ -2902,7 +2902,7 @@ withdrawal_crash_before_rollback_rpc_test() ->
             State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
             Index0 = maps:get(routing_iteration, State),
             meck:expect(ff_withdrawal_routing, rollback_routes_limits, fun(_, _, _) -> raise(Timeout) end),
-            {'EXIT', _} = (catch process_transfer(State)),
+            assert_process_crashes(State),
             ?assertEqual(Index0, maps:get(routing_iteration, State))
         end
     ).
@@ -2937,7 +2937,7 @@ withdrawal_crash_before_commit_rpc_test() ->
             State4 = apply_event({session_finished, {<<"s1">>, {success, #{}}}}, State3),
             meck:expect(ff_limiter, commit_withdrawal_limits, fun(_, _, _, _) -> raise(Timeout) end),
             Index0 = maps:get(routing_iteration, State4),
-            {'EXIT', _} = (catch process_transfer(State4)),
+            assert_process_crashes(State4),
             ?assertEqual(Index0, maps:get(routing_iteration, State4))
         end
     ).
@@ -3203,19 +3203,30 @@ assert_no_status_failed({Action, Events}) when Action =:= timeout; Action =:= id
             {Action, Events}
     end.
 
+assert_process_crashes(State) ->
+    try
+        process_transfer(State),
+        erlang:error({expected_crash, process_transfer_did_not_fail})
+    catch
+        _:_ ->
+            ok
+    end.
+
 assert_process_throws_without_failed(State) ->
-    Result = (catch process_transfer(State)),
-    case Result of
-        {timeout, _Events} = Ok ->
-            _ = assert_no_status_failed(Ok),
-            erlang:error({unexpected_process_result, Ok});
-        {idle, _Events} = Ok ->
-            _ = assert_no_status_failed(Ok),
-            erlang:error({unexpected_process_result, Ok});
-        {'EXIT', _} ->
-            ok;
-        _ ->
-            %% throw/1 is returned bare from catch
+    try
+        Result = process_transfer(State),
+        case Result of
+            {timeout, _Events} = Ok ->
+                _ = assert_no_status_failed(Ok),
+                erlang:error({unexpected_process_result, Ok});
+            {idle, _Events} = Ok ->
+                _ = assert_no_status_failed(Ok),
+                erlang:error({unexpected_process_result, Ok});
+            _ ->
+                erlang:error({unexpected_process_result, Result})
+        end
+    catch
+        _:_ ->
             ok
     end.
 
