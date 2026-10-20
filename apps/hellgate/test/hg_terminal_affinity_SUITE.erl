@@ -14,7 +14,7 @@
 -export([cubasty_failure_init/1, cubasty_failure_routing/1, cubasty_failure_capture/1, collector_affinity/1]).
 -export([replay/1, hold_capture_order/1, cancelled_hold/1, deleted_customer_capture/1, expired_deadline/1]).
 -export([negative_timeout/1]).
--export([payment_recorded_once/1, cubasty_failure_add_payment/1]).
+-export([payment_recorded_once/1, cubasty_failure_add_payment/1, failed_payment_adjusted_to_captured/1]).
 
 -type config() :: hg_ct_helper:config().
 
@@ -40,12 +40,15 @@ all() ->
         deleted_customer_capture,
         expired_deadline,
         negative_timeout,
-        payment_recorded_once
+        payment_recorded_once,
+        failed_payment_adjusted_to_captured
     ].
 
 -spec init_per_suite(config()) -> config().
 init_per_suite(C) ->
     C1 = hg_direct_recurrent_tests_SUITE:init_per_suite(C),
+    %% Failure scenarios of the dummy provider keep their steps here
+    ok = hg_invoice_helper:start_kv_store(cfg(test_sup, C1)),
     ok = op_context:save(op_context:key(hellgate), op_context:create()),
     Provider0 = #domain_Provider{terms = ProvisionTerms} = hg_domain:get({provider, ?prv(1)}),
     ProviderPayments = ProvisionTerms#domain_ProvisionTermSet.payments,
@@ -104,7 +107,7 @@ email_customer(C) ->
     {InvoiceID, PaymentID, Payment, _Events} = pay(C),
     CustomerID = customer_id(Payment),
     ?assertNotEqual(undefined, CustomerID),
-    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID),
+    {ok, State} = hg_customer_client:get_by_parent_payment(InvoiceID, PaymentID, cfg(party_config_ref, C)),
     ?assertEqual(CustomerID, (State#customer_CustomerState.customer)#customer_Customer.id).
 
 -spec first_and_second_payment(config()) -> _.
@@ -238,7 +241,7 @@ cubasty_failure_capture(C) ->
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual(2, customer_calls('BindTerminalAffinity')),
     ?assertEqual([Payment#payproc_InvoicePayment.route], history(Payment)),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% Without a binding the payment is recorded by AddPayment, and its failure is retried as well
 -spec cubasty_failure_add_payment(config()) -> _.
@@ -247,7 +250,7 @@ cubasty_failure_add_payment(C) ->
     fail_customer_calls(['AddPayment'], once),
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual(2, customer_calls('AddPayment')),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 -spec collector_affinity(config()) -> _.
 collector_affinity(_C) ->
@@ -328,7 +331,7 @@ cancelled_hold(C) ->
     Payment = hg_client_invoicing:get_payment(InvoiceID, PaymentID, cfg(client, C)),
     ?assertEqual([], history(Payment)),
     %% A cancelled hold binds nothing but is still recorded for the Customer, as before bindings
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% A Customer deleted between StartPayment and capture does not wedge the payment: there is
 %% nothing to bind it or record it in, and a retry of the step would get the same answer
@@ -341,6 +344,33 @@ deleted_customer_capture(C) ->
     ok = hg_client_invoicing:capture_payment(InvoiceID, PaymentID, <<"capture">>, cfg(client, C)),
     _ = await_status(InvoiceID, PaymentID, captured, C),
     ?assertEqual([], history(Payment)).
+
+%% A failed payment made captured by an adjustment is recorded for its Customer, as one
+%% captured on its own is
+-spec failed_payment_adjusted_to_captured(config()) -> _.
+failed_payment_adjusted_to_captured(C) ->
+    InvoiceID = create_invoice(C),
+    %% Both attempts of the cascade fail
+    {PaymentTool, Session} = hg_dummy_provider:make_payment_tool({scenario, [fail, fail]}, ?pmt_sys(<<"visa-ref">>)),
+    ?payment_state(?payment(PaymentID)) =
+        hg_client_invoicing:start_payment(
+            InvoiceID, payment_params(C, instant, {PaymentTool, Session}), cfg(client, C)
+        ),
+    _ = await_status(InvoiceID, PaymentID, failed, C),
+    Payment = hg_client_invoicing:get_payment(InvoiceID, PaymentID, cfg(client, C)),
+    CustomerID = customer_id(Payment),
+    ?assertNotEqual(undefined, CustomerID),
+    ?assertEqual([], payment_refs(CustomerID, C)),
+    Captured = {captured, #domain_InvoicePaymentCaptured{cost = hg_ct_helper:make_cash(42000, <<"RUB">>)}},
+    AdjustmentParams = #payproc_InvoicePaymentAdjustmentParams{
+        reason = <<"manual">>,
+        scenario =
+            {status_change, #domain_InvoicePaymentAdjustmentStatusChange{target_status = Captured}}
+    },
+    ?adjustment(AdjustmentID, ?adjustment_pending()) =
+        hg_client_invoicing:create_payment_adjustment(InvoiceID, PaymentID, AdjustmentParams, cfg(client, C)),
+    ok = await_adjustment_captured(InvoiceID, PaymentID, AdjustmentID, C),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(CustomerID, C)).
 
 -spec expired_deadline(config()) -> _.
 expired_deadline(C) ->
@@ -367,7 +397,7 @@ negative_timeout(C) ->
     ]),
     {InvoiceID, PaymentID, Payment, _} = pay(C),
     ?assertEqual([], history(Payment)),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment))).
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(customer_id(Payment), C)).
 
 %% The payment must reach the Customer exactly once down either branch: a binding
 %% remembers it with the same call, without one a separate AddPayment remains
@@ -379,7 +409,7 @@ payment_recorded_once(C) ->
     ?assertEqual([First#payproc_InvoicePayment.route], history(First)),
     ?assertEqual(1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
     ?assertEqual(0, meck:num_calls(hg_customer_client, add_payment, '_')),
-    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(CustomerID)),
+    ?assertEqual([{InvoiceID, PaymentID}], payment_refs(CustomerID, C)),
     set_candidates([{1, 50, 0, false}, {2, 50, 0, false}]),
     {NextInvoiceID, NextPaymentID, Second, _} = pay(C),
     ?assertEqual(CustomerID, customer_id(Second)),
@@ -387,13 +417,13 @@ payment_recorded_once(C) ->
     ?assertEqual(1, meck:num_calls(hg_customer_client, add_payment, '_')),
     ?assertEqual(
         lists:sort([{InvoiceID, PaymentID}, {NextInvoiceID, NextPaymentID}]),
-        lists:sort(payment_refs(CustomerID))
+        lists:sort(payment_refs(CustomerID, C))
     ).
 
 cfg(Key, C) -> hg_ct_helper:cfg(Key, C).
 
-payment_refs(CustomerID) ->
-    {ok, State} = hg_woody_wrapper:call(customer_management, 'Get', {CustomerID}),
+payment_refs(CustomerID, C) ->
+    {ok, State} = hg_woody_wrapper:call(customer_management, 'Get', {CustomerID, cfg(party_config_ref, C)}),
     [
         {InvoiceID, PaymentID}
      || #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID} <-
@@ -440,6 +470,9 @@ create_invoice(C) ->
 payment_params(C, FlowType) ->
     {{bank_card, Card}, Session} = hg_dummy_provider:make_payment_tool(no_preauth, ?pmt_sys(<<"visa-ref">>)),
     Token = <<(Card#domain_BankCard.token)/binary, "/", (hg_utils:unique_id())/binary>>,
+    payment_params(C, FlowType, {{bank_card, Card#domain_BankCard{token = Token}}, Session}).
+
+payment_params(C, FlowType, {{bank_card, Card}, Session}) ->
     Flow =
         case FlowType of
             instant -> {instant, #payproc_InvoicePaymentParamsFlowInstant{}};
@@ -451,13 +484,32 @@ payment_params(C, FlowType) ->
         payer =
             {payment_resource, #payproc_PaymentResourcePayerParams{
                 resource = #domain_DisposablePaymentResource{
-                    payment_tool = {bank_card, Card#domain_BankCard{token = Token}},
+                    payment_tool = {bank_card, Card},
                     payment_session_id = Session,
                     client_info = #domain_ClientInfo{}
                 },
                 contact_info = #domain_ContactInfo{email = cfg(email, C)}
             }}
     }.
+
+await_adjustment_captured(InvoiceID, PaymentID, AdjustmentID, C) ->
+    case hg_client_invoicing:pull_event(InvoiceID, 12000, cfg(client, C)) of
+        {ok, ?invoice_ev(Changes)} ->
+            case
+                [
+                    ok
+                 || ?payment_ev(ID, ?adjustment_ev(AdjID, ?adjustment_status_changed(?adjustment_captured(_)))) <-
+                        Changes,
+                    ID =:= PaymentID,
+                    AdjID =:= AdjustmentID
+                ]
+            of
+                [] -> await_adjustment_captured(InvoiceID, PaymentID, AdjustmentID, C);
+                [ok | _] -> ok
+            end;
+        Result ->
+            ct:fail({adjustment_timeout, AdjustmentID, Result})
+    end.
 
 await_status(InvoiceID, PaymentID, Status, C) ->
     await_status(InvoiceID, PaymentID, Status, C, []).

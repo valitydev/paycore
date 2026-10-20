@@ -177,7 +177,8 @@ create(ID, InvoiceTplID, #payproc_InvoiceParams{} = V, _Allocation, Mutations, D
         context = V#payproc_InvoiceParams.context,
         template_id = InvoiceTplID,
         external_id = V#payproc_InvoiceParams.external_id,
-        client_info = V#payproc_InvoiceParams.client_info
+        client_info = V#payproc_InvoiceParams.client_info,
+        client_identity = V#payproc_InvoiceParams.client_identity
     }).
 
 %%----------------- invoice asserts

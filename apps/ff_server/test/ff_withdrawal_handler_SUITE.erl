@@ -2,6 +2,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+-include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_session_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_adj_thrift.hrl").
@@ -29,6 +30,7 @@
 -export([create_withdrawal_and_get_session_ok_test/1]).
 
 -export([create_withdrawal_ok_test/1]).
+-export([create_withdrawal_unknown_customer_ok_test/1]).
 -export([create_withdrawal_fail_email_test/1]).
 -export([create_cashlimit_validation_error_test/1]).
 -export([create_inconsistent_currency_validation_error_test/1]).
@@ -81,6 +83,7 @@ groups() ->
             create_withdrawal_and_get_session_ok_test,
 
             create_withdrawal_ok_test,
+            create_withdrawal_unknown_customer_ok_test,
             create_withdrawal_with_changed_body_test,
             body_change_with_several_routes,
             create_withdrawal_fail_email_test,
@@ -273,6 +276,11 @@ create_withdrawal_ok_test(_C) ->
         ip_address = <<"10.10.10.10">>,
         fingerprint = <<"fingerprint">>
     },
+    CustomerID = create_customer(PartyID),
+    ClientIdentity = #fistful_base_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = <<"user">>
+    },
     Params = #wthd_WithdrawalParams{
         id = WithdrawalID,
         party_id = PartyID,
@@ -282,7 +290,8 @@ create_withdrawal_ok_test(_C) ->
         metadata = Metadata,
         external_id = ExternalID,
         contact_info = ContactInfo,
-        client_info = ClientInfo
+        client_info = ClientInfo,
+        client_identity = ClientIdentity
     },
     {ok, WithdrawalState} = call_withdrawal('Create', {Params, Context}),
 
@@ -303,13 +312,41 @@ create_withdrawal_ok_test(_C) ->
     ),
     ?assertEqual(ContactInfo, WithdrawalState#wthd_WithdrawalState.contact_info),
     ?assertEqual(ClientInfo, WithdrawalState#wthd_WithdrawalState.client_info),
+    ?assertEqual(ClientIdentity, WithdrawalState#wthd_WithdrawalState.client_identity),
 
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
     {ok, FinalWithdrawalState} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
     ?assertMatch(
         {succeeded, _},
         FinalWithdrawalState#wthd_WithdrawalState.status
-    ).
+    ),
+    %% A succeeded withdrawal is recorded for the Customer it identifies, in its party
+    {ok, #customer_CustomerState{customer = #customer_Customer{id = CustomerID}}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
+
+%% A Customer that cubasty does not know leaves the withdrawal unrecorded, not stuck
+-spec create_withdrawal_unknown_customer_ok_test(config()) -> test_return().
+create_withdrawal_unknown_customer_ok_test(_C) ->
+    Cash = make_cash({1000, <<"RUB">>}),
+    Ctx = ct_objects:build_default_ctx(),
+    #{
+        party_id := PartyID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+    WithdrawalID = genlib:bsuuid(),
+    Params = #wthd_WithdrawalParams{
+        id = WithdrawalID,
+        party_id = PartyID,
+        wallet_id = WalletID,
+        destination_id = DestinationID,
+        body = Cash,
+        client_identity = #fistful_base_ClientIdentity{customer_id = genlib:bsuuid()}
+    },
+    {ok, _} = call_withdrawal('Create', {Params, ff_entity_context_codec:marshal(#{})}),
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+    {exception, #customer_CustomerNotFound{}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
 
 -spec create_withdrawal_with_changed_body_test(config()) -> test_return().
 create_withdrawal_with_changed_body_test(C) ->
@@ -1082,6 +1119,14 @@ call_withdrawal(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
+
+call_customer(Fun, Args) ->
+    ff_woody_client:call(customer_management, {{dmsl_customer_thrift, 'CustomerManagement'}, Fun, Args}).
+
+create_customer(PartyID) ->
+    Params = #customer_CustomerParams{party_ref = #domain_PartyConfigRef{id = PartyID}},
+    {ok, #customer_Customer{id = CustomerID}} = call_customer('Create', {Params}),
+    CustomerID.
 
 get_withdrawal(WithdrawalID) ->
     {ok, Machine} = ff_withdrawal_machine:get(WithdrawalID),
