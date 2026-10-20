@@ -1750,6 +1750,7 @@ process_adjustment_capture(ID, _Action, St) ->
     Adjustment = get_adjustment(ID, St),
     ok = assert_adjustment_status(processed, Adjustment),
     ok = finalize_adjustment_cashflow(Adjustment, St, Opts),
+    ok = maybe_add_adjusted_payment_to_customer(Adjustment, St),
     Status = ?adjustment_captured(maps:get(timestamp, Opts)),
     Event = ?adjustment_ev(ID, ?adjustment_status_changed(Status)),
     {done, {[Event], idle}}.
@@ -1823,6 +1824,19 @@ get_adjustment_cashflow(#domain_InvoicePaymentAdjustment{new_cash_flow = Cashflo
             scenario = #domain_InvoicePaymentAdjustmentTransactionInfo{trx = Trx}
         }}
 }).
+
+%% A payment made captured by an adjustment is recorded for its Customer, as one captured on
+%% its own is. A failed payment never reached the finalization that records it, and the record
+%% of a cancelled one is idempotent
+maybe_add_adjusted_payment_to_customer(
+    ?adjustment_target_status({captured, _}),
+    #st{payment = #domain_InvoicePayment{id = PaymentID, customer_id = CustomerID}} = St
+) when CustomerID =/= undefined ->
+    Opts = get_opts(St),
+    InvoiceID = get_invoice_id(get_invoice(Opts)),
+    hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID, get_party_config_ref(Opts));
+maybe_add_adjusted_payment_to_customer(_Adjustment, _St) ->
+    ok.
 
 %%
 

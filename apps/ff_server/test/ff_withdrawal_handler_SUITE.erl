@@ -30,6 +30,7 @@
 -export([create_withdrawal_and_get_session_ok_test/1]).
 
 -export([create_withdrawal_ok_test/1]).
+-export([create_withdrawal_unknown_customer_ok_test/1]).
 -export([create_withdrawal_fail_email_test/1]).
 -export([create_cashlimit_validation_error_test/1]).
 -export([create_inconsistent_currency_validation_error_test/1]).
@@ -81,6 +82,7 @@ groups() ->
             create_withdrawal_and_get_session_ok_test,
 
             create_withdrawal_ok_test,
+            create_withdrawal_unknown_customer_ok_test,
             create_withdrawal_with_changed_body_test,
             create_withdrawal_fail_email_test,
             create_cashlimit_validation_error_test,
@@ -318,6 +320,30 @@ create_withdrawal_ok_test(_C) ->
     ),
     %% A succeeded withdrawal is recorded for the Customer it identifies, in its party
     {ok, #customer_CustomerState{customer = #customer_Customer{id = CustomerID}}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
+
+%% A Customer that cubasty does not know leaves the withdrawal unrecorded, not stuck
+-spec create_withdrawal_unknown_customer_ok_test(config()) -> test_return().
+create_withdrawal_unknown_customer_ok_test(_C) ->
+    Cash = make_cash({1000, <<"RUB">>}),
+    Ctx = ct_objects:build_default_ctx(),
+    #{
+        party_id := PartyID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+    WithdrawalID = genlib:bsuuid(),
+    Params = #wthd_WithdrawalParams{
+        id = WithdrawalID,
+        party_id = PartyID,
+        wallet_id = WalletID,
+        destination_id = DestinationID,
+        body = Cash,
+        client_identity = #fistful_base_ClientIdentity{customer_id = genlib:bsuuid()}
+    },
+    {ok, _} = call_withdrawal('Create', {Params, ff_entity_context_codec:marshal(#{})}),
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+    {exception, #customer_CustomerNotFound{}} =
         call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
 
 -spec create_withdrawal_with_changed_body_test(config()) -> test_return().

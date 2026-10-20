@@ -133,7 +133,7 @@ services:
       retries: 10
 
   cubasty:
-    image: ghcr.io/valitydev/cubasty:sha-e6f1944
+    image: ghcr.io/valitydev/cubasty:sha-8091152
     volumes:
       - ./test/cubasty/sys.config:/opt/cs/releases/0.1/sys.config
     hostname: cubasty

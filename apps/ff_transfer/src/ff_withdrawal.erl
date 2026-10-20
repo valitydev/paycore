@@ -1925,13 +1925,18 @@ do_process_route_change(Routes, Withdrawal, Reason) ->
 
 -spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
 handle_adjustment_changes(Changes, Withdrawal) ->
-    handle_adjustment_status_change(maps:get(new_status, Changes, undefined)) ++
+    handle_adjustment_status_change(maps:get(new_status, Changes, undefined), Withdrawal) ++
         handle_adjustment_body_change(maps:get(new_body, Changes, undefined), Withdrawal).
 
--spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined) -> [event()].
-handle_adjustment_status_change(undefined) ->
+-spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined, withdrawal_state()) -> [event()].
+handle_adjustment_status_change(undefined, _Withdrawal) ->
     [];
-handle_adjustment_status_change(#{new_status := Status}) ->
+%% A withdrawal made succeeded by an adjustment is recorded for its Customer, as one that
+%% succeeded on its own is
+handle_adjustment_status_change(#{new_status := succeeded}, Withdrawal) ->
+    ok = maybe_add_to_customer(Withdrawal),
+    [{status_changed, succeeded}];
+handle_adjustment_status_change(#{new_status := Status}, _Withdrawal) ->
     [{status_changed, Status}].
 
 -spec handle_adjustment_body_change(ff_adjustment:body_change() | undefined, withdrawal_state()) -> [event()].
