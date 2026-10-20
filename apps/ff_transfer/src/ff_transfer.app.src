@@ -12,9 +12,12 @@
         prg_machine,
         damsel,
         fistful,
+        routing,
         limiter_proto
     ]},
-    {env, []},
+    {env, [
+        {withdrawal_route_balancer, false}
+    ]},
     {modules, []},
     {maintainers, []},
     {licenses, []},

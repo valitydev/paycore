@@ -258,20 +258,22 @@ collector_affinity(_C) ->
     Candidate = #domain_RoutingCandidate{
         terminal = ?trm(1), allowed = {constant, true}, affinity = Affinity
     },
-    ok = meck:new(party_client_thrift, [passthrough]),
-    ok = meck:expect(party_client_thrift, compute_routing_ruleset, fun(_, _, _, _, _) ->
-        {ok, #domain_RoutingRuleset{name = <<"affinity">>, decisions = {candidates, [Candidate]}}}
-    end),
     PI = hg_domain:get({payment_institution, ?pinst(1)}),
+    #domain_RoutingRules{policies = Policies} = PI#domain_PaymentInstitution.payment_routing_rules,
+    ok = meck:new(party_client_thrift, [passthrough]),
+    ok = meck:expect(party_client_thrift, compute_routing_ruleset, fun(Ref, _, _, _, _) ->
+        Candidates =
+            case Ref of
+                Policies -> [Candidate];
+                _ -> []
+            end,
+        {ok, #domain_RoutingRuleset{name = <<"affinity">>, decisions = {candidates, Candidates}}}
+    end),
     #{routes := Routes} = hg_route_collector:get_routes(
         hg_domain:head(),
         #{},
-        PI,
-        #{
-            currency => ?cur(<<"RUB">>),
-            payment_tool => {generic, #domain_GenericPaymentTool{payment_service = ?pmt_srv(<<"test">>)}},
-            client_ip => undefined
-        }
+        PI#domain_PaymentInstitution.payment_routing_rules,
+        hg_payment_routing:collector_callbacks()
     ),
     ?assert(hg_route_affinity:enabled(Routes)),
     ?assertEqual([Affinity], [hg_route:affinity(R) || R <- Routes]).

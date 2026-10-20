@@ -743,7 +743,7 @@ choice_context_formats_ok(_C) ->
                 weight := ?DOMAIN_CANDIDATE_WEIGHT
             }
         },
-        hg_routing:get_logger_metadata(Context, Revision)
+        hg_payment_routing:get_logger_metadata(Context, Revision)
     ).
 
 -spec empty_terms_allow_test(config()) -> test_return().
@@ -884,7 +884,7 @@ choose_route_w_override(_C) ->
         new_route(Revision, ?prv(2), ?trm(2)),
         new_route(Revision, ?prv(3), ?trm(3))
     ],
-    [Route1, Route2, Route3] = hg_route_fd:fill(hg_route_collector:fill_fd_overrides(Revision, Routes0)),
+    [Route1, Route2, Route3] = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         #{
             availability_condition => 0,
@@ -923,7 +923,7 @@ fd_fill_preserves_route_order(_C) ->
         new_route(Revision, ?prv(1), ?trm(1)),
         new_route(Revision, ?prv(2), ?trm(2))
     ],
-    Routes = hg_route_fd:fill(hg_route_collector:fill_fd_overrides(Revision, Routes0)),
+    Routes = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         [?trm(3), ?trm(1), ?trm(2)],
         [hg_route:terminal_ref(Route) || Route <- Routes]
@@ -1081,7 +1081,7 @@ to_rejected_routes(Rejections) when is_map(Rejections) ->
     [hg_route:to_rejected_route(R) || {_Group, Routes} <- maps:to_list(Rejections), R <- Routes].
 
 get_routes(Predestination, PaymentInstitution, VS, Revision, Ctx) ->
-    hg_routing:get_routes(#{
+    hg_payment_routing:get_routes(#{
         predestination => Predestination,
         revision => Revision,
         varset => VS,
