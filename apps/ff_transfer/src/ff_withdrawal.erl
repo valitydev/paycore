@@ -27,6 +27,7 @@
     validation => withdrawal_validation(),
     contact_info => contact_info(),
     client_info => client_info(),
+    client_identity => client_identity(),
     new_body => body(),
     p_transfer_rebuild_needed => boolean()
 }.
@@ -42,7 +43,8 @@
     metadata => metadata(),
     external_id => id(),
     contact_info => contact_info(),
-    client_info => client_info()
+    client_info => client_info(),
+    client_identity => client_identity()
 }.
 
 -type params() :: #{
@@ -55,7 +57,8 @@
     quote => quote(),
     metadata => metadata(),
     contact_info => contact_info(),
-    client_info => client_info()
+    client_info => client_info(),
+    client_identity => client_identity()
 }.
 
 -type status() ::
@@ -76,6 +79,11 @@
 -type client_info() :: #{
     ip_address => binary(),
     fingerprint => binary()
+}.
+
+-type client_identity() :: #{
+    customer_id := binary(),
+    user_id => binary()
 }.
 
 -type validation_result() ::
@@ -219,6 +227,7 @@
 -export_type([activity/0]).
 -export_type([contact_info/0]).
 -export_type([client_info/0]).
+-export_type([client_identity/0]).
 
 %% Transfer logic callbacks
 
@@ -250,6 +259,7 @@
 -export([validation/1]).
 -export([contact_info/1]).
 -export([client_info/1]).
+-export([client_identity/1]).
 
 %% API
 
@@ -451,6 +461,12 @@ client_info(#{client_info := ClientInfo}) ->
 client_info(_) ->
     undefined.
 
+-spec client_identity(withdrawal_state()) -> client_identity() | undefined.
+client_identity(#{client_identity := ClientIdentity}) ->
+    ClientIdentity;
+client_identity(_) ->
+    undefined.
+
 %% API
 
 -spec create(params()) ->
@@ -502,7 +518,8 @@ create(Params) ->
                     external_id => maps:get(external_id, Params, undefined),
                     metadata => maps:get(metadata, Params, undefined),
                     contact_info => maps:get(contact_info, Params, undefined),
-                    client_info => maps:get(client_info, Params, undefined)
+                    client_info => maps:get(client_info, Params, undefined),
+                    client_identity => maps:get(client_identity, Params, undefined)
                 })},
             {status_changed, pending},
             {resource_got, Resource}
@@ -1080,8 +1097,17 @@ process_session_sleep(_Withdrawal) ->
     {suspend, []}.
 
 -spec process_transfer_finish(withdrawal_state()) -> process_result().
-process_transfer_finish(_Withdrawal) ->
+process_transfer_finish(Withdrawal) ->
+    ok = maybe_add_to_customer(Withdrawal),
     {idle, [{status_changed, succeeded}]}.
+
+maybe_add_to_customer(Withdrawal) ->
+    case client_identity(Withdrawal) of
+        #{customer_id := CustomerID} ->
+            ff_customer:add_withdrawal(CustomerID, id(Withdrawal), party_id(Withdrawal));
+        undefined ->
+            ok
+    end.
 
 -spec process_transfer_fail(fail_type(), withdrawal_state()) -> [event()].
 process_transfer_fail(FailType, Withdrawal) ->
@@ -1900,13 +1926,18 @@ do_process_route_change(Routes, Withdrawal, Reason) ->
 
 -spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
 handle_adjustment_changes(Changes, Withdrawal) ->
-    handle_adjustment_status_change(maps:get(new_status, Changes, undefined)) ++
+    handle_adjustment_status_change(maps:get(new_status, Changes, undefined), Withdrawal) ++
         handle_adjustment_body_change(maps:get(new_body, Changes, undefined), Withdrawal).
 
--spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined) -> [event()].
-handle_adjustment_status_change(undefined) ->
+-spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined, withdrawal_state()) -> [event()].
+handle_adjustment_status_change(undefined, _Withdrawal) ->
     [];
-handle_adjustment_status_change(#{new_status := Status}) ->
+%% A withdrawal made succeeded by an adjustment is recorded for its Customer, as one that
+%% succeeded on its own is
+handle_adjustment_status_change(#{new_status := succeeded}, Withdrawal) ->
+    ok = maybe_add_to_customer(Withdrawal),
+    [{status_changed, succeeded}];
+handle_adjustment_status_change(#{new_status := Status}, _Withdrawal) ->
     [{status_changed, Status}].
 
 -spec handle_adjustment_body_change(ff_adjustment:body_change() | undefined, withdrawal_state()) -> [event()].
