@@ -130,6 +130,13 @@ process_withdrawal(#{body := #wthd_provider_Cash{amount = 1357}}, State, _Option
         next_state => State,
         new_body => {1246, <<"RUB">>}
     }};
+process_withdrawal(#{body := #wthd_provider_Cash{amount = 1358}}, State, _Options) ->
+    %% change body scenario routed to more than one terminal
+    {ok, #{
+        intent => {finish, {success, ?TRX_INFO}},
+        next_state => State,
+        new_body => {1247, <<"RUB">>}
+    }};
 process_withdrawal(#{auth_data := #{sender := <<"SenderToken">>, receiver := <<"ReceiverToken">>}}, State, _Options) ->
     {ok, #{
         intent => {finish, {success, ?TRX_INFO}},
