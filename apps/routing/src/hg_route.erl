@@ -1,6 +1,5 @@
 -module(hg_route).
 
--include_lib("hellgate/include/domain.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export([new/6]).
@@ -41,10 +40,11 @@
 
 %%
 
--type revision() :: hg_domain:revision().
+-type revision() :: integer().
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 -type payment_route() :: dmsl_domain_thrift:'PaymentRoute'().
+-type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'() | undefined.
 
 -type fd_overrides() :: dmsl_domain_thrift:'RouteFaultDetectorOverrides'().
 -type route_rejection_reason() :: {atom(), term()} | {atom(), term(), term()}.
@@ -59,7 +59,7 @@
     affinity => dmsl_domain_thrift:'RoutingAffinity'() | undefined,
     fd_overrides => fd_overrides(),
     rejection_reason => route_rejection_reason(),
-    exchange_context => hg_invoice_payment:exchange_context()
+    exchange_context => exchange_context()
 }.
 
 -type fd_score() :: #{
@@ -84,29 +84,20 @@
     blacklisted => blacklist_condition()
 }.
 
--type currency() :: dmsl_domain_thrift:'CurrencyRef'().
--type payment_tool() :: dmsl_domain_thrift:'PaymentTool'().
--type client_ip() :: dmsl_domain_thrift:'IPAddress'().
--type email() :: binary().
--type card_token() :: dmsl_domain_thrift:'Token'().
-
--type pin_data() :: #{
-    currency => currency(),
-    payment_tool => payment_tool(),
-    client_ip => client_ip() | undefined,
-    email => email() | undefined,
-    card_token => card_token() | undefined
-}.
+-type pin_data() :: map().
 
 -type score() :: #domain_PaymentRouteScores{}.
 
 -export_type([t/0]).
+-export_type([revision/0]).
 -export_type([route_data/0]).
 -export_type([provider_ref/0]).
 -export_type([terminal_ref/0]).
 -export_type([payment_route/0]).
 -export_type([rejected_route/0]).
 -export_type([score/0]).
+-export_type([exchange_context/0]).
+-export_type([pin_data/0]).
 
 %%
 
@@ -181,7 +172,7 @@ set_priority(V, #{route_data := Data} = R) ->
 set_rejection_reason(Reason, R) ->
     R#{rejection_reason => Reason}.
 
--spec set_exchange_context(hg_invoice_payment:exchange_context() | undefined, t()) ->
+-spec set_exchange_context(exchange_context(), t()) ->
     t().
 set_exchange_context(undefined, R) ->
     R;
@@ -254,7 +245,7 @@ rejection_reason(#{rejection_reason := V}) ->
 rejection_reason(_) ->
     undefined.
 
--spec exchange_context(t()) -> hg_invoice_payment:exchange_context() | undefined.
+-spec exchange_context(t()) -> exchange_context().
 exchange_context(#{exchange_context := V}) ->
     V;
 exchange_context(_) ->
@@ -304,13 +295,12 @@ route_ref(_) ->
     undefined.
 
 -spec from_payment_route(revision(), payment_route()) -> t().
-from_payment_route(Revision, Route) ->
-    ?route(ProviderRef, TerminalRef) = Route,
+from_payment_route(Revision, #domain_PaymentRoute{provider = ProviderRef, terminal = TerminalRef}) ->
     new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, undefined).
 
 -spec to_payment_route(t()) -> payment_route().
 to_payment_route(Route) ->
-    ?route(provider_ref(Route), terminal_ref(Route)).
+    #domain_PaymentRoute{provider = provider_ref(Route), terminal = terminal_ref(Route)}.
 
 -spec to_rejected_route(t()) -> rejected_route().
 to_rejected_route(Route) ->

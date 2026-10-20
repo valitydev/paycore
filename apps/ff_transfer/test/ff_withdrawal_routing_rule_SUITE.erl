@@ -1,4 +1,4 @@
--module(ff_routing_rule_SUITE).
+-module(ff_withdrawal_routing_rule_SUITE).
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("ff_cth/include/ct_domain.hrl").
@@ -27,8 +27,6 @@
 -type test_case_name() :: ct_helper:test_case_name().
 -type group_name() :: ct_helper:group_name().
 -type test_return() :: _ | no_return().
-
-%% Macro helpers
 
 %% Common test API implementation
 
@@ -90,7 +88,6 @@ end_per_testcase(_Name, _C) ->
 -spec withdrawal_routes_found_test(config()) -> test_return().
 withdrawal_routes_found_test(_C) ->
     VS = make_varset(?cash(999, <<"RUB">>), <<"12345">>),
-    PaymentInstitutionID = 1,
     ?assertMatch(
         {
             [
@@ -99,25 +96,23 @@ withdrawal_routes_found_test(_C) ->
             ],
             #{rejected_routes := []}
         },
-        gather_routes(withdrawal_routing_rules, PaymentInstitutionID, VS)
+        gather_routes(VS)
     ).
 
 -spec withdrawal_no_routes_found_test(config()) -> test_return().
 withdrawal_no_routes_found_test(_C) ->
     VS = make_varset(?cash(1000, <<"RUB">>), <<"12345">>),
-    PaymentInstitutionID = 1,
     ?assertMatch(
         {
             [],
             #{rejected_routes := []}
         },
-        gather_routes(withdrawal_routing_rules, PaymentInstitutionID, VS)
+        gather_routes(VS)
     ).
 
 -spec withdrawal_rejected_by_prohibitions_table_test(config()) -> test_return().
 withdrawal_rejected_by_prohibitions_table_test(_C) ->
     VS = make_varset(?cash(1000, <<"RUB">>), <<"67890">>),
-    PaymentInstitutionID = 1,
     ?assertMatch(
         {
             [
@@ -130,19 +125,18 @@ withdrawal_rejected_by_prohibitions_table_test(_C) ->
                 ]
             }
         },
-        gather_routes(withdrawal_routing_rules, PaymentInstitutionID, VS)
+        gather_routes(VS)
     ).
 
 -spec withdrawal_ruleset_misconfig_test(config()) -> test_return().
 withdrawal_ruleset_misconfig_test(_C) ->
     VS = #{party_id => <<"12345">>},
-    PaymentInstitutionID = 1,
     ?assertMatch(
         {
             [],
             #{rejected_routes := []}
         },
-        gather_routes(withdrawal_routing_rules, PaymentInstitutionID, VS)
+        gather_routes(VS)
     ).
 
 %%
@@ -155,12 +149,9 @@ make_varset(Cash, PartyID) ->
         party_id => PartyID
     }.
 
-gather_routes(RoutingRulesTag, PaymentInstitutionID, Varset) ->
+gather_routes(Varset) ->
     Revision = ff_domain_config:head(),
-    {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionID, Varset, Revision),
-    ff_routing_rule:gather_routes(
-        PaymentInstitution,
-        RoutingRulesTag,
-        Varset,
-        Revision
-    ).
+    Wallet = #domain_WalletConfig{payment_institution = ?payinst(1)},
+    Context = #{wallet => Wallet, domain_revision => Revision, iteration => 1},
+    State = ff_withdrawal_routing:gather_routes(Varset, Context),
+    {maps:get(routes, State), maps:get(reject_context, State)}.

@@ -811,7 +811,7 @@ get_routes_(PaymentInstitution, VS, Revision, St) ->
             inspector => Inspector
         }
     },
-    hg_routing:get_routes(Params).
+    hg_payment_routing:get_routes(Params).
 
 -spec check_risk_score(risk_score()) -> ok | {error, risk_score_is_too_high}.
 check_risk_score(fatal) ->
@@ -830,7 +830,7 @@ get_routing_predestination(#domain_InvoicePayment{payer = ?recurrent_payer()}) -
     payment.
 
 log_route_choice_meta(#{choice_meta := ChoiceMeta}, Revision) ->
-    Metadata = hg_routing:get_logger_metadata(ChoiceMeta, Revision),
+    Metadata = hg_payment_routing:get_logger_metadata(ChoiceMeta, Revision),
     logger:log(notice, "Routing decision made", #{routing => Metadata}).
 
 log_misconfigurations({misconfiguration, _} = Error) ->
@@ -4793,7 +4793,7 @@ replay_route_decision(Decision, St) ->
 
 -dialyzer({nowarn_function, customer_finalization/0}).
 customer_finalization() ->
-    Modules = [hg_limiter, hg_accounting, hg_invoice_utils, hg_payment_institution, hg_route_collector],
+    Modules = [hg_limiter, hg_accounting, hg_invoice_utils, hg_payment_institution, hg_payment_routing],
     ok = meck:new(Modules, [passthrough]),
     try
         St0 = customer_finalization_state(),
@@ -4827,7 +4827,7 @@ customer_finalization() ->
         ok = meck:expect(hg_limiter, rollback_payment_limits, 7, ok),
         ok = meck:expect(hg_accounting, commit, 2, ok),
         ok = meck:expect(hg_accounting, rollback, 2, ok),
-        ok = meck:expect(hg_route_collector, get_routes, 4, #{routes => []}),
+        ok = meck:expect(hg_payment_routing, get_routes, 1, #{routes => []}),
         lists:foreach(
             fun(Ttl) ->
                 assert_customer_finalization(replay_route_affinity(#domain_RoutingAffinity{ttl = Ttl}, St0))
@@ -4871,7 +4871,7 @@ customer_finalization() ->
         ),
         ?assertEqual(BeforeBind, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
         ?assertEqual(BeforeCancelled + 1, meck:num_calls(hg_customer_client, add_payment, '_')),
-        ?assertEqual(0, meck:num_calls(hg_route_collector, get_routes, '_')),
+        ?assertEqual(0, meck:num_calls(hg_payment_routing, get_routes, '_')),
         %% Nothing is swallowed: a failing customer operation fails the step after the commits,
         %% and the retried step commits again idempotently and repeats the calls
         Timeout = {woody_error, {internal, resource_unavailable, <<"timeout">>}},

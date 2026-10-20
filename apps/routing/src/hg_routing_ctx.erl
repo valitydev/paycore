@@ -31,7 +31,7 @@
 
 -type rejection_group() :: atom().
 -type routes() :: [hg_route:t()].
--type limits() :: #{hg_route:payment_route() => [hg_limiter:turnover_limit_value()]}.
+-type limits() :: #{hg_route:payment_route() => [dmsl_payproc_thrift:'TurnoverLimitValue'()]}.
 -type scores() :: #{hg_route:payment_route() => #domain_PaymentRouteScores{}}.
 -type error() :: {atom(), _Description}.
 

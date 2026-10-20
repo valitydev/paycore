@@ -4,21 +4,11 @@
 
 %%
 -export([prepare_log_message/1]).
--export([get_logger_metadata/2]).
--export([get_routes/1]).
 -export([filter_routes/2]).
 -export([choose_route/1]).
+-export([filter/2]).
 
 %%
-
--type get_route_params() :: #{
-    predestination := hg_route_collector:route_predestination(),
-    revision := hg_route_collector:revision(),
-    varset := hg_route_collector:varset(),
-    payment_institution := hg_route_collector:payment_institution(),
-    pin_context := hg_route_collector:gather_route_context(),
-    blacklist_context => hg_route_collector:blacklist_context()
-}.
 
 -type route_choice_context() :: #{
     chosen_route => hg_route:t(),
@@ -29,30 +19,24 @@
 
 -type initial_rejection_group() :: accepted | prohibit | blacklisted.
 
--type get_routes_result() :: #{
-    routes := [hg_route:t()],
-    rejections => #{initial_rejection_group() => [hg_route:t()]},
-    error => hg_route_collector:get_routes_error()
-}.
-
 -type filter_routes_result() :: hg_routing_ctx:t().
 -type filter_routes_fun() :: fun((filter_routes_result()) -> filter_routes_result()).
 
 -type route_scores() :: #domain_PaymentRouteScores{}.
--type limits() :: #{hg_route:payment_route() => [hg_limiter:turnover_limit_value()]}.
+-type limits() :: #{hg_route:payment_route() => [dmsl_payproc_thrift:'TurnoverLimitValue'()]}.
 -type scores() :: #{hg_route:payment_route() => hg_routing:route_scores()}.
 -type route_predestination() :: payment | recurrent_payment.
 
--type misconfiguration_error() :: {misconfiguration, {routing_decisions, _} | {routing_candidate, _}}.
+-type misconfiguration_error() ::
+    {misconfiguration, {routing_decisions, _} | {routing_candidate, _} | {payment_routing_rules, empty}}.
 
--export_type([get_route_params/0]).
--export_type([get_routes_result/0]).
 -export_type([filter_routes_result/0]).
 -export_type([route_choice_context/0]).
 -export_type([route_scores/0]).
 -export_type([limits/0]).
 -export_type([scores/0]).
 -export_type([route_predestination/0]).
+-export_type([initial_rejection_group/0]).
 
 -define(ZERO, 0).
 
@@ -64,68 +48,15 @@ prepare_log_message({misconfiguration, {routing_candidate, Candidate}}) ->
 prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
     {"PaymentRoutingRules are empty", []}.
 
--spec get_logger_metadata(route_choice_context(), hg_route_collector:revision()) -> LoggerFormattedMetadata :: map().
-get_logger_metadata(RouteChoiceContext, Revision) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            Acc#{K => format_logger_metadata(K, V, Revision)}
-        end,
-        #{},
-        RouteChoiceContext
-    ).
-
-format_logger_metadata(reject_reason, Reason, _) ->
-    Reason;
-format_logger_metadata(Meta, Route, Revision) when
-    Meta =:= chosen_route;
-    Meta =:= preferable_route
-->
-    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
-    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
-    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
-    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
-    genlib_map:compact(#{
-        provider => #{id => ProviderID, name => ProviderName},
-        terminal => #{id => TerminalID, name => TerminalName},
-        priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route),
-        terminal_affinity => hg_route:affinity_rank(Route),
-        affinity_enabled => hg_route:affinity(Route) =/= undefined
-    }).
-
--spec get_routes(get_route_params()) -> get_routes_result().
-get_routes(
-    #{
-        predestination := Predestination,
-        revision := Revision,
-        varset := VS,
-        payment_institution := PI,
-        pin_context := PinCtx
-    } = Params
-) ->
-    Result = #{routes := Routes0} = hg_route_collector:get_routes(Revision, VS, PI, PinCtx),
-    Routes1 = hg_route_collector:fill_accepted(Predestination, Revision, VS, Routes0),
-    Routes2 = hg_route_collector:fill_prohibition(Revision, VS, PI, Routes1),
-    Routes3 = hg_route_collector:fill_fd_overrides(Revision, Routes2),
-    Routes4 =
-        case maps:get(blacklist_context, Params, undefined) of
-            undefined ->
-                Routes3;
-            BlCtx ->
-                hg_route_collector:fill_blacklist(BlCtx, Routes3)
-        end,
-    Routes5 = hg_route_fd:fill(Routes4),
-    genlib_map:compact(
-        maps:merge(
-            #{error => maps:get(error, Result, undefined)},
-            filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
-        )
-    ).
-
 -spec filter_routes(filter_routes_result(), [filter_routes_fun()]) -> filter_routes_result().
 filter_routes(Result0, WithFilterFuns) ->
     lists:foldl(fun(Fun, Result) -> Fun(Result) end, Result0, WithFilterFuns).
 
+-spec filter([hg_route:t()], [{atom(), term()}]) ->
+    #{
+        routes := [hg_route:t()],
+        rejections => #{initial_rejection_group() => [hg_route:t()]}
+    }.
 filter(Routes, Keys) ->
     {Accepted, Rejections} = lists:foldr(
         fun(Route, {AcceptedAcc, RejectionsAcc}) ->
@@ -576,40 +507,5 @@ balance_surviving_routes_test() ->
     ),
     ?assertNot(lists:member(?trm(1), Chosen)),
     ?assert(abs(length([T || T <- Chosen, T =:= ?trm(2)]) - 500) < 80).
-
--spec get_routes_preserves_weights_test() -> _.
-get_routes_preserves_weights_test() ->
-    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
-    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
-    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
-    ok = meck:new([hg_route_collector, hg_route_fd], [passthrough]),
-    try
-        ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) -> #{routes => [A, B, C]} end),
-        ok = meck:expect(hg_route_collector, fill_accepted, fun(_, _, _, Routes) -> Routes end),
-        ok = meck:expect(hg_route_collector, fill_prohibition, fun(_, _, _, Routes) -> Routes end),
-        ok = meck:expect(hg_route_collector, fill_fd_overrides, fun(_, Routes) -> Routes end),
-        ok = meck:expect(hg_route_fd, fill, fun(Routes) -> Routes end),
-        #{routes := Survivors} = get_routes(#{
-            predestination => payment,
-            revision => 1,
-            varset => #{},
-            payment_institution => #domain_PaymentInstitution{
-                name = <<"test">>,
-                realm = test,
-                residences = [],
-                system_account_set = {value, #domain_SystemAccountSetRef{id = 1}},
-                inspector = {value, #domain_InspectorRef{id = 1}}
-            },
-            pin_context => #{
-                currency => #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-                payment_tool =>
-                    {generic, #domain_GenericPaymentTool{payment_service = #domain_PaymentServiceRef{id = <<"test">>}}},
-                client_ip => undefined
-            }
-        }),
-        ?assertEqual([25, 25], [hg_route:weight(R) || R <- Survivors])
-    after
-        ok = meck:unload([hg_route_collector, hg_route_fd])
-    end.
 
 -endif.
