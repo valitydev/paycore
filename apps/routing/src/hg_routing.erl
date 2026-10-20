@@ -28,7 +28,11 @@
 -type route_predestination() :: payment | recurrent_payment.
 
 -type misconfiguration_error() ::
-    {misconfiguration, {routing_decisions, _} | {routing_candidate, _} | {payment_routing_rules, empty}}.
+    {misconfiguration,
+        {routing_decisions, _}
+        | {routing_candidate, _}
+        | {payment_routing_rules, empty}
+        | {terminal, hg_route:terminal_ref(), notfound}}.
 
 -export_type([filter_routes_result/0]).
 -export_type([route_choice_context/0]).
@@ -46,7 +50,9 @@ prepare_log_message({misconfiguration, {routing_decisions, Details}}) ->
 prepare_log_message({misconfiguration, {routing_candidate, Candidate}}) ->
     {"PaymentRoutingCandidate couldn't be reduced, ~p", [Candidate]};
 prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
-    {"PaymentRoutingRules are empty", []}.
+    {"PaymentRoutingRules are empty", []};
+prepare_log_message({misconfiguration, {terminal, TerminalRef, notfound}}) ->
+    {"Routing terminal not found: ~p", [TerminalRef]}.
 
 -spec filter_routes(filter_routes_result(), [filter_routes_fun()]) -> filter_routes_result().
 filter_routes(Result0, WithFilterFuns) ->
@@ -217,10 +223,17 @@ find_idx_of_difference(_, I) ->
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -spec test() -> _.
+
 -type testcase() :: {_, fun(() -> _)}.
 
 -define(prv(ID), #domain_ProviderRef{id = ID}).
 -define(trm(ID), #domain_TerminalRef{id = ID}).
+
+-spec missing_terminal_misconfiguration_log_test() -> _.
+missing_terminal_misconfiguration_log_test() ->
+    TerminalRef = ?trm(99),
+    {Format, Args} = prepare_log_message({misconfiguration, {terminal, TerminalRef, notfound}}),
+    ?assertNotEqual([], lists:flatten(io_lib:format(Format, Args))).
 
 -spec record_comparsion_test() -> _.
 record_comparsion_test() ->

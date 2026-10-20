@@ -1067,7 +1067,7 @@ with_collector_mocks(ComputeFun, ResolveFun, TermsFun, Fun) ->
     meck:expect(ff_party, compute_routing_ruleset, ComputeFun),
     meck:expect(ff_party, compute_provider_terminal_terms, TermsFun),
     meck:expect(ff_party, get_wallet, fun(_, _, _) -> {ok, test_wallet()} end),
-    meck:expect(ff_domain_config, object, fun(_Rev, {terminal, Ref}) -> ResolveFun(Ref, _Rev) end),
+    meck:expect(ff_domain_config, object, fun(Rev, {terminal, Ref}) -> ResolveFun(Ref, Rev) end),
     meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
     meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
     meck:expect(ff_destination_machine, get, fun(_) -> {ok, dest_machine} end),

@@ -125,8 +125,8 @@ add_or_merge_candidate(Candidate, Revision, Resolve, {Routes, Index}) ->
     } = Candidate,
     ProviderRef = resolve_provider(Resolve, TerminalRef, Revision),
     Key = {ProviderRef, TerminalRef},
-    CmpPriority = cmp_int(Priority),
-    CmpWeight = cmp_int(Weight),
+    CmpPriority = stored_priority(Priority),
+    CmpWeight = stored_weight(Weight),
     Route = make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity),
     case maps:find(Key, Index) of
         error ->
@@ -159,11 +159,6 @@ make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity) 
         #{}
     ),
     Route#{affinity => Affinity, routing_pin => Pin}.
-
-cmp_int(undefined) ->
-    0;
-cmp_int(Value) ->
-    Value.
 
 stored_weight(undefined) ->
     ?DOMAIN_CANDIDATE_WEIGHT;
@@ -298,6 +293,20 @@ collector_missing_terminal_misconfiguration_test() ->
     ?assertEqual(
         #{routes => [], error => {misconfiguration, {terminal, ?trm(99), notfound}}},
         hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks)
+    ).
+
+-spec collector_merge_duplicate_default_priority_test() -> _.
+collector_merge_duplicate_default_priority_test() ->
+    Default = (candidate(?trm(1), {constant, true}, 0, 1))#domain_RoutingCandidate{priority = undefined},
+    Lower = candidate(?trm(1), {constant, true}, ?DOMAIN_CANDIDATE_PRIORITY - 1, 100),
+    lists:foreach(
+        fun(Candidates) ->
+            Callbacks = callbacks(Candidates, [], payment, fun default_resolve/2),
+            #{routes := [Route]} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
+            ?assertEqual(?DOMAIN_CANDIDATE_PRIORITY, hg_route:priority(Route)),
+            ?assertEqual(1, hg_route:weight(Route))
+        end,
+        [[Default, Lower], [Lower, Default]]
     ).
 
 -spec collector_rpc_error_not_misconfig_test() -> _.
