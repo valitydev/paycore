@@ -1004,8 +1004,16 @@ stashed_routing_varset_and_context(Withdrawal) ->
                 withdrawal => Withdrawal#{domain_revision => Revision},
                 iteration => Iteration
             },
-            {Varset, Context}
+            {restore_routing_varset(Varset, Withdrawal), Context}
     end.
+
+restore_routing_varset(#{payment_tool := _} = Varset, _Withdrawal) ->
+    Varset;
+restore_routing_varset(Varset, Withdrawal) ->
+    %% Legacy histories without resource need the same runtime recovery as routing.
+    %% Keep the stashed cost and context; replay must not fetch the resource.
+    Resource = destination_resource(Withdrawal),
+    Varset#{payment_tool => construct_payment_tool(Resource)}.
 
 %% Treat an explicit undefined the same as a missing key: maps:get/3 default
 %% does not fire when the key is present. Never pass undefined into party/limiter.
@@ -2470,6 +2478,45 @@ legacy_routing_cleanup_test() ->
         ),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Unused, 1])),
         ?assertNot(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Chosen, 1]))
+    end).
+
+-spec legacy_resource_routing_context_test() -> _.
+legacy_resource_routing_context_test() ->
+    Route = test_route(1, 7),
+    State0 = test_withdrawal_state(),
+    Resource = maps:get(resource, State0),
+    Legacy = maps:remove(resource, State0),
+    with_routing_mocks([Route], fun() ->
+        ok = meck:new(ff_resource, [passthrough]),
+        try
+            ok = meck:expect(ff_destination_machine, destination, 1, #{id => <<"dest">>, resource => Resource}),
+            ok = meck:expect(ff_resource, create_resource, 1, {ok, Resource}),
+            {RoutingVarset, _} = make_routing_varset_and_context(Legacy),
+            Events = [
+                {route_changed, #{route => Route, candidates => [Route]}},
+                {rollback_started, #{reason => #{code => <<"no_route_found">>}, candidates => [Route]}}
+            ],
+            lists:foreach(
+                fun(Event) ->
+                    ResourceReads = meck:num_calls(ff_resource, create_resource, '_'),
+                    State = apply_event(Event, Legacy),
+                    ?assertEqual(ResourceReads, meck:num_calls(ff_resource, create_resource, '_')),
+                    Attempts = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(State)),
+                    Cancelled = test_p_transfer(State#{attempts => Attempts}, cancelled),
+                    ?assertEqual(2, ff_withdrawal_route_attempt_utils:get_index(attempts(Cancelled))),
+                    Current = Cancelled#{
+                        body => {200, <<"RUB">>},
+                        domain_revision => 43
+                    },
+                    {RollbackVarset, Context} = stashed_routing_varset_and_context(Current),
+                    ?assertEqual(RoutingVarset, RollbackVarset),
+                    ?assertMatch(#{domain_revision := 42, iteration := 1}, Context)
+                end,
+                Events
+            )
+        after
+            ok = meck:unload(ff_resource)
+        end
     end).
 
 test_p_transfer(State, Status) ->
