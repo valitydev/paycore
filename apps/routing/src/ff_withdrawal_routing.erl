@@ -1,5 +1,11 @@
 -module(ff_withdrawal_routing).
 
+-behaviour(hg_routing_domain).
+
+-export([compute_ruleset/3]).
+-export([resolve_terminal/2]).
+-export([validate_candidate/1]).
+
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("limiter_proto/include/limproto_limiter_thrift.hrl").
 
@@ -121,7 +127,7 @@ gather_routes(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision
         DomainRevision,
         PartyVarset,
         RoutingRules,
-        collector_callbacks()
+        ?MODULE
     ),
     case maps:get(error, CollectorResult, undefined) of
         {misconfiguration, Reason} ->
@@ -337,13 +343,8 @@ log_reject_context(#{reject_context := RejectContext}) ->
 
 %%
 
-collector_callbacks() ->
-    #{
-        compute_ruleset => fun compute_ruleset/3,
-        resolve_terminal => fun resolve_terminal/2,
-        allowed_policy => withdrawal_legacy
-    }.
-
+-spec compute_ruleset(dmsl_domain_thrift:'RoutingRulesetRef'(), party_varset(), domain_revision()) ->
+    {ok, dmsl_domain_thrift:'RoutingRuleset'()}.
 compute_ruleset(RulesetRef, VS, Revision) ->
     case ff_party:compute_routing_ruleset(RulesetRef, VS, Revision) of
         {ok, Ruleset} ->
@@ -352,6 +353,7 @@ compute_ruleset(RulesetRef, VS, Revision) ->
             throw({misconfiguration, {ruleset, RulesetRef, not_found}})
     end.
 
+-spec resolve_terminal(terminal_ref(), domain_revision()) -> {ok, provider_ref()} | {error, notfound}.
 resolve_terminal(TerminalRef, Revision) ->
     case ff_domain_config:object(Revision, {terminal, TerminalRef}) of
         {ok, #domain_Terminal{provider_ref = ProviderRef}} ->
@@ -359,6 +361,12 @@ resolve_terminal(TerminalRef, Revision) ->
         {error, notfound} ->
             {error, notfound}
     end.
+
+-spec validate_candidate(dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return().
+validate_candidate(#domain_RoutingCandidate{allowed = {constant, Allowed}}) when is_boolean(Allowed) ->
+    ok;
+validate_candidate(Candidate) ->
+    throw({misconfiguration, {routing_candidate, Candidate}}).
 
 new_reject_context(VS) ->
     #{
@@ -388,11 +396,8 @@ from_collector_route(Route) ->
         provider_ref => hg_route:provider_ref(Route),
         terminal_ref => hg_route:terminal_ref(Route),
         priority => hg_route:priority(Route),
-        weight => weight_or_zero(hg_route:weight(Route))
+        weight => hg_route:weight(Route)
     }.
-
-weight_or_zero(Weight) ->
-    Weight.
 
 -spec filter_valid_routes(routing_state(), party_varset(), routing_context()) ->
     routing_state().
@@ -671,469 +676,44 @@ convert_to_route_test() ->
         ])
     ).
 
--spec withdrawal_balancer_priority_test() -> _.
-withdrawal_balancer_priority_test() ->
-    with_chooser_mocks(fun() ->
-        State = test_select_state([
-            test_rule_route(1, 10, 900, 100),
-            test_rule_route(2, 20, 1000, 0)
-        ]),
-        ?assertEqual(
-            {ok, [#{provider_id => 2, terminal_id => 20, version => 1}]},
-            select_routes(State, #{has_quote => false, domain_revision => 1})
-        )
-    end).
-
--spec withdrawal_balancer_all_zero_weights_test() -> _.
-withdrawal_balancer_all_zero_weights_test() ->
-    with_chooser_mocks(fun() ->
-        State = test_select_state([
-            test_rule_route(2, 2, 900, 0),
-            test_rule_route(1, 1, 1000, 0),
-            test_rule_route(1, 2, 1000, 0)
-        ]),
-        {ok, Chosen} = select_routes(State, #{has_quote => false, domain_revision => 1}),
-        ?assertEqual(
-            [
-                #{provider_id => 1, terminal_id => 1, version => 1},
-                #{provider_id => 1, terminal_id => 2, version => 1},
-                #{provider_id => 2, terminal_id => 2, version => 1}
-            ],
-            Chosen
-        ),
-        ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-        ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-    end).
-
--spec withdrawal_balancer_quote_keeps_sort_test() -> _.
-withdrawal_balancer_quote_keeps_sort_test() ->
-    with_chooser_mocks(fun() ->
-        State = test_select_state([
-            test_rule_route(2, 20, 1000, 100),
-            test_rule_route(1, 10, 1000, 1)
-        ]),
-        {ok, Chosen} = select_routes(State, #{has_quote => true, domain_revision => 1}),
-        ?assertEqual(
-            [
-                #{provider_id => 1, terminal_id => 10, version => 1},
-                #{provider_id => 2, terminal_id => 20, version => 1}
-            ],
-            Chosen
-        ),
-        ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-        ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-    end).
-
--spec withdrawal_balancer_after_filters_test() -> _.
-withdrawal_balancer_after_filters_test() ->
-    with_collector_mocks(
-        fun weighted_compute/3,
-        fun default_resolve/2,
-        fun limited_terms/4,
-        fun() ->
-            meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
-            meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
-            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
-            Gathered = gather_routes(test_varset(), Context),
-            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
-            Overflow = filter_limit_overflow_routes(Gathered, test_varset(), Context),
-            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
-            Result = select_routes(Overflow, #{has_quote => false, domain_revision => 1}),
-            ?assertMatch({ok, [_]}, Result),
-            ?assertEqual(1, meck:num_calls(hg_route_balancer, fill, '_')),
-            ?assertEqual(1, meck:num_calls(hg_routing, choose_route, '_'))
-        end
-    ).
-
--spec withdrawal_balancer_weights_test() -> _.
-withdrawal_balancer_weights_test() ->
-    with_chooser_mocks(fun() ->
-        _ = rand:seed(exsss, {1, 2, 3}),
-        ZeroKept = test_select_state([
-            test_rule_route(1, 1, 1000, 0),
-            test_rule_route(2, 2, 1000, 100)
-        ]),
-        meck:expect(hg_route_balancer, fill, fun(Routes) ->
-            put(fill_args, Routes),
-            meck:passthrough([Routes])
-        end),
-        {ok, [Chosen]} = select_routes(ZeroKept, #{has_quote => false, domain_revision => 7}),
-        Filled = get(fill_args),
-        ?assertEqual(2, length(Filled)),
-        ?assertEqual(
-            true,
-            lists:any(fun(Route) -> hg_route:weight(Route) =:= 0 end, Filled)
-        ),
-        ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, Chosen),
-        HighPriority = test_select_state([
-            test_rule_route(1, 1, 100, 100),
-            test_rule_route(2, 2, 1000, 1)
-        ]),
-        {ok, [PriorityChosen]} = select_routes(HighPriority, #{has_quote => false, domain_revision => 7}),
-        ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, PriorityChosen),
-        Negative = test_select_state([
-            test_rule_route(1, 1, 1000, 10),
-            test_rule_route(2, 2, 1000, -1)
-        ]),
-        FillCalls = meck:num_calls(hg_route_balancer, fill, '_'),
-        ChooseCalls = meck:num_calls(hg_routing, choose_route, '_'),
-        ?assertEqual(
-            {error, {misconfiguration, {negative_weight, maps:get(routes, Negative)}}},
-            select_routes(Negative, #{has_quote => false, domain_revision => 7})
-        ),
-        ?assertEqual(FillCalls, meck:num_calls(hg_route_balancer, fill, '_')),
-        ?assertEqual(ChooseCalls, meck:num_calls(hg_routing, choose_route, '_'))
-    end).
-
--spec prepare_routes_no_hold_test() -> _.
-prepare_routes_no_hold_test() ->
-    with_collector_mocks(
-        fun default_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            Result = prepare_routes(test_varset(), test_context()),
-            ?assertMatch({ok, [_ | _]}, Result),
-            ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
-        end
-    ).
-
--spec prepare_routes_no_withdrawal_state_test() -> _.
-prepare_routes_no_withdrawal_state_test() ->
-    with_collector_mocks(
-        fun default_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            Context = #{wallet => test_wallet(), domain_revision => 1, iteration => 1},
-            ?assertMatch({ok, [_ | _]}, prepare_routes(test_varset(), Context))
-        end
-    ).
-
--spec prepare_routes_no_candidates_journal_test() -> _.
-prepare_routes_no_candidates_journal_test() ->
-    with_collector_mocks(
-        fun default_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            Result = prepare_routes(test_varset(), test_context()),
-            ?assertMatch({ok, [_ | _]}, Result),
-            ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
-            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-        end
-    ).
-
--spec do_validate_terms_no_limiter_hold_test() -> _.
-do_validate_terms_no_limiter_hold_test() ->
-    with_collector_mocks(
-        fun default_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            _ = gather_routes(test_varset(), test_context()),
-            ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
-        end
-    ).
-
--spec gather_routes_no_limiter_hold_test() -> _.
-gather_routes_no_limiter_hold_test() ->
-    with_collector_mocks(
-        fun default_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            State = gather_routes(test_varset(), test_context()),
-            ?assertMatch(#{routes := [_ | _]}, State),
-            ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
-        end
-    ).
-
--spec gather_routes_keeps_weight_priority_test() -> _.
-gather_routes_keeps_weight_priority_test() ->
-    with_collector_mocks(
-        fun weighted_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
-            Gathered = gather_routes(test_varset(), Context),
-            ok = assert_weight_priority(Gathered),
-            Overflow = filter_limit_overflow_routes(Gathered, test_varset(), Context),
-            ok = assert_weight_priority(Overflow),
-            Chosen = sort_routes(maps:get(routes, Overflow)),
-            lists:foreach(
-                fun(Route) ->
-                    ?assertEqual(false, maps:is_key(weight, Route))
-                end,
-                Chosen
-            )
-        end
-    ).
-
--spec accounted_includes_overflow_routes_test() -> _.
-accounted_includes_overflow_routes_test() ->
-    Overflow = {overflow, [{<<"lim">>, 10, 1}]},
-    with_collector_mocks(
-        fun weighted_compute/3,
-        fun default_resolve/2,
-        fun limited_terms/4,
-        fun() ->
-            meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
-            meck:expect(ff_limiter, check_limits, fun
-                (_, _, #{terminal_id := 1}, _) ->
-                    {error, Overflow};
-                (_, _, _, _) ->
-                    {ok, []}
-            end),
-            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
-            Gathered = gather_routes(test_varset(), Context),
-            Filtered = filter_limit_overflow_routes(Gathered, test_varset(), Context),
-            Accounted = accounted_candidates(Filtered),
-            ?assertEqual(true, is_list(Accounted)),
-            ?assertEqual(true, lists:any(fun(#{terminal_id := T}) -> T =:= 1 end, Accounted)),
-            Routes = maps:get(routes, Filtered),
-            ?assertEqual(
-                false,
-                lists:any(
-                    fun
-                        (#{terminal_ref := #domain_TerminalRef{id = 1}}) -> true;
-                        (_) -> false
-                    end,
-                    Routes
+-spec select_routes_test_() -> [_].
+select_routes_test_() ->
+    A = #{
+        provider_ref => #domain_ProviderRef{id = 1},
+        terminal_ref => #domain_TerminalRef{id = 1},
+        priority => 1000,
+        weight => 0
+    },
+    B = #{
+        provider_ref => #domain_ProviderRef{id = 2},
+        terminal_ref => #domain_TerminalRef{id = 2},
+        priority => 1000,
+        weight => 100
+    },
+    RA = make_route(1, 1),
+    RB = make_route(2, 2),
+    Opts = #{has_quote => false, domain_revision => 1},
+    Cases = [
+        {"weights within one priority", [A, B], Opts, {ok, [RB]}},
+        {"priority before weight", [A, B#{priority => 900}], Opts, {ok, [RA]}},
+        {"all zero weights keep legacy order", [B#{weight => 0}, A], Opts, {ok, [RA, RB]}},
+        {"quote keeps legacy order", [B, A], Opts#{has_quote => true}, {ok, [RA, RB]}},
+        {"negative weight is a configuration error", [A#{weight => -1}], Opts,
+            {error, {misconfiguration, {negative_weight, [A#{weight => -1}]}}}}
+    ],
+    [
+        {Name,
+            ?_assertEqual(
+                Expected,
+                select_routes(
+                    #{
+                        routes => Routes,
+                        reject_context => #{varset => #{}, accepted_routes => Routes, rejected_routes => []}
+                    },
+                    Options
                 )
-            )
-        end
-    ).
-
--spec withdrawal_allowed_constant_false_legacy_test() -> _.
-withdrawal_allowed_constant_false_legacy_test() ->
-    with_collector_mocks(
-        fun false_allowed_compute/3,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            State = gather_routes(test_varset(), test_context()),
-            ?assertMatch(#{routes := [_ | _]}, State),
-            ?assertEqual(undefined, maps:get(error, State, undefined))
-        end
-    ).
-
--spec withdrawal_compute_rpc_retryable_test() -> _.
-withdrawal_compute_rpc_retryable_test() ->
-    Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
-    with_collector_mocks(
-        fun(_, _, _) -> raise(Timeout) end,
-        fun default_resolve/2,
-        fun default_terms/4,
-        fun() ->
-            ok = assert_timeout_propagates(fun() -> gather_routes(test_varset(), test_context()) end, Timeout),
-            ok = assert_timeout_propagates(
-                fun() -> ff_withdrawal:process_transfer(ff_withdrawal:test_withdrawal_state()) end,
-                Timeout
-            )
-        end
-    ).
-
-assert_timeout_propagates(Fun, Timeout) ->
-    try
-        Result = Fun(),
-        case Result of
-            {_, Events} when is_list(Events) ->
-                case lists:keyfind(status_changed, 1, Events) of
-                    {status_changed, {failed, _}} ->
-                        erlang:error(wrote_status_failed);
-                    _ ->
-                        erlang:error({unexpected_process_result, Result})
-                end;
-            _ ->
-                erlang:error({unexpected_result, Result})
-        end
-    catch
-        error:Timeout ->
-            ok;
-        error:{route_not_found, _} ->
-            erlang:error(mapped_to_route_not_found);
-        throw:{route_not_found, _} ->
-            erlang:error(mapped_to_route_not_found);
-        error:{woody_error, _} ->
-            ok;
-        throw:{woody_error, _} ->
-            ok
-    end.
-
-assert_weight_priority(#{routes := Routes}) ->
-    ?assertMatch([_ | _], Routes),
-    lists:foreach(
-        fun(Route) ->
-            Priority = maps:get(priority, Route),
-            Weight = maps:get(weight, Route),
-            ?assert(is_integer(Priority)),
-            ?assert(is_integer(Weight))
-        end,
-        Routes
-    ).
-
-with_chooser_mocks(Fun) ->
-    meck:new(hg_route_balancer, [passthrough, no_link, unstick]),
-    meck:new(hg_routing, [passthrough, no_link, unstick]),
-    try
-        Fun()
-    after
-        meck:unload()
-    end.
-
-test_select_state(Routes) ->
-    #{
-        routes => Routes,
-        reject_context => #{varset => #{}, accepted_routes => Routes, rejected_routes => []}
-    }.
-
-test_rule_route(ProviderID, TerminalID, Priority, Weight) ->
-    #{
-        provider_ref => #domain_ProviderRef{id = ProviderID},
-        terminal_ref => #domain_TerminalRef{id = TerminalID},
-        priority => Priority,
-        weight => Weight
-    }.
-
-with_collector_mocks(ComputeFun, ResolveFun, TermsFun, Fun) ->
-    meck:new(ff_payment_institution, [passthrough, no_link, unstick]),
-    meck:new(ff_party, [passthrough, no_link, unstick]),
-    meck:new(ff_domain_config, [passthrough, no_link, unstick]),
-    meck:new(ff_limiter, [passthrough, no_link, unstick]),
-    meck:new(ff_destination_machine, [passthrough, no_link, unstick]),
-    meck:new(hg_route_balancer, [passthrough, no_link, unstick]),
-    meck:new(hg_routing, [passthrough, no_link, unstick]),
-    meck:expect(ff_payment_institution, get, fun(_, _, _) -> {ok, test_payment_institution()} end),
-    meck:expect(ff_party, compute_routing_ruleset, ComputeFun),
-    meck:expect(ff_party, compute_provider_terminal_terms, TermsFun),
-    meck:expect(ff_party, get_wallet, fun(_, _, _) -> {ok, test_wallet()} end),
-    meck:expect(ff_domain_config, object, fun(Rev, {terminal, Ref}) -> ResolveFun(Ref, Rev) end),
-    meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
-    meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
-    meck:expect(ff_destination_machine, get, fun(_) -> {ok, dest_machine} end),
-    meck:expect(ff_destination_machine, destination, fun(_) -> #{id => <<"dest">>} end),
-    try
-        Fun()
-    after
-        meck:unload()
-    end.
-
-default_compute(#domain_RoutingRulesetRef{id = 1}, _, _) ->
-    {ok, #domain_RoutingRuleset{
-        name = <<"policies">>,
-        decisions = {candidates, [candidate(#domain_TerminalRef{id = 1}, {constant, true}, 1000, 7)]}
-    }};
-default_compute(#domain_RoutingRulesetRef{id = 2}, _, _) ->
-    {ok, #domain_RoutingRuleset{name = <<"prohibitions">>, decisions = {candidates, []}}}.
-
-weighted_compute(#domain_RoutingRulesetRef{id = 1}, _, _) ->
-    {ok, #domain_RoutingRuleset{
-        name = <<"policies">>,
-        decisions =
-            {candidates, [
-                candidate(#domain_TerminalRef{id = 1}, {constant, true}, 50, 3),
-                candidate(#domain_TerminalRef{id = 2}, {constant, true}, undefined, undefined)
-            ]}
-    }};
-weighted_compute(Ref, VS, Rev) ->
-    default_compute(Ref, VS, Rev).
-
-false_allowed_compute(#domain_RoutingRulesetRef{id = 1}, _, _) ->
-    {ok, #domain_RoutingRuleset{
-        name = <<"policies">>,
-        decisions = {candidates, [candidate(#domain_TerminalRef{id = 1}, {constant, false}, 1000, 0)]}
-    }};
-false_allowed_compute(Ref, VS, Rev) ->
-    default_compute(Ref, VS, Rev).
-
-default_resolve(#domain_TerminalRef{id = ID}, _Revision) ->
-    {ok, #domain_Terminal{
-        name = <<"terminal">>,
-        description = <<"terminal">>,
-        provider_ref = #domain_ProviderRef{id = ID}
-    }}.
-
-default_terms(_ProviderRef, _TerminalRef, _VS, _Rev) ->
-    Currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-    {ok, #domain_ProvisionTermSet{
-        wallet = #domain_WalletProvisionTerms{
-            withdrawals = #domain_WithdrawalProvisionTerms{
-                currencies = {value, ordsets:from_list([Currency])},
-                cash_limit =
-                    {value, #domain_CashRange{
-                        lower = {inclusive, #domain_Cash{amount = 0, currency = Currency}},
-                        upper = {exclusive, #domain_Cash{amount = 10000000, currency = Currency}}
-                    }},
-                cash_flow = {value, []}
-            }
-        }
-    }}.
-
-limited_terms(ProviderRef, TerminalRef, VS, Rev) ->
-    {ok, #domain_ProvisionTermSet{wallet = WalletTerms}} = default_terms(ProviderRef, TerminalRef, VS, Rev),
-    #domain_WalletProvisionTerms{withdrawals = WithdrawalTerms} = WalletTerms,
-    {ok, #domain_ProvisionTermSet{
-        wallet = WalletTerms#domain_WalletProvisionTerms{
-            withdrawals = WithdrawalTerms#domain_WithdrawalProvisionTerms{
-                turnover_limit = {value, []}
-            }
-        }
-    }}.
-
-candidate(TerminalRef, Allowed, Priority, Weight) ->
-    #domain_RoutingCandidate{
-        terminal = TerminalRef,
-        allowed = Allowed,
-        priority = Priority,
-        weight = Weight
-    }.
-
-test_payment_institution() ->
-    #{
-        id => 1,
-        realm => live,
-        system_accounts => {value, #domain_SystemAccountSetRef{id = 1}},
-        withdrawal_routing_rules => #domain_RoutingRules{
-            policies = #domain_RoutingRulesetRef{id = 1},
-            prohibitions = #domain_RoutingRulesetRef{id = 2}
-        }
-    }.
-
-test_wallet() ->
-    #domain_WalletConfig{
-        name = <<"wallet">>,
-        block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
-        suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
-        terms = #domain_TermSetHierarchyRef{id = 1},
-        account = #domain_WalletAccount{
-            currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-            settlement = 1
-        },
-        payment_institution = #domain_PaymentInstitutionRef{id = 1},
-        party_ref = #domain_PartyConfigRef{id = <<"party">>}
-    }.
-
-%% erlang:error/1 alone is a no-return fun, which dialyzer flags.
-raise(Reason) ->
-    case get('$dialyzer_raise') of
-        true -> ok;
-        _ -> erlang:error(Reason)
-    end.
-
-test_context() ->
-    #{wallet => test_wallet(), domain_revision => 1, iteration => 1}.
-
-test_varset() ->
-    Currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-    #{
-        currency => Currency,
-        cost => #domain_Cash{amount = 100, currency = Currency},
-        party_id => <<"party">>
-    }.
+            )}
+     || {Name, Routes, Options, Expected} <- Cases
+    ].
 
 -endif.

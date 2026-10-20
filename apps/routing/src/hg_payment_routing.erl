@@ -1,13 +1,16 @@
 -module(hg_payment_routing).
 
+-include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_payproc_thrift.hrl").
 -include_lib("fault_detector_proto/include/fd_proto_fault_detector_thrift.hrl").
--include_lib("hellgate/include/domain.hrl").
 
--export([get_routes/1]).
--export([get_logger_metadata/2]).
--export([collector_callbacks/0]).
+-behaviour(hg_routing_domain).
+
+-export([compute_ruleset/3]).
+-export([resolve_terminal/2]).
+-export([validate_candidate/1]).
+-export([enrich_pins/2]).
 -export([fill_accepted/4]).
 -export([fill_blacklist/2]).
 -export([fill_fd_overrides/2]).
@@ -31,102 +34,17 @@
     card_token => card_token() | undefined
 }.
 
--type get_route_params() :: #{
-    predestination := route_predestination(),
-    revision := revision(),
-    varset := varset(),
-    payment_institution := payment_institution(),
-    pin_context := gather_route_context(),
-    blacklist_context => hg_inspector:blacklist_context()
-}.
-
--type get_routes_result() :: #{
-    routes := [hg_route:t()],
-    rejections => #{hg_routing:initial_rejection_group() => [hg_route:t()]},
-    error => hg_route_collector:get_routes_error()
-}.
-
 -export_type([payment_institution/0]).
 -export_type([route_predestination/0]).
 -export_type([varset/0]).
 -export_type([revision/0]).
 -export_type([gather_route_context/0]).
--export_type([get_route_params/0]).
--export_type([get_routes_result/0]).
 
 -define(fd_overrides(Enabled), #domain_RouteFaultDetectorOverrides{enabled = Enabled}).
 -define(rejected(Reason), {rejected, Reason}).
 
--spec collector_callbacks() -> hg_route_collector:callbacks().
-collector_callbacks() ->
-    #{
-        compute_ruleset => fun compute_ruleset/3,
-        resolve_terminal => fun resolve_terminal/2,
-        allowed_policy => payment
-    }.
-
--spec get_routes(get_route_params()) -> get_routes_result().
-get_routes(
-    #{
-        predestination := Predestination,
-        revision := Revision,
-        varset := VS,
-        payment_institution := PI,
-        pin_context := PinCtx
-    } = Params
-) ->
-    RoutingRules = PI#domain_PaymentInstitution.payment_routing_rules,
-    Result =
-        #{routes := Routes0} = hg_route_collector:get_routes(
-            Revision, VS, RoutingRules, collector_callbacks()
-        ),
-    Routes1 = enrich_pins(Routes0, PinCtx),
-    Routes2 = fill_accepted(Predestination, Revision, VS, Routes1),
-    Routes3 = fill_fd_overrides(Revision, Routes2),
-    Routes4 =
-        case maps:get(blacklist_context, Params, undefined) of
-            undefined ->
-                Routes3;
-            BlCtx ->
-                fill_blacklist(BlCtx, Routes3)
-        end,
-    Routes5 = hg_route_fd:fill(Routes4),
-    genlib_map:compact(
-        maps:merge(
-            #{error => maps:get(error, Result, undefined)},
-            hg_routing:filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
-        )
-    ).
-
--spec get_logger_metadata(hg_routing:route_choice_context(), revision()) -> LoggerFormattedMetadata :: map().
-get_logger_metadata(RouteChoiceContext, Revision) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            Acc#{K => format_logger_metadata(K, V, Revision)}
-        end,
-        #{},
-        RouteChoiceContext
-    ).
-
-format_logger_metadata(reject_reason, Reason, _) ->
-    Reason;
-format_logger_metadata(Meta, Route, Revision) when
-    Meta =:= chosen_route;
-    Meta =:= preferable_route
-->
-    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
-    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
-    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
-    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
-    genlib_map:compact(#{
-        provider => #{id => ProviderID, name => ProviderName},
-        terminal => #{id => TerminalID, name => TerminalName},
-        priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route),
-        terminal_affinity => hg_route:affinity_rank(Route),
-        affinity_enabled => hg_route:affinity(Route) =/= undefined
-    }).
-
+-spec compute_ruleset(dmsl_domain_thrift:'RoutingRulesetRef'(), varset(), revision()) ->
+    {ok, dmsl_domain_thrift:'RoutingRuleset'()}.
 compute_ruleset(RuleSetRef, VS, Revision) ->
     {Client, Context} = get_party_client(),
     party_client_thrift:compute_routing_ruleset(
@@ -137,6 +55,7 @@ compute_ruleset(RuleSetRef, VS, Revision) ->
         Context
     ).
 
+-spec resolve_terminal(hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound}.
 resolve_terminal(TerminalRef, Revision) ->
     try
         #domain_Terminal{provider_ref = ProviderRef} = hg_domain:get(Revision, {terminal, TerminalRef}),
@@ -146,6 +65,13 @@ resolve_terminal(TerminalRef, Revision) ->
             {error, notfound}
     end.
 
+-spec validate_candidate(dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return().
+validate_candidate(#domain_RoutingCandidate{allowed = {constant, true}}) ->
+    ok;
+validate_candidate(Candidate) ->
+    throw({misconfiguration, {routing_candidate, Candidate}}).
+
+-spec enrich_pins([hg_route:t()], gather_route_context()) -> [hg_route:t()].
 enrich_pins(Routes, Ctx) ->
     [enrich_pin(Route, Ctx) || Route <- Routes].
 
@@ -434,15 +360,15 @@ try_accept_term(ParentName, Name, Value, Selector) ->
     Values = get_selector_value(Name, Selector),
     test_term(Name, Value, Values) orelse throw(?rejected({ParentName, Name})).
 
-test_term(currency, V, Vs) ->
-    ordsets:is_element(V, Vs);
-test_term(category, V, Vs) ->
-    ordsets:is_element(V, Vs);
+test_term(currency, V, Values) ->
+    ordsets:is_element(V, Values);
+test_term(category, V, Values) ->
+    ordsets:is_element(V, Values);
 test_term(payment_tool, PT, PMs) ->
     hg_payment_tool:has_any_payment_method(PT, PMs);
 test_term(cost, Cost, CashRange) ->
     hg_cash_range:is_inside(Cost, CashRange) == within;
-test_term(lifetime, ?hold_lifetime(Lifetime), ?hold_lifetime(Allowed)) ->
+test_term(lifetime, #domain_HoldLifetime{seconds = Lifetime}, #domain_HoldLifetime{seconds = Allowed}) ->
     Lifetime =< Allowed.
 
 %%

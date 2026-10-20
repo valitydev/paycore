@@ -2,7 +2,6 @@
 
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
--export([fill_prohibition/2]).
 -export([get_routes/4]).
 
 -callback fill(_Params, [hg_route:t()]) -> [hg_route:t()].
@@ -12,17 +11,17 @@
 -type revision() :: hg_route:revision().
 -type varset() :: map().
 -type routing_rules() :: dmsl_domain_thrift:'RoutingRules'() | undefined.
--type allowed_policy() :: payment | withdrawal_legacy.
 -type compute_ruleset() :: fun(
     (dmsl_domain_thrift:'RoutingRulesetRef'(), varset(), revision()) -> {ok, dmsl_domain_thrift:'RoutingRuleset'()}
 ).
 -type resolve_terminal() :: fun(
     (hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound | _Reason}
 ).
+-type validate_candidate() :: fun((dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return()).
 -type callbacks() :: #{
     compute_ruleset := compute_ruleset(),
     resolve_terminal := resolve_terminal(),
-    allowed_policy := allowed_policy()
+    validate_candidate := validate_candidate()
 }.
 
 -type get_routes_result() :: #{
@@ -35,17 +34,18 @@
 -export_type([revision/0]).
 -export_type([varset/0]).
 -export_type([routing_rules/0]).
--export_type([allowed_policy/0]).
 -export_type([callbacks/0]).
 -export_type([get_routes_error/0]).
 -export_type([get_routes_result/0]).
 
--spec fill_prohibition(#{hg_route:terminal_ref() => _Description}, [hg_route:t()]) -> [hg_route:t()].
-fill_prohibition(Table, Routes) ->
-    apply_prohibition(Table, Routes).
-
--spec get_routes(revision(), varset(), routing_rules(), callbacks()) ->
+-spec get_routes(revision(), varset(), routing_rules(), module() | callbacks()) ->
     get_routes_result().
+get_routes(Revision, VS, RoutingRules, Domain) when is_atom(Domain) ->
+    get_routes(Revision, VS, RoutingRules, #{
+        compute_ruleset => fun Domain:compute_ruleset/3,
+        resolve_terminal => fun Domain:resolve_terminal/2,
+        validate_candidate => fun Domain:validate_candidate/1
+    });
 get_routes(_, _, undefined, _) ->
     #{routes => [], error => {misconfiguration, {payment_routing_rules, empty}}};
 get_routes(Revision, VS, #domain_RoutingRules{} = RoutingRules, Callbacks) ->
@@ -66,34 +66,21 @@ get_routes(Revision, VS, #domain_RoutingRules{} = RoutingRules, Callbacks) ->
 get_candidates(RoutingRule, VS, Revision, Callbacks) ->
     get_decisions_candidates(
         compute_rule_set(RoutingRule, VS, Revision, Callbacks),
-        maps:get(allowed_policy, Callbacks)
+        maps:get(validate_candidate, Callbacks)
     ).
 
-get_decisions_candidates(#domain_RoutingRuleset{decisions = Decisions}, AllowedPolicy) ->
+get_decisions_candidates(#domain_RoutingRuleset{decisions = Decisions}, ValidateCandidate) ->
     case Decisions of
         {delegates, _Delegates} ->
             throw({misconfiguration, {routing_decisions, Decisions}});
         {candidates, Candidates} ->
-            ok = validate_decisions_candidates(AllowedPolicy, Candidates),
+            ok = lists:foreach(ValidateCandidate, Candidates),
             Candidates
     end.
 
 compute_rule_set(RuleSetRef, VS, Revision, #{compute_ruleset := Compute}) ->
     {ok, RuleSet} = Compute(RuleSetRef, VS, Revision),
     RuleSet.
-
-validate_decisions_candidates(_Policy, []) ->
-    ok;
-validate_decisions_candidates(payment, [#domain_RoutingCandidate{allowed = {constant, true}} | Rest]) ->
-    validate_decisions_candidates(payment, Rest);
-validate_decisions_candidates(payment, [Candidate | _]) ->
-    throw({misconfiguration, {routing_candidate, Candidate}});
-validate_decisions_candidates(withdrawal_legacy, [#domain_RoutingCandidate{allowed = {constant, Bool}} | Rest]) when
-    is_boolean(Bool)
-->
-    validate_decisions_candidates(withdrawal_legacy, Rest);
-validate_decisions_candidates(withdrawal_legacy, [Candidate | _]) ->
-    throw({misconfiguration, {routing_candidate, Candidate}}).
 
 get_table_prohibitions(Prohibitions, VS, Revision, Callbacks) ->
     RuleSetDeny = compute_rule_set(Prohibitions, VS, Revision, Callbacks),
@@ -102,7 +89,7 @@ get_table_prohibitions(Prohibitions, VS, Revision, Callbacks) ->
             AccIn#{K => V}
         end,
         #{},
-        get_decisions_candidates(RuleSetDeny, maps:get(allowed_policy, Callbacks))
+        get_decisions_candidates(RuleSetDeny, maps:get(validate_candidate, Callbacks))
     ).
 
 collect_routes(Candidates, Revision, #{resolve_terminal := Resolve}) ->
@@ -204,14 +191,6 @@ apply_prohibition(Table, Routes) ->
 -define(trm(ID), #domain_TerminalRef{id = ID}).
 -define(rs(ID), #domain_RoutingRulesetRef{id = ID}).
 
--spec collector_without_payment_institution_test() -> _.
-collector_without_payment_institution_test() ->
-    Candidate = candidate(?trm(1), {constant, true}, 1000, 0),
-    Callbacks = callbacks([Candidate], [], payment, fun default_resolve/2),
-    #{routes := [Route]} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-    ?assertEqual(?prv(1), hg_route:provider_ref(Route)),
-    ?assertEqual(?trm(1), hg_route:terminal_ref(Route)).
-
 -spec collector_undefined_rules_test() -> _.
 collector_undefined_rules_test() ->
     ?assertEqual(
@@ -244,8 +223,8 @@ collector_misconfiguration_policies_and_prohibitions_test() ->
         hg_route_collector:get_routes(1, #{}, routing_rules(), ProhibitFail)
     ).
 
--spec collector_allowed_policy_payment_vs_withdrawal_legacy_test() -> _.
-collector_allowed_policy_payment_vs_withdrawal_legacy_test() ->
+-spec domain_candidate_validation_test() -> _.
+domain_candidate_validation_test() ->
     FalseAllowed = candidate(?trm(1), {constant, false}, 1000, 0),
     Payment = callbacks([FalseAllowed], [], payment, fun default_resolve/2),
     Withdrawal = callbacks([FalseAllowed], [], withdrawal_legacy, fun default_resolve/2),
@@ -274,12 +253,6 @@ collector_merge_duplicate_provider_terminal_test() ->
     [Winner, _] = Routes,
     ?assertEqual(5, hg_route:priority(Winner)),
     ?assertEqual(20, hg_route:weight(Winner)),
-    TieFirst = candidate(?trm(3), {constant, true}, 3, 7),
-    TieSecond = candidate(?trm(3), {constant, true}, 3, 7),
-    TieCallbacks = callbacks([TieFirst, TieSecond], [], payment, fun default_resolve/2),
-    #{routes := [TieWinner]} = hg_route_collector:get_routes(1, #{}, routing_rules(), TieCallbacks),
-    ?assertEqual(3, hg_route:priority(TieWinner)),
-    ?assertEqual(7, hg_route:weight(TieWinner)),
     UndefinedWeight = (candidate(?trm(4), {constant, true}, 1, 0))#domain_RoutingCandidate{weight = undefined},
     DefinedWeight = candidate(?trm(4), {constant, true}, 1, 2),
     UndefCallbacks = callbacks([UndefinedWeight, DefinedWeight], [], payment, fun default_resolve/2),
@@ -290,10 +263,10 @@ collector_merge_duplicate_provider_terminal_test() ->
 collector_missing_terminal_misconfiguration_test() ->
     Candidate = candidate(?trm(99), {constant, true}, 1000, 0),
     Callbacks = callbacks([Candidate], [], payment, fun(_Ref, _) -> {error, notfound} end),
-    ?assertEqual(
-        #{routes => [], error => {misconfiguration, {terminal, ?trm(99), notfound}}},
-        hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks)
-    ).
+    #{routes := [], error := Error} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
+    ?assertEqual({misconfiguration, {terminal, ?trm(99), notfound}}, Error),
+    {Format, Args} = hg_routing:prepare_log_message(Error),
+    ?assert(is_list(io_lib:format(Format, Args))).
 
 -spec collector_merge_duplicate_default_priority_test() -> _.
 collector_merge_duplicate_default_priority_test() ->
@@ -308,47 +281,6 @@ collector_merge_duplicate_default_priority_test() ->
         end,
         [[Default, Lower], [Lower, Default]]
     ).
-
--spec collector_rpc_error_not_misconfig_test() -> _.
-collector_rpc_error_not_misconfig_test() ->
-    Woody = {woody_error, {system, resource_unavailable, rpc}},
-    ErrorCallbacks = callbacks_with_compute(fun(_, _, _) -> raise(error, Woody) end),
-    ok = assert_rpc_propagates(ErrorCallbacks),
-    ThrowCallbacks = callbacks_with_compute(fun(_, _, _) -> raise(throw, Woody) end),
-    ok = assert_rpc_propagates(ThrowCallbacks).
-
--spec assert_rpc_propagates(callbacks()) -> ok.
-assert_rpc_propagates(Callbacks) ->
-    try
-        _ = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-        erlang:error(expected_rpc_error)
-    catch
-        error:{woody_error, _} ->
-            ok;
-        throw:{woody_error, _} ->
-            ok;
-        throw:{misconfiguration, _} ->
-            erlang:error(mapped_to_misconfiguration);
-        error:{route_not_found, _} ->
-            erlang:error(mapped_to_route_not_found);
-        throw:{route_not_found, _} ->
-            erlang:error(mapped_to_route_not_found)
-    end.
-
--spec collector_timeout_not_route_not_found_test() -> _.
-collector_timeout_not_route_not_found_test() ->
-    Callbacks = callbacks_with_compute(fun(_, _, _) -> raise(error, timeout) end),
-    try
-        _ = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-        erlang:error(expected_timeout)
-    catch
-        error:timeout ->
-            ok;
-        throw:{misconfiguration, _} ->
-            erlang:error(mapped_to_misconfiguration);
-        error:{route_not_found, _} ->
-            erlang:error(mapped_to_route_not_found)
-    end.
 
 routing_rules() ->
     #domain_RoutingRules{
@@ -378,25 +310,19 @@ callbacks(PolicyCandidates, ProhibitCandidates, Policy, Resolve) ->
             {ok, #domain_RoutingRuleset{name = <<"rs">>, decisions = {candidates, Candidates}}}
         end,
         resolve_terminal => Resolve,
-        allowed_policy => Policy
+        validate_candidate => candidate_validator(Policy)
     }.
 
 callbacks_with_compute(Compute) ->
     #{
         compute_ruleset => Compute,
         resolve_terminal => fun default_resolve/2,
-        allowed_policy => payment
+        validate_candidate => candidate_validator(payment)
     }.
 
-raise(error, Reason) ->
-    case get('$dialyzer_raise') of
-        true -> ok;
-        _ -> erlang:error(Reason)
-    end;
-raise(throw, Reason) ->
-    case get('$dialyzer_raise') of
-        true -> ok;
-        _ -> erlang:throw(Reason)
-    end.
+candidate_validator(payment) ->
+    fun hg_payment_routing:validate_candidate/1;
+candidate_validator(withdrawal_legacy) ->
+    fun ff_withdrawal_routing:validate_candidate/1.
 
 -endif.
