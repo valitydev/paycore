@@ -233,6 +233,10 @@
 
 -export([process_transfer/1]).
 
+-ifdef(TEST).
+-export([test_withdrawal_state/0]).
+-endif.
+
 %%
 
 -export([finalize_session/3]).
@@ -2384,7 +2388,7 @@ apply_event_rollback_started_with_list_stashes_test() ->
         PrevIteration = maps:get(routing_iteration, State1),
         Grown = ff_withdrawal_route_attempt_utils:get_index(attempts(State1)) + 5,
         State2 = State1#{
-            attempts => (attempts(State1))#{index => Grown}
+            attempts => ff_withdrawal_route_attempt_utils:set_index(Grown, attempts(State1))
         },
         Failure = #{code => <<"no_route_found">>},
         Accounted = [],
@@ -2468,7 +2472,7 @@ withdrawal_rollback_started_without_chosen_test() ->
             State0 = apply_event({route_changed, Prev, [Prev]}, test_withdrawal_state()),
             Grown = ff_withdrawal_route_attempt_utils:get_index(attempts(State0)) + 3,
             StatePrev = State0#{
-                attempts => (attempts(State0))#{index => Grown}
+                attempts => ff_withdrawal_route_attempt_utils:set_index(Grown, attempts(State0))
             },
             Pending = maps:remove(route, StatePrev),
             {timeout, Events} = process_transfer(Pending),
@@ -2798,13 +2802,13 @@ withdrawal_woody_error_retries_test() ->
         fun() ->
             Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
             meck:expect(ff_withdrawal_routing, filter_limit_overflow_routes, fun(_, _, _) ->
-                erlang:error(Timeout)
+                raise(Timeout)
             end),
             meck:expect(ff_withdrawal_routing, gather_routes, fun(_, _, _) ->
                 #{routes => [], reject_context => #{varset => #{}, accepted_routes => [], rejected_routes => []}}
             end),
             try
-                process_transfer(test_withdrawal_state()),
+                _ = process_transfer(test_withdrawal_state()),
                 erlang:error(expected_timeout)
             catch
                 error:Timeout ->
@@ -2846,10 +2850,10 @@ withdrawal_stashed_rollback_woody_still_retries_test() ->
             Failure = #{code => <<"no_route_found">>},
             State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
             meck:expect(ff_party, compute_provider_terminal_terms, fun(_, _, _, _) ->
-                erlang:error(Timeout)
+                raise(Timeout)
             end),
             try
-                assert_no_status_failed(process_transfer(State)),
+                _ = assert_no_status_failed(process_transfer(State)),
                 erlang:error(expected_timeout)
             catch
                 error:Timeout ->
@@ -2897,7 +2901,7 @@ withdrawal_crash_before_rollback_rpc_test() ->
             Failure = #{code => <<"no_route_found">>},
             State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
             Index0 = maps:get(routing_iteration, State),
-            meck:expect(ff_withdrawal_routing, rollback_routes_limits, fun(_, _, _) -> erlang:error(Timeout) end),
+            meck:expect(ff_withdrawal_routing, rollback_routes_limits, fun(_, _, _) -> raise(Timeout) end),
             {'EXIT', _} = (catch process_transfer(State)),
             ?assertEqual(Index0, maps:get(routing_iteration, State))
         end
@@ -2915,7 +2919,8 @@ withdrawal_crash_after_rollback_rpc_test() ->
             %% crash after accepted RPC: events not applied; retry is idempotent
             {timeout, Events} = process_transfer(State),
             ?assertEqual(Index0, maps:get(routing_iteration, State)),
-            ?assertEqual([Route], get(rollback_routes))
+            ?assertEqual([Route], get(rollback_routes)),
+            ?assertEqual(2, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
         end
     ).
 
@@ -2930,7 +2935,7 @@ withdrawal_crash_before_commit_rpc_test() ->
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
             State4 = apply_event({session_finished, {<<"s1">>, {success, #{}}}}, State3),
-            meck:expect(ff_limiter, commit_withdrawal_limits, fun(_, _, _, _) -> erlang:error(Timeout) end),
+            meck:expect(ff_limiter, commit_withdrawal_limits, fun(_, _, _, _) -> raise(Timeout) end),
             Index0 = maps:get(routing_iteration, State4),
             {'EXIT', _} = (catch process_transfer(State4)),
             ?assertEqual(Index0, maps:get(routing_iteration, State4))
@@ -2951,7 +2956,8 @@ withdrawal_crash_after_commit_rpc_test() ->
             meck:expect(ff_postings_transfer, commit, fun(_) -> {ok, [{status_changed, committed}]} end),
             {timeout, Events} = process_transfer(State4),
             {timeout, Events} = process_transfer(State4),
-            ?assertEqual(Index0, maps:get(routing_iteration, State4))
+            ?assertEqual(Index0, maps:get(routing_iteration, State4)),
+            ?assertEqual(2, meck:num_calls(ff_limiter, commit_withdrawal_limits, '_'))
         end
     ).
 
@@ -3024,11 +3030,11 @@ withdrawal_callback_does_not_switch_candidates_source_test() ->
             State1 = with_p_transfer_status(State0, prepared),
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
-            {ok, {timeout, Events}} = finalize_session(<<"s1">>, #{result => {success, #{}}}, State3),
+            {ok, {timeout, Events}} = finalize_session(<<"s1">>, #{result => success}, State3),
             State4 = lists:foldl(fun apply_event/2, State3, Events),
             ?assertEqual(Candidates, maps:get(routing_candidates, State4)),
             meck:expect(ff_withdrawal_session_machine, process_callback, fun(_) -> {ok, #{}} end),
-            {ok, _} = ff_withdrawal_session_machine:process_callback(#{tag => <<"cb">>}),
+            {ok, _} = ff_withdrawal_session_machine:process_callback(#{tag => <<"cb">>, payload => <<>>}),
             ?assertEqual(0, meck:num_calls(ff_party, compute_routing_ruleset, '_')),
             ?assertEqual(0, meck:num_calls(ff_withdrawal_routing, gather_routes, '_'))
         end
@@ -3201,10 +3207,10 @@ assert_process_throws_without_failed(State) ->
     Result = (catch process_transfer(State)),
     case Result of
         {timeout, _Events} = Ok ->
-            assert_no_status_failed(Ok),
+            _ = assert_no_status_failed(Ok),
             erlang:error({unexpected_process_result, Ok});
         {idle, _Events} = Ok ->
-            assert_no_status_failed(Ok),
+            _ = assert_no_status_failed(Ok),
             erlang:error({unexpected_process_result, Ok});
         {'EXIT', _} ->
             ok;
@@ -3336,7 +3342,18 @@ with_process_mocks(Fun) ->
     end.
 
 test_wallet() ->
-    #domain_WalletConfig{payment_institution = #domain_PaymentInstitutionRef{id = 1}}.
+    #domain_WalletConfig{
+        name = <<"wallet">>,
+        block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
+        suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
+        terms = #domain_TermSetHierarchyRef{id = 1},
+        account = #domain_WalletAccount{
+            currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+            settlement = 1
+        },
+        payment_institution = #domain_PaymentInstitutionRef{id = 1},
+        party_ref = #domain_PartyConfigRef{id = <<"party">>}
+    }.
 
 test_route(ProviderID, TerminalID) ->
     #{
@@ -3345,6 +3362,7 @@ test_route(ProviderID, TerminalID) ->
         terminal_id => TerminalID
     }.
 
+-spec test_withdrawal_state() -> withdrawal_state().
 test_withdrawal_state() ->
     #{
         id => <<"w-1">>,
@@ -3358,7 +3376,7 @@ test_withdrawal_state() ->
         domain_revision => 42,
         attempts => ff_withdrawal_route_attempt_utils:new(),
         status => pending,
-        validation => skipped,
+        validation => #{},
         resource =>
             {bank_card, #{
                 bank_card => #{
@@ -3368,5 +3386,11 @@ test_withdrawal_state() ->
                 }
             }}
     }.
+
+raise(Reason) ->
+    case get('$dialyzer_raise') of
+        true -> ok;
+        _ -> erlang:error(Reason)
+    end.
 
 -endif.

@@ -296,7 +296,7 @@ route_ref(_) ->
 
 -spec from_payment_route(revision(), payment_route()) -> t().
 from_payment_route(Revision, #domain_PaymentRoute{provider = ProviderRef, terminal = TerminalRef}) ->
-    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, undefined).
+    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, #{}).
 
 -spec to_payment_route(t()) -> payment_route().
 to_payment_route(Route) ->
@@ -316,6 +316,12 @@ to_rejected_route(Route) ->
 -define(trm(ID), #domain_TerminalRef{id = ID}).
 
 -spec test() -> _.
+
+-spec from_payment_route_empty_pin_test() -> _.
+from_payment_route_empty_pin_test() ->
+    Route = from_payment_route(1, #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}),
+    ?assertEqual(#{}, pin(Route)),
+    ?assertEqual(0, pin_hash(Route)).
 
 -spec routes_equality_test_() -> [_].
 routes_equality_test_() ->

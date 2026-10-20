@@ -151,7 +151,18 @@ make_varset(Cash, PartyID) ->
 
 gather_routes(Varset) ->
     Revision = ff_domain_config:head(),
-    Wallet = #domain_WalletConfig{payment_institution = ?payinst(1)},
+    Wallet = #domain_WalletConfig{
+        name = <<"wallet">>,
+        block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
+        suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
+        terms = #domain_TermSetHierarchyRef{id = 1},
+        account = #domain_WalletAccount{
+            currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+            settlement = 1
+        },
+        payment_institution = ?payinst(1),
+        party_ref = #domain_PartyConfigRef{id = <<"party">>}
+    },
     Context = #{wallet => Wallet, domain_revision => Revision, iteration => 1},
     State = ff_withdrawal_routing:gather_routes(Varset, Context),
     {maps:get(routes, State), maps:get(reject_context, State)}.

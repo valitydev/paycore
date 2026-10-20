@@ -600,8 +600,6 @@ empty_candidates_vs_undefined_test() ->
     {route, #wthd_RouteChange{candidates = undefined}} = RouteUndefined,
     {route, #wthd_RouteChange{candidates = []}} = RouteEmpty,
     {route, #wthd_RouteChange{candidates = [_ | _]}} = RouteList,
-    ?assertNotEqual(RouteUndefined, RouteEmpty),
-    ?assertNotEqual(RouteEmpty, RouteList),
     ?assertEqual({route_changed, Route, undefined}, unmarshal(change, RouteUndefined)),
     ?assertEqual({route_changed, Route, []}, unmarshal(change, RouteEmpty)),
     ?assertEqual({route_changed, Route, [Route]}, unmarshal(change, RouteList)),
@@ -611,8 +609,6 @@ empty_candidates_vs_undefined_test() ->
     {rollback_started, #wthd_RollbackStartedChange{candidates = undefined}} = RbUndefined,
     {rollback_started, #wthd_RollbackStartedChange{candidates = []}} = RbEmpty,
     {rollback_started, #wthd_RollbackStartedChange{candidates = [_ | _]}} = RbList,
-    ?assertNotEqual(RbUndefined, RbEmpty),
-    ?assertNotEqual(RbEmpty, RbList),
     ?assertEqual({rollback_started, Failure, undefined}, unmarshal(change, RbUndefined)),
     ?assertEqual({rollback_started, Failure, []}, unmarshal(change, RbEmpty)),
     ?assertEqual({rollback_started, Failure, [Route]}, unmarshal(change, RbList)).
@@ -653,7 +649,7 @@ withdrawal_legacy_fixtures_machine_codec_test() ->
             fun(Name) ->
                 Bin = read_fixture_bin(Name),
                 {ev, _Ts, Change} = ff_machine_codec:unmarshal_event(withdrawal, Bin),
-                State0 = ff_withdrawal:apply_event({created, fixture_withdrawal()}, undefined),
+                State0 = ff_withdrawal:test_withdrawal_state(),
                 _State1 = ff_withdrawal:apply_event(Change, State0),
                 ?assertMatch({route_changed, #{provider_id := _}, _}, Change)
             end,
@@ -677,20 +673,6 @@ test_route(ProviderID, TerminalID, Legacy) ->
         provider_id => ProviderID,
         terminal_id => TerminalID,
         provider_id_legacy => Legacy
-    }.
-
-fixture_withdrawal() ->
-    #{
-        version => 4,
-        id => <<"w-legacy">>,
-        body => {100, <<"RUB">>},
-        params => #{
-            party_id => <<"party">>,
-            wallet_id => <<"wallet">>,
-            destination_id => <<"dest">>
-        },
-        created_at => 1,
-        domain_revision => 1
     }.
 
 read_fixture_bin(Name) ->
