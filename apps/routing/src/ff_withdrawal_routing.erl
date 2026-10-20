@@ -286,7 +286,7 @@ choose_balanced(Routes, Revision) ->
     HgRoutes = [to_hg_route(Route, Revision) || Route <- Routes],
     Balanced = hg_route_balancer:fill(HgRoutes),
     {Chosen, _Ctx} = hg_routing:choose_route(Balanced),
-    {ok, [from_hg_route(Chosen)]}.
+    {ok, [hg_route:to_withdrawal_route(Chosen)]}.
 
 to_hg_route(
     #{
@@ -297,12 +297,7 @@ to_hg_route(
     },
     Revision
 ) ->
-    hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, #{}).
-
-from_hg_route(Route) ->
-    #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
-    #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
-    make_route(ProviderID, TerminalID).
+    hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, 0).
 
 -spec sort_routes([routing_rule_route()]) -> [route()].
 sort_routes(RoutingRuleRoutes) ->

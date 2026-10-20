@@ -20,7 +20,6 @@
 -export([provider_ref/1]).
 -export([priority/1]).
 -export([weight/1]).
--export([pin/1]).
 -export([affinity/1]).
 -export([set_affinity_rank/2]).
 -export([affinity_rank/1]).
@@ -36,6 +35,7 @@
 
 -export([from_payment_route/2]).
 -export([to_payment_route/1]).
+-export([to_withdrawal_route/1]).
 -export([to_rejected_route/1]).
 
 %%
@@ -44,6 +44,7 @@
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 -type payment_route() :: dmsl_domain_thrift:'PaymentRoute'().
+-type withdrawal_route() :: ff_withdrawal_routing:route().
 -type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'() | undefined.
 
 -type fd_overrides() :: dmsl_domain_thrift:'RouteFaultDetectorOverrides'().
@@ -55,7 +56,8 @@
     provider_ref := dmsl_domain_thrift:'ProviderRef'(),
     terminal_ref := dmsl_domain_thrift:'TerminalRef'(),
     route_data := route_data(),
-    pin_data => pin_data(),
+    pin_hash => non_neg_integer(),
+    routing_pin => dmsl_domain_thrift:'RoutingPin'() | undefined,
     affinity => dmsl_domain_thrift:'RoutingAffinity'() | undefined,
     fd_overrides => fd_overrides(),
     rejection_reason => route_rejection_reason(),
@@ -84,8 +86,6 @@
     blacklisted => blacklist_condition()
 }.
 
--type pin_data() :: map().
-
 -type score() :: #domain_PaymentRouteScores{}.
 
 -export_type([t/0]).
@@ -97,12 +97,11 @@
 -export_type([rejected_route/0]).
 -export_type([score/0]).
 -export_type([exchange_context/0]).
--export_type([pin_data/0]).
 
 %%
 
--spec new(revision(), provider_ref(), terminal_ref(), integer(), integer(), pin_data() | undefined) -> t().
-new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
+-spec new(revision(), provider_ref(), terminal_ref(), integer(), integer(), non_neg_integer()) -> t().
+new(Revision, ProviderRef, TerminalRef, Weight, Priority, PinHash) ->
     #{
         revision => Revision,
         provider_ref => ProviderRef,
@@ -121,7 +120,7 @@ new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
             affinity_rank => 0,
             blacklisted => 0
         },
-        pin_data => Pin
+        pin_hash => PinHash
     }.
 
 -spec set_fd_overrides(fd_overrides(), t()) ->
@@ -211,15 +210,9 @@ set_affinity_rank(Rank, #{route_data := Data} = R) ->
 affinity_rank(#{route_data := Data}) ->
     maps:get(affinity_rank, Data, 0).
 
--spec pin(t()) -> pin_data() | undefined.
-pin(#{pin_data := Pin}) ->
-    Pin.
-
 -spec pin_hash(t()) -> non_neg_integer().
-pin_hash(#{pin_data := Pin}) when map_size(Pin) > 0 ->
-    erlang:phash2(Pin);
-pin_hash(_) ->
-    0.
+pin_hash(Route) ->
+    maps:get(pin_hash, Route, 0).
 
 -spec fd_overrides(t()) -> fd_overrides().
 fd_overrides(#{fd_overrides := FdOverrides}) ->
@@ -296,11 +289,17 @@ route_ref(_) ->
 
 -spec from_payment_route(revision(), payment_route()) -> t().
 from_payment_route(Revision, #domain_PaymentRoute{provider = ProviderRef, terminal = TerminalRef}) ->
-    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, #{}).
+    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, 0).
 
 -spec to_payment_route(t()) -> payment_route().
 to_payment_route(Route) ->
     #domain_PaymentRoute{provider = provider_ref(Route), terminal = terminal_ref(Route)}.
+
+-spec to_withdrawal_route(t()) -> withdrawal_route().
+to_withdrawal_route(Route) ->
+    #domain_ProviderRef{id = ProviderID} = provider_ref(Route),
+    #domain_TerminalRef{id = TerminalID} = terminal_ref(Route),
+    #{version => 1, provider_id => ProviderID, terminal_id => TerminalID}.
 
 -spec to_rejected_route(t()) -> rejected_route().
 to_rejected_route(Route) ->
@@ -320,7 +319,6 @@ to_rejected_route(Route) ->
 -spec from_payment_route_empty_pin_test() -> _.
 from_payment_route_empty_pin_test() ->
     Route = from_payment_route(1, #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}),
-    ?assertEqual(#{}, pin(Route)),
     ?assertEqual(0, pin_hash(Route)).
 
 -spec routes_equality_test_() -> [_].
@@ -337,8 +335,8 @@ route_pairs({Prv1, Trm1}, {Prv2, Trm2}) ->
         fun(X) -> X end,
         fun(X) -> {provider_ref(X), terminal_ref(X)} end
     ],
-    A = new(1, Prv1, Trm1, 1, 1, #{}),
-    B = new(1, Prv2, Trm2, 1, 1, #{}),
+    A = new(1, Prv1, Trm1, 1, 1, 0),
+    B = new(1, Prv2, Trm2, 1, 1, 0),
     lists:flatten([[{F1(A), F2(B)} || F1 <- Fs] || F2 <- Fs]).
 
 -endif.
