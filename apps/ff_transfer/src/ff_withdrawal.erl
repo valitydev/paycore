@@ -873,9 +873,15 @@ process_routing(Withdrawal) ->
                 {route_changed, #{route => Route, candidates => Accounted}}
             ]};
         {error, Reason, Accounted} ->
-            Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
+            process_routing_failure(Reason, Accounted, Withdrawal)
     end.
+
+-spec process_routing_failure(fail_type(), [route()], withdrawal_state()) -> process_result().
+process_routing_failure(Reason, [], Withdrawal) ->
+    {idle, process_transfer_fail(Reason, Withdrawal)};
+process_routing_failure(Reason, Accounted, Withdrawal) ->
+    Failure = build_failure(Reason, Withdrawal),
+    {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}.
 
 -spec process_rollback_routing(withdrawal_state()) -> process_result().
 process_rollback_routing(Withdrawal) ->
@@ -980,6 +986,8 @@ maybe_chosen_rollback_started(Withdrawal) ->
             []
     end.
 
+rollback_stashed_routes([], _Withdrawal) ->
+    ok;
 rollback_stashed_routes(Routes, Withdrawal) ->
     {Varset, Context} = stashed_routing_varset_and_context(Withdrawal),
     rollback_routes_limits(Routes, Varset, Context).
@@ -1940,8 +1948,7 @@ process_route_change(Withdrawal, Reason) ->
                 {ok, Routes, Accounted} ->
                     do_process_route_change(Routes, Accounted, Withdrawal, Reason);
                 {error, _GatherReason, Accounted} ->
-                    Failure = build_failure(Reason, Withdrawal),
-                    {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
+                    process_routing_failure(Reason, Accounted, Withdrawal)
             end;
         false ->
             Events = process_transfer_fail(Reason, Withdrawal),
@@ -2018,11 +2025,9 @@ do_process_route_change(Routes, Accounted, Withdrawal, Reason) ->
                 {route_changed, #{route => Route, candidates => Accounted}}
             ]};
         {error, route_not_found} ->
-            Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]};
+            process_routing_failure(Reason, Accounted, Withdrawal);
         {error, attempt_limit_exceeded} ->
-            Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
+            process_routing_failure(Reason, Accounted, Withdrawal)
     end.
 
 -spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
@@ -2399,6 +2404,18 @@ routing_failure_compensation_test() ->
         Failed = lists:foldl(fun apply_event/2, State, Events),
         ?assertEqual({idle, []}, process_transfer(Failed)),
         ?assertEqual(3, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
+    end).
+
+%% No holds means routing can fail without a rollback event or another timeout.
+-spec empty_routing_failure_test() -> _.
+empty_routing_failure_test() ->
+    with_routing_mocks([], fun() ->
+        ?assertMatch(
+            {idle, [{status_changed, {failed, #{code := <<"no_route_found">>}}}]},
+            process_transfer(test_withdrawal_state())
+        ),
+        ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
+        ?assertEqual(0, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
     end).
 
 -spec chosen_rollback_iteration_test() -> _.
