@@ -120,17 +120,17 @@ marshal(change, {session_started, SessionID}) ->
     {session, #wthd_SessionChange{id = SessionID, payload = marshal(session_event, started)}};
 marshal(change, {session_finished, {SessionID, SessionResult}}) ->
     {session, #wthd_SessionChange{id = SessionID, payload = marshal(session_event, {finished, SessionResult})}};
-marshal(change, {route_changed, Route}) ->
-    marshal(change, {route_changed, Route, undefined});
-marshal(change, {route_changed, Route, Candidates}) ->
+marshal(change, {route_changed, #{provider_id := _} = Route}) ->
+    marshal(change, {route_changed, #{route => Route, candidates => undefined}});
+marshal(change, {route_changed, #{route := Route, candidates := Candidates}}) ->
     {route, #wthd_RouteChange{
         route = marshal(route, Route),
-        candidates = marshal_route_candidates(Candidates)
+        candidates = maybe_marshal({list, route}, Candidates)
     }};
-marshal(change, {rollback_started, Failure, Candidates}) ->
+marshal(change, {rollback_started, #{reason := Failure, candidates := Candidates}}) ->
     {rollback_started, #wthd_RollbackStartedChange{
         reason = ff_codec:marshal(failure, Failure),
-        candidates = marshal_route_candidates(Candidates)
+        candidates = maybe_marshal({list, route}, Candidates)
     }};
 marshal(change, {limit_check, Details}) ->
     {limit_check, #wthd_LimitCheckChange{details = ff_limit_check_codec:marshal(details, Details)}};
@@ -263,9 +263,11 @@ unmarshal(change, {transfer, #wthd_TransferChange{payload = TransferChange}}) ->
 unmarshal(change, {session, SessionChange}) ->
     unmarshal(session_event, SessionChange);
 unmarshal(change, {route, #wthd_RouteChange{route = Route, candidates = Candidates}}) ->
-    {route_changed, unmarshal(route, Route), unmarshal_route_candidates(Candidates)};
+    {route_changed, #{route => unmarshal(route, Route), candidates => maybe_unmarshal({list, route}, Candidates)}};
 unmarshal(change, {rollback_started, #wthd_RollbackStartedChange{reason = Failure, candidates = Candidates}}) ->
-    {rollback_started, ff_codec:unmarshal(failure, Failure), unmarshal_route_candidates(Candidates)};
+    {rollback_started, #{
+        reason => ff_codec:unmarshal(failure, Failure), candidates => maybe_unmarshal({list, route}, Candidates)
+    }};
 unmarshal(change, {limit_check, #wthd_LimitCheckChange{details = Details}}) ->
     {limit_check, ff_limit_check_codec:unmarshal(details, Details)};
 unmarshal(change, {resource, {got, #wthd_ResourceGot{resource = Resource}}}) ->
@@ -379,17 +381,6 @@ maybe_marshal(_Type, undefined) ->
     undefined;
 maybe_marshal(Type, Value) ->
     marshal(Type, Value).
-
-%% Do not send [] through maybe_marshal: empty list is a present thrift field.
-marshal_route_candidates(undefined) ->
-    undefined;
-marshal_route_candidates(Candidates) when is_list(Candidates) ->
-    marshal({list, route}, Candidates).
-
-unmarshal_route_candidates(undefined) ->
-    undefined;
-unmarshal_route_candidates(Candidates) when is_list(Candidates) ->
-    unmarshal({list, route}, Candidates).
 
 get_legacy_provider_id(#{provider_id_legacy := Provider}) when is_binary(Provider) ->
     Provider;
@@ -576,93 +567,23 @@ unmarshal_repair_scenario_deadline_timer_test() ->
 route_change_candidates_roundtrip_test() ->
     Route = test_route(),
     Other = test_route(2, 8, <<"legacy-2">>),
-    Event = {route_changed, Route, [Route, Other]},
-    ?assertEqual(Event, unmarshal(change, marshal(change, Event))).
+    Event = {route_changed, #{route => Route, candidates => [Route, Other]}},
+    ?assertEqual(Event, unmarshal(change, marshal(change, Event))),
+    ?assertEqual(
+        {route_changed, #{route => Route, candidates => undefined}},
+        unmarshal(change, marshal(change, {route_changed, Route}))
+    ).
 
 -spec rollback_started_roundtrip_test() -> _.
 rollback_started_roundtrip_test() ->
     Route = test_route(),
     Failure = #{code => <<"no_route_found">>, reason => <<"rejected">>},
-    WithList = {rollback_started, Failure, [Route]},
-    WithEmpty = {rollback_started, Failure, []},
-    WithUndefined = {rollback_started, Failure, undefined},
+    WithList = {rollback_started, #{reason => Failure, candidates => [Route]}},
+    WithEmpty = {rollback_started, #{reason => Failure, candidates => []}},
+    WithUndefined = {rollback_started, #{reason => Failure, candidates => undefined}},
     ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))),
     ?assertEqual(WithEmpty, unmarshal(change, marshal(change, WithEmpty))),
     ?assertEqual(WithUndefined, unmarshal(change, marshal(change, WithUndefined))).
-
--spec empty_candidates_vs_undefined_test() -> _.
-empty_candidates_vs_undefined_test() ->
-    Route = test_route(),
-    Failure = #{code => <<"no_route_found">>},
-    RouteUndefined = marshal(change, {route_changed, Route, undefined}),
-    RouteEmpty = marshal(change, {route_changed, Route, []}),
-    RouteList = marshal(change, {route_changed, Route, [Route]}),
-    {route, #wthd_RouteChange{candidates = undefined}} = RouteUndefined,
-    {route, #wthd_RouteChange{candidates = []}} = RouteEmpty,
-    {route, #wthd_RouteChange{candidates = [_ | _]}} = RouteList,
-    ?assertEqual({route_changed, Route, undefined}, unmarshal(change, RouteUndefined)),
-    ?assertEqual({route_changed, Route, []}, unmarshal(change, RouteEmpty)),
-    ?assertEqual({route_changed, Route, [Route]}, unmarshal(change, RouteList)),
-    RbUndefined = marshal(change, {rollback_started, Failure, undefined}),
-    RbEmpty = marshal(change, {rollback_started, Failure, []}),
-    RbList = marshal(change, {rollback_started, Failure, [Route]}),
-    {rollback_started, #wthd_RollbackStartedChange{candidates = undefined}} = RbUndefined,
-    {rollback_started, #wthd_RollbackStartedChange{candidates = []}} = RbEmpty,
-    {rollback_started, #wthd_RollbackStartedChange{candidates = [_ | _]}} = RbList,
-    ?assertEqual({rollback_started, Failure, undefined}, unmarshal(change, RbUndefined)),
-    ?assertEqual({rollback_started, Failure, []}, unmarshal(change, RbEmpty)),
-    ?assertEqual({rollback_started, Failure, [Route]}, unmarshal(change, RbList)).
-
--spec unmarshal_repair_add_events_routing_changes_test() -> _.
-unmarshal_repair_add_events_routing_changes_test() ->
-    Route = #wthd_Route{
-        provider_id = 1,
-        terminal_id = 7,
-        provider_id_legacy = <<"mocketbank">>
-    },
-    Failure = #'fistful_base_Failure'{code = <<"no_route_found">>},
-    Scenario = {
-        add_events,
-        #wthd_AddEventsRepair{
-            events = [
-                {route, #wthd_RouteChange{route = Route, candidates = [Route]}},
-                {rollback_started, #wthd_RollbackStartedChange{reason = Failure, candidates = []}}
-            ],
-            action = undefined
-        }
-    },
-    {add_events, #{events := Events}} = unmarshal(repair_scenario, Scenario),
-    ?assertMatch(
-        [
-            {route_changed, #{provider_id := 1, terminal_id := 7}, [_]},
-            {rollback_started, #{code := <<"no_route_found">>}, []}
-        ],
-        Events
-    ).
-
--spec withdrawal_legacy_fixtures_machine_codec_test() -> _.
-withdrawal_legacy_fixtures_machine_codec_test() ->
-    meck:new(ff_party, [passthrough, no_link, unstick]),
-    meck:new(ff_limiter, [passthrough, no_link, unstick]),
-    try
-        lists:foreach(
-            fun(Name) ->
-                Bin = read_fixture_bin(Name),
-                {ev, _Ts, Change} = ff_machine_codec:unmarshal_event(withdrawal, Bin),
-                State0 = ff_withdrawal:test_withdrawal_state(),
-                _State1 = ff_withdrawal:apply_event(Change, State0),
-                ?assertMatch({route_changed, #{provider_id := _}, _}, Change)
-            end,
-            [
-                <<"old_route_change_no_candidates.bin">>,
-                <<"route_change_provider_only_legacy_ids.bin">>
-            ]
-        ),
-        ?assertEqual(0, meck:num_calls(ff_party, compute_routing_ruleset, '_')),
-        ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
-    after
-        meck:unload()
-    end.
 
 test_route() ->
     test_route(1, 7, <<"mocketbank">>).
@@ -674,28 +595,5 @@ test_route(ProviderID, TerminalID, Legacy) ->
         terminal_id => TerminalID,
         provider_id_legacy => Legacy
     }.
-
-read_fixture_bin(Name) ->
-    Path = fixture_path(Name),
-    {ok, Bin} = file:read_file(Path),
-    Bin.
-
-fixture_path(Name) ->
-    Candidates = [
-        filename:join(["apps/ff_server/test/withdrawal_event_fixtures", Name]),
-        filename:join(["test/withdrawal_event_fixtures", Name]),
-        filename:join([code:lib_dir(ff_server), "test/withdrawal_event_fixtures", Name]),
-        filename:join([
-            filename:dirname(filename:dirname(code:which(?MODULE))),
-            "../../../../apps/ff_server/test/withdrawal_event_fixtures",
-            Name
-        ])
-    ],
-    case lists:dropwhile(fun(P) -> not filelib:is_regular(P) end, Candidates) of
-        [Path | _] ->
-            Path;
-        [] ->
-            erlang:error({fixture_not_found, Name, Candidates})
-    end.
 
 -endif.

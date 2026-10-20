@@ -98,8 +98,8 @@
 -type event() ::
     {created, withdrawal()}
     | {resource_got, destination_resource()}
-    | {route_changed, route(), routing_candidates()}
-    | {rollback_started, failure(), routing_candidates()}
+    | {route_changed, #{route := route(), candidates := routing_candidates()}}
+    | {rollback_started, #{reason := failure(), candidates := routing_candidates()}}
     | {p_transfer, ff_postings_transfer:event()}
     | {limit_check, limit_check_details()}
     | {validation, {sender | receiver, validation_result()}}
@@ -874,11 +874,11 @@ process_routing(Withdrawal) ->
     case do_process_routing(Withdrawal) of
         {ok, [Route | _Rest], Accounted} ->
             {timeout, [
-                {route_changed, Route, Accounted}
+                {route_changed, #{route => Route, candidates => Accounted}}
             ]};
         {error, Reason, Accounted} ->
             Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, Failure, Accounted}]}
+            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
     end.
 
 -spec process_rollback_routing(withdrawal_state()) -> process_result().
@@ -977,9 +977,9 @@ maybe_chosen_rollback_started(Withdrawal) ->
     BodyChanged = is_body_changed(Withdrawal),
     case {Session, LimitCheck, BodyChanged} of
         {failed, _, false} ->
-            [{rollback_started, build_failure(session, Withdrawal), undefined}];
+            [{rollback_started, #{reason => build_failure(session, Withdrawal), candidates => undefined}}];
         {_, failed, false} ->
-            [{rollback_started, build_failure(limit_check, Withdrawal), undefined}];
+            [{rollback_started, #{reason => build_failure(limit_check, Withdrawal), candidates => undefined}}];
         _ ->
             []
     end.
@@ -1937,7 +1937,7 @@ process_route_change(Withdrawal, Reason) ->
                     do_process_route_change(Routes, Accounted, Withdrawal, Reason);
                 {error, _GatherReason, Accounted} ->
                     Failure = build_failure(Reason, Withdrawal),
-                    {timeout, [{rollback_started, Failure, Accounted}]}
+                    {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
             end;
         false ->
             Events = process_transfer_fail(Reason, Withdrawal),
@@ -2011,14 +2011,14 @@ do_process_route_change(Routes, Accounted, Withdrawal, Reason) ->
     case ff_withdrawal_route_attempt_utils:next_route(Routes, Attempts, AttemptLimit) of
         {ok, Route} ->
             {timeout, [
-                {route_changed, Route, Accounted}
+                {route_changed, #{route => Route, candidates => Accounted}}
             ]};
         {error, route_not_found} ->
             Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, Failure, Accounted}]};
+            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]};
         {error, attempt_limit_exceeded} ->
             Failure = build_failure(Reason, Withdrawal),
-            {timeout, [{rollback_started, Failure, Accounted}]}
+            {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}
     end.
 
 -spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
@@ -2172,9 +2172,9 @@ apply_event_({session_finished, {SessionID, Result}}, T) ->
     update_attempts(R, T);
 apply_event_({body_changed, #{new_body := NewBody}}, T) ->
     T#{new_body => NewBody, p_transfer_rebuild_needed => true};
-apply_event_({route_changed, Route}, T) ->
-    apply_event_({route_changed, Route, undefined}, T);
-apply_event_({route_changed, Route, Candidates}, T0) ->
+apply_event_({route_changed, #{provider_id := _} = Route}, T) ->
+    apply_event_({route_changed, #{route => Route, candidates => undefined}}, T);
+apply_event_({route_changed, #{route := Route, candidates := Candidates}}, T0) ->
     Iteration = ff_withdrawal_route_attempt_utils:get_index(attempts(T0)),
     T1 = stash_routing_round(T0, Candidates, Iteration),
     R = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(T1)),
@@ -2182,11 +2182,11 @@ apply_event_({route_changed, Route, Candidates}, T0) ->
         route => Route,
         attempts => R
     });
-apply_event_({rollback_started, Failure, Candidates}, T0) when is_list(Candidates) ->
+apply_event_({rollback_started, #{reason := Failure, candidates := Candidates}}, T0) when is_list(Candidates) ->
     Iteration = ff_withdrawal_route_attempt_utils:get_index(attempts(T0)),
     T1 = stash_routing_round(T0, Candidates, Iteration),
     T1#{rollback_started => Failure, rollback_source => routing_failure};
-apply_event_({rollback_started, Failure, undefined}, T) ->
+apply_event_({rollback_started, #{reason := Failure, candidates := undefined}}, T) ->
     T#{rollback_started => Failure, rollback_source => chosen_attempt};
 apply_event_({validation, {Part, ValidationResult}}, T) ->
     Validates = maps:get(validation, T, #{}),
@@ -2355,7 +2355,7 @@ apply_event_route_changed_stashes_candidates_iteration_test() ->
         State0 = test_withdrawal_state(),
         Index0 = ff_withdrawal_route_attempt_utils:get_index(attempts(State0)),
         Candidates = [Route, Other],
-        StateList = apply_event({route_changed, Route, Candidates}, State0),
+        StateList = apply_event({route_changed, #{route => Route, candidates => Candidates}}, State0),
         ?assertEqual(Candidates, maps:get(routing_candidates, StateList)),
         ?assertEqual(Index0, maps:get(routing_iteration, StateList)),
         ?assertEqual(42, maps:get(routing_revision, StateList)),
@@ -2366,10 +2366,14 @@ apply_event_route_changed_stashes_candidates_iteration_test() ->
         IndexAfter = ff_withdrawal_route_attempt_utils:get_index(attempts(StateList)),
         ?assertEqual(Index0, maps:get(routing_iteration, StateList)),
         _ = IndexAfter,
-        StateEmpty = apply_event({route_changed, Route, []}, State0),
+        StateEmpty = apply_event({route_changed, #{route => Route, candidates => []}}, State0),
         ?assertEqual([], maps:get(routing_candidates, StateEmpty)),
         ?assertEqual(Index0, maps:get(routing_iteration, StateEmpty)),
         ?assertEqual(42, maps:get(routing_revision, StateEmpty)),
+        ?assertEqual(
+            apply_event({route_changed, #{route => Route, candidates => undefined}}, State0),
+            apply_event({route_changed, Route}, State0)
+        ),
         ?assertEqual(false, maps:is_key(rollback_started, StateList)),
         ?assertEqual(0, meck:num_calls(ff_party, compute_routing_ruleset, '_')),
         ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
@@ -2384,7 +2388,7 @@ apply_event_rollback_started_with_list_stashes_test() ->
     try
         Route = test_route(1, 7),
         State0 = test_withdrawal_state(),
-        State1 = apply_event({route_changed, Route, [Route]}, State0),
+        State1 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, State0),
         PrevIteration = maps:get(routing_iteration, State1),
         Grown = ff_withdrawal_route_attempt_utils:get_index(attempts(State1)) + 5,
         State2 = State1#{
@@ -2392,7 +2396,7 @@ apply_event_rollback_started_with_list_stashes_test() ->
         },
         Failure = #{code => <<"no_route_found">>},
         Accounted = [],
-        State3 = apply_event({rollback_started, Failure, Accounted}, State2),
+        State3 = apply_event({rollback_started, #{reason => Failure, candidates => Accounted}}, State2),
         ?assertEqual(Accounted, maps:get(routing_candidates, State3)),
         ?assertEqual(Grown, maps:get(routing_iteration, State3)),
         ?assertNotEqual(PrevIteration, maps:get(routing_iteration, State3)),
@@ -2417,7 +2421,7 @@ apply_event_rollback_started_undefined_keeps_route_change_fields_test() ->
         Route2 = test_route(3, 9),
         Candidates = [Route],
         State0 = test_withdrawal_state(),
-        State1 = apply_event({route_changed, Route, Candidates}, State0),
+        State1 = apply_event({route_changed, #{route => Route, candidates => Candidates}}, State0),
         Stash = {
             maps:get(routing_candidates, State1),
             maps:get(routing_iteration, State1),
@@ -2425,7 +2429,7 @@ apply_event_rollback_started_undefined_keeps_route_change_fields_test() ->
             maps:get(routing_varset, State1)
         },
         Failure = #{code => <<"session_failed">>},
-        State2 = apply_event({rollback_started, Failure, undefined}, State1),
+        State2 = apply_event({rollback_started, #{reason => Failure, candidates => undefined}}, State1),
         ?assertEqual(
             Stash,
             {
@@ -2436,7 +2440,7 @@ apply_event_rollback_started_undefined_keeps_route_change_fields_test() ->
             }
         ),
         ?assertEqual(Failure, maps:get(rollback_started, State2)),
-        StateClearedByRoute = apply_event({route_changed, Route2, [Route2]}, State2),
+        StateClearedByRoute = apply_event({route_changed, #{route => Route2, candidates => [Route2]}}, State2),
         ?assertEqual(false, maps:is_key(rollback_started, StateClearedByRoute)),
         ?assertEqual([Route2], maps:get(routing_candidates, StateClearedByRoute)),
         StateFailed = apply_event({status_changed, {failed, Failure}}, State2),
@@ -2456,7 +2460,7 @@ withdrawal_route_changed_writes_accounted_candidates_test() ->
         fun() ->
             mock_routing_success([Chosen], Accounted),
             {timeout, Events} = process_transfer(test_withdrawal_state()),
-            ?assertMatch([{route_changed, Chosen, Accounted}], Events),
+            ?assertMatch([{route_changed, #{route := Chosen, candidates := Accounted}}], Events),
             true = is_list(Accounted),
             true = same_provider_terminal(Chosen, Chosen)
         end
@@ -2469,14 +2473,14 @@ withdrawal_rollback_started_without_chosen_test() ->
         fun() ->
             Rejected = [{#domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 7}, overflow}],
             mock_routing_error({route_not_found, Rejected}, []),
-            State0 = apply_event({route_changed, Prev, [Prev]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Prev, candidates => [Prev]}}, test_withdrawal_state()),
             Grown = ff_withdrawal_route_attempt_utils:get_index(attempts(State0)) + 3,
             StatePrev = State0#{
                 attempts => ff_withdrawal_route_attempt_utils:set_index(Grown, attempts(State0))
             },
             Pending = maps:remove(route, StatePrev),
             {timeout, Events} = process_transfer(Pending),
-            ?assertMatch([{rollback_started, #{code := <<"no_route_found">>}, []}], Events),
+            ?assertMatch([{rollback_started, #{reason := #{code := <<"no_route_found">>}, candidates := []}}], Events),
             ?assertEqual(false, lists:keymember(route_changed, 1, Events)),
             State1 = lists:foldl(fun apply_event/2, StatePrev, Events),
             ?assertEqual([], maps:get(routing_candidates, State1)),
@@ -2485,7 +2489,10 @@ withdrawal_rollback_started_without_chosen_test() ->
             Overflowed = [test_route(1, 7)],
             mock_routing_error({route_not_found, Rejected}, Overflowed),
             {timeout, OverflowEvents} = process_transfer(test_withdrawal_state()),
-            ?assertMatch([{rollback_started, #{code := <<"no_route_found">>}, Overflowed}], OverflowEvents),
+            ?assertMatch(
+                [{rollback_started, #{reason := #{code := <<"no_route_found">>}, candidates := Overflowed}}],
+                OverflowEvents
+            ),
             Quote = #{
                 cash_from => {100, <<"RUB">>},
                 cash_to => {100, <<"USD">>},
@@ -2499,7 +2506,9 @@ withdrawal_rollback_started_without_chosen_test() ->
             Quoted = test_withdrawal_state(),
             QuotedParams = maps:get(params, Quoted),
             {timeout, QuoteEvents} = process_transfer(Quoted#{params => QuotedParams#{quote => Quote}}),
-            ?assertMatch([{rollback_started, #{code := <<"unknown">>}, [Chosen]}], QuoteEvents),
+            ?assertMatch(
+                [{rollback_started, #{reason := #{code := <<"unknown">>}, candidates := [Chosen]}}], QuoteEvents
+            ),
             ?assertEqual(false, lists:keymember(route_changed, 1, QuoteEvents))
         end
     ).
@@ -2509,10 +2518,10 @@ withdrawal_rollback_started_without_chosen_replay_test() ->
     with_process_mocks(
         fun() ->
             Route = test_route(1, 7),
-            State0 = apply_event({route_changed, Route, [Route]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
             Failure = #{code => <<"no_route_found">>},
             Accounted = [test_route(3, 4)],
-            State1 = apply_event({rollback_started, Failure, Accounted}, State0),
+            State1 = apply_event({rollback_started, #{reason => Failure, candidates => Accounted}}, State0),
             ?assertEqual(Accounted, maps:get(routing_candidates, State1)),
             ?assertEqual(compensate_routing_failure, activity(State1)),
             {timeout, Events} = process_transfer(State1),
@@ -2521,7 +2530,7 @@ withdrawal_rollback_started_without_chosen_replay_test() ->
             RollbackCtx = get(rollback_ctx),
             ?assertEqual(maps:get(routing_iteration, State1), maps:get(iteration, RollbackCtx)),
             ?assertEqual(maps:get(routing_revision, State1), maps:get(domain_revision, RollbackCtx)),
-            StateUndef = apply_event({rollback_started, Failure, undefined}, State0),
+            StateUndef = apply_event({rollback_started, #{reason => Failure, candidates => undefined}}, State0),
             ?assertEqual([Route], maps:get(routing_candidates, StateUndef))
         end
     ).
@@ -2535,7 +2544,7 @@ withdrawal_chosen_attempt_rollback_started_test() ->
             State = prepared_session_failed_state(Route, [Route], Failure),
             meck:expect(ff_postings_transfer, cancel, fun(_) -> {ok, [{status_changed, cancelled}]} end),
             {timeout, Events} = process_transfer(State),
-            ?assertEqual({rollback_started, Failure, undefined}, hd(Events)),
+            ?assertEqual({rollback_started, #{reason => Failure, candidates => undefined}}, hd(Events)),
             State1 = lists:foldl(fun apply_event/2, State, Events),
             ?assertEqual(chosen_attempt, maps:get(rollback_source, State1)),
             ?assertEqual([Route], maps:get(routing_candidates, State1))
@@ -2568,9 +2577,9 @@ withdrawal_rollback_uses_stashed_revision_and_varset_test() ->
     with_process_mocks(
         fun() ->
             Route = test_route(1, 7),
-            State0 = apply_event({route_changed, Route, [Route]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
             Failure = #{code => <<"no_route_found">>},
-            State1 = apply_event({rollback_started, Failure, [Route]}, State0),
+            State1 = apply_event({rollback_started, #{reason => Failure, candidates => [Route]}}, State0),
             StashRev = maps:get(routing_revision, State1),
             StashVS = maps:get(routing_varset, State1),
             {timeout, _} = process_transfer(State1),
@@ -2599,7 +2608,7 @@ withdrawal_stash_omits_undefined_routing_revision_test() ->
     try
         Route = test_route(1, 7),
         State0 = maps:remove(domain_revision, test_withdrawal_state()),
-        StateList = apply_event({route_changed, Route, [Route]}, State0),
+        StateList = apply_event({route_changed, #{route => Route, candidates => [Route]}}, State0),
         case maps:find(routing_revision, StateList) of
             error ->
                 ok;
@@ -2623,15 +2632,15 @@ withdrawal_rollback_undefined_revision_uses_head_recovery_test() ->
             Route = test_route(1, 7),
             Unused = test_route(2, 8),
             StateNoRev = maps:remove(domain_revision, test_withdrawal_state()),
-            StateRoute = apply_event({route_changed, Route, [Route]}, StateNoRev),
+            StateRoute = apply_event({route_changed, #{route => Route, candidates => [Route]}}, StateNoRev),
             Failure = #{code => <<"no_route_found">>},
-            StateRollback = apply_event({rollback_started, Failure, [Route]}, StateRoute),
+            StateRollback = apply_event({rollback_started, #{reason => Failure, candidates => [Route]}}, StateRoute),
             {timeout, Events} = process_transfer(StateRollback),
             ?assertEqual([{status_changed, {failed, Failure}}], Events),
             assert_fetched_revision(HeadRev),
             ?assertEqual(HeadRev, maps:get(domain_revision, get(rollback_ctx))),
             %% leftover routing_revision=undefined is treated as missing
-            StateChosen = apply_event({route_changed, Route, [Route, Unused]}, StateNoRev),
+            StateChosen = apply_event({route_changed, #{route => Route, candidates => [Route, Unused]}}, StateNoRev),
             StateUndef = StateChosen#{routing_revision => undefined},
             StatePrep = with_p_transfer_status(StateUndef, created),
             meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
@@ -2648,14 +2657,14 @@ withdrawal_rollback_defined_revision_still_uses_stash_test() ->
             meck:new(ff_domain_config, [passthrough, no_link, unstick]),
             meck:expect(ff_domain_config, head, fun() -> 99 end),
             Route = test_route(1, 7),
-            State0 = apply_event({route_changed, Route, [Route]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
             ?assertEqual(42, maps:get(routing_revision, State0)),
             ?assertEqual(0, meck:num_calls(ff_party, compute_routing_ruleset, '_')),
             ?assertEqual(0, meck:num_calls(ff_party, compute_provider_terminal_terms, '_')),
             ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
             ?assertEqual(0, meck:num_calls(ff_domain_config, head, '_')),
             Failure = #{code => <<"no_route_found">>},
-            State1 = apply_event({rollback_started, Failure, [Route]}, State0),
+            State1 = apply_event({rollback_started, #{reason => Failure, candidates => [Route]}}, State0),
             ?assertEqual(0, meck:num_calls(ff_party, compute_routing_ruleset, '_')),
             ?assertEqual(0, meck:num_calls(ff_domain_config, head, '_')),
             {timeout, _} = process_transfer(State1),
@@ -2671,7 +2680,9 @@ withdrawal_rollback_without_ruleset_gather_test() ->
         fun() ->
             Chosen = test_route(1, 7),
             Unused = test_route(2, 8),
-            State0 = apply_event({route_changed, Chosen, [Chosen, Unused]}, test_withdrawal_state()),
+            State0 = apply_event(
+                {route_changed, #{route => Chosen, candidates => [Chosen, Unused]}}, test_withdrawal_state()
+            ),
             State1 = with_p_transfer_status(State0, created),
             meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
             {timeout, _} = process_transfer(State1),
@@ -2686,7 +2697,7 @@ withdrawal_legacy_gather_without_candidates_test() ->
     with_process_mocks(
         fun() ->
             Chosen = test_route(1, 7),
-            State0 = apply_event({route_changed, Chosen, undefined}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Chosen, candidates => undefined}}, test_withdrawal_state()),
             ?assertEqual(undefined, maps:get(routing_candidates, State0, undefined)),
             State1 = with_p_transfer_status(State0, created),
             meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
@@ -2730,7 +2741,7 @@ withdrawal_hold_retry_lost_batch_ack_test() ->
             put(hold_fail_once, Timeout),
             State = test_withdrawal_state(),
             assert_process_crashes(State),
-            {timeout, [{route_changed, Chosen, _}]} = process_transfer(State),
+            {timeout, [{route_changed, #{route := Chosen, candidates := _}}]} = process_transfer(State),
             Holds = get(hold_calls),
             [{_, RouteA, IterA} | Rest] = lists:reverse(Holds),
             [{_, RouteB, IterB} | _] = Rest,
@@ -2745,7 +2756,9 @@ withdrawal_compensate_before_next_route_or_fail_test() ->
         fun() ->
             Failure = #{code => <<"no_route_found">>},
             Route = test_route(1, 7),
-            State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             {timeout, Events} = process_transfer(State),
             ?assertEqual([{status_changed, {failed, Failure}}], Events),
             ?assertEqual(false, lists:keymember(route_changed, 1, Events)),
@@ -2759,7 +2772,9 @@ withdrawal_completed_cleanup_does_not_revive_test() ->
         fun() ->
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
-            State0 = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State0 = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             {timeout, Events} = process_transfer(State0),
             StateFailed = lists:foldl(fun apply_event/2, State0, Events),
             erase(rollback_routes),
@@ -2776,7 +2791,7 @@ withdrawal_prev_p_transfer_cancel_does_not_close_rollback_started_test() ->
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
             State0 = prepared_session_failed_state(Route, [Route], #{code => <<"authorization_error">>}),
-            State1 = apply_event({rollback_started, Failure, [test_route(2, 8)]}, State0),
+            State1 = apply_event({rollback_started, #{reason => Failure, candidates => [test_route(2, 8)]}}, State0),
             ?assertEqual(compensate_routing_failure, activity(State1)),
             {timeout, Events} = process_transfer(State1),
             ?assertEqual(false, lists:keymember(route_changed, 1, Events)),
@@ -2789,10 +2804,12 @@ withdrawal_prev_p_transfer_cancel_does_not_close_rollback_started_test() ->
 withdrawal_activity_distinguishes_rollback_sources_test() ->
     Route = test_route(1, 7),
     Failure = #{code => <<"no_route_found">>},
-    RoutingState = apply_event({rollback_started, Failure, []}, test_withdrawal_state()),
+    RoutingState = apply_event({rollback_started, #{reason => Failure, candidates => []}}, test_withdrawal_state()),
     ?assertEqual(compensate_routing_failure, activity(RoutingState)),
     ChosenState = prepared_session_failed_state(Route, [Route], #{code => <<"authorization_error">>}),
-    ChosenState1 = apply_event({rollback_started, #{code => <<"authorization_error">>}, undefined}, ChosenState),
+    ChosenState1 = apply_event(
+        {rollback_started, #{reason => #{code => <<"authorization_error">>}, candidates => undefined}}, ChosenState
+    ),
     ?assertEqual(p_transfer_cancel, activity(ChosenState1)),
     ?assertNotEqual(activity(RoutingState), activity(ChosenState1)).
 
@@ -2823,7 +2840,9 @@ withdrawal_stashed_rollback_terms_error_retries_test() ->
         fun() ->
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
-            State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             ?assertEqual(compensate_routing_failure, activity(State)),
             lists:foreach(
                 fun(TermsResult) ->
@@ -2848,7 +2867,9 @@ withdrawal_stashed_rollback_woody_still_retries_test() ->
             Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
-            State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             meck:expect(ff_party, compute_provider_terminal_terms, fun(_, _, _, _) ->
                 raise(Timeout)
             end),
@@ -2875,7 +2896,9 @@ withdrawal_unused_rollback_terms_error_retries_test() ->
         fun() ->
             Chosen = test_route(1, 7),
             Unused = test_route(2, 8),
-            State0 = apply_event({route_changed, Chosen, [Chosen, Unused]}, test_withdrawal_state()),
+            State0 = apply_event(
+                {route_changed, #{route => Chosen, candidates => [Chosen, Unused]}}, test_withdrawal_state()
+            ),
             State1 = with_p_transfer_status(State0, created),
             ?assertEqual(p_transfer_prepare, activity(State1)),
             meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
@@ -2899,7 +2922,9 @@ withdrawal_crash_before_rollback_rpc_test() ->
             Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
-            State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             Index0 = maps:get(routing_iteration, State),
             meck:expect(ff_withdrawal_routing, rollback_routes_limits, fun(_, _, _) -> raise(Timeout) end),
             assert_process_crashes(State),
@@ -2913,7 +2938,9 @@ withdrawal_crash_after_rollback_rpc_test() ->
         fun() ->
             Route = test_route(1, 7),
             Failure = #{code => <<"no_route_found">>},
-            State = apply_event({rollback_started, Failure, [Route]}, test_withdrawal_state()),
+            State = apply_event(
+                {rollback_started, #{reason => Failure, candidates => [Route]}}, test_withdrawal_state()
+            ),
             Index0 = maps:get(routing_iteration, State),
             {timeout, Events} = process_transfer(State),
             %% crash after accepted RPC: events not applied; retry is idempotent
@@ -2930,7 +2957,7 @@ withdrawal_crash_before_commit_rpc_test() ->
         fun() ->
             Timeout = {woody_error, {system, result_unknown, <<"timeout">>}},
             Route = test_route(1, 7),
-            State0 = apply_event({route_changed, Route, [Route]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
             State1 = with_p_transfer_status(State0, prepared),
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
@@ -2947,7 +2974,7 @@ withdrawal_crash_after_commit_rpc_test() ->
     with_process_mocks(
         fun() ->
             Route = test_route(1, 7),
-            State0 = apply_event({route_changed, Route, [Route]}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
             State1 = with_p_transfer_status(State0, prepared),
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
@@ -2969,7 +2996,7 @@ withdrawal_interrupted_before_attempt_limit_retry_releases_hold_test() ->
             Other = test_route(2, 8),
             Accounted = [Route, Other],
             mock_routing_success([Route, Other], Accounted),
-            State = apply_event({route_changed, Route, Accounted}, test_withdrawal_state()),
+            State = apply_event({route_changed, #{route => Route, candidates => Accounted}}, test_withdrawal_state()),
             State1 = with_p_transfer_status(State, created),
             meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
             {timeout, _} = process_transfer(State1),
@@ -2983,7 +3010,7 @@ withdrawal_quote_commit_adjustment_candidates_source_test() ->
         fun() ->
             Route = test_route(1, 7),
             Candidates = [Route],
-            State0 = apply_event({route_changed, Route, Candidates}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => Candidates}}, test_withdrawal_state()),
             State1 = with_p_transfer_status(State0, prepared),
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
@@ -3006,11 +3033,13 @@ withdrawal_repair_does_not_switch_candidates_source_test() ->
         fun() ->
             Route = test_route(1, 7),
             Candidates = [Route],
-            State0 = apply_event({route_changed, Route, Candidates}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => Candidates}}, test_withdrawal_state()),
             %% repair add_events is unmarshal + apply_event; injected non-routing changes keep the source
             State1 = apply_event({limit_check, {wallet_sender, ok}}, State0),
             ?assertEqual(Candidates, maps:get(routing_candidates, State1)),
-            Undefined = apply_event({route_changed, Route, undefined}, test_withdrawal_state()),
+            Undefined = apply_event(
+                {route_changed, #{route => Route, candidates => undefined}}, test_withdrawal_state()
+            ),
             ?assertEqual(undefined, maps:get(routing_candidates, Undefined)),
             meck:expect(ff_withdrawal_machine, repair, fun(_, _) -> {ok, ok} end),
             {ok, ok} = ff_withdrawal_machine:repair(<<"w-1">>, add_events),
@@ -3026,7 +3055,7 @@ withdrawal_callback_does_not_switch_candidates_source_test() ->
         fun() ->
             Route = test_route(1, 7),
             Candidates = [Route],
-            State0 = apply_event({route_changed, Route, Candidates}, test_withdrawal_state()),
+            State0 = apply_event({route_changed, #{route => Route, candidates => Candidates}}, test_withdrawal_state()),
             State1 = with_p_transfer_status(State0, prepared),
             State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
             State3 = apply_event({session_started, <<"s1">>}, State2),
@@ -3058,48 +3087,44 @@ withdrawal_quote_calls_validate_quote_route_test() ->
             Matching = test_withdrawal_state(),
             MatchingParams = maps:get(params, Matching),
             {timeout, MatchEvents} = process_transfer(Matching#{params => MatchingParams#{quote => MatchingQuote}}),
-            ?assertMatch([{route_changed, Chosen, [Chosen, Other]}], MatchEvents),
+            ?assertMatch([{route_changed, #{route := Chosen, candidates := [Chosen, Other]}}], MatchEvents),
             MismatchQuote = MatchingQuote#{route => Other},
             {timeout, MismatchEvents} = process_transfer(Matching#{params => MatchingParams#{quote => MismatchQuote}}),
-            ?assertMatch([{rollback_started, #{code := <<"unknown">>, reason := _}, _}], MismatchEvents),
-            [{rollback_started, #{reason := Reason}, _}] = MismatchEvents,
+            ?assertMatch(
+                [{rollback_started, #{reason := #{code := <<"unknown">>, reason := _}, candidates := _}}],
+                MismatchEvents
+            ),
+            [{rollback_started, #{reason := #{reason := Reason}, candidates := _}}] = MismatchEvents,
             ReasonText = lists:flatten(io_lib:format("~ts", [Reason])),
             ?assertEqual(true, string:str(ReasonText, "inconsistent_quote_route") > 0),
             ?assertEqual(false, lists:keymember(route_changed, 1, MismatchEvents))
         end
     ).
 
--spec withdrawal_balancer_disable_does_not_rechoose_recorded_test() -> _.
-withdrawal_balancer_disable_does_not_rechoose_recorded_test() ->
+-spec withdrawal_balancer_does_not_rechoose_recorded_test() -> _.
+withdrawal_balancer_does_not_rechoose_recorded_test() ->
     with_process_mocks(
         fun() ->
-            Prev = application:get_env(ff_transfer, withdrawal_route_balancer),
-            ok = application:set_env(ff_transfer, withdrawal_route_balancer, true),
-            try
-                Chosen = test_route(1, 7),
-                Other = test_route(2, 8),
-                mock_weighted_candidates(
-                    [internal_route(1, 7, 1000, 100), internal_route(2, 8, 1000, 1)],
-                    [Chosen, Other]
-                ),
-                State0 = test_withdrawal_state(),
-                {timeout, [{route_changed, Recorded, Accounted}]} = process_transfer(State0),
-                ?assertEqual(true, lists:member(Recorded, [Chosen, Other])),
-                State1 = apply_event({route_changed, Recorded, Accounted}, State0),
-                ?assertEqual(Recorded, route(State1)),
-                ok = application:set_env(ff_transfer, withdrawal_route_balancer, false),
-                ok = meck:reset(hg_route_balancer),
-                ok = meck:reset(hg_routing),
-                State2 = with_p_transfer_status(State1, created),
-                meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
-                {timeout, Events} = process_transfer(State2),
-                ?assertEqual(false, lists:keymember(route_changed, 1, Events)),
-                ?assertEqual(Recorded, route(State2)),
-                ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-            after
-                restore_balancer_flag(Prev)
-            end
+            Chosen = test_route(1, 7),
+            Other = test_route(2, 8),
+            mock_weighted_candidates(
+                [internal_route(1, 7, 1000, 100), internal_route(2, 8, 1000, 1)],
+                [Chosen, Other]
+            ),
+            State0 = test_withdrawal_state(),
+            {timeout, [{route_changed, #{route := Recorded, candidates := Accounted}}]} = process_transfer(State0),
+            ?assertEqual(true, lists:member(Recorded, [Chosen, Other])),
+            State1 = apply_event({route_changed, #{route => Recorded, candidates => Accounted}}, State0),
+            ?assertEqual(Recorded, route(State1)),
+            ok = meck:reset(hg_route_balancer),
+            ok = meck:reset(hg_routing),
+            State2 = with_p_transfer_status(State1, created),
+            meck:expect(ff_postings_transfer, prepare, fun(_) -> {ok, [{status_changed, prepared}]} end),
+            {timeout, Events} = process_transfer(State2),
+            ?assertEqual(false, lists:keymember(route_changed, 1, Events)),
+            ?assertEqual(Recorded, route(State2)),
+            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
         end
     ).
 
@@ -3107,42 +3132,30 @@ withdrawal_balancer_disable_does_not_rechoose_recorded_test() ->
 withdrawal_balancer_weights_test() ->
     with_process_mocks(
         fun() ->
-            Prev = application:get_env(ff_transfer, withdrawal_route_balancer),
-            ok = application:set_env(ff_transfer, withdrawal_route_balancer, true),
-            try
-                Chosen = test_route(2, 8),
-                Other = test_route(1, 7),
-                Accounted = [Other, Chosen],
-                mock_weighted_candidates(
-                    [internal_route(1, 7, 1000, 0), internal_route(2, 8, 1000, 100)],
-                    Accounted
-                ),
-                State = test_withdrawal_state(),
-                {timeout, Events1} = process_transfer(State),
-                {timeout, Events2} = process_transfer(State),
-                ?assertEqual(Events1, Events2),
-                [{route_changed, FirstChosen, _} | _] = Events1,
-                Holds = lists:reverse(get(hold_calls)),
-                ?assertEqual(true, length(Holds) >= 2),
-                ?assertEqual(0, length(Holds) rem 2),
-                {FirstBatch, SecondBatch} = lists:split(length(Holds) div 2, Holds),
-                FirstIds = [{Route, Iter} || {_W, Route, Iter} <- FirstBatch],
-                SecondIds = [{Route, Iter} || {_W, Route, Iter} <- SecondBatch],
-                ?assertEqual(FirstIds, SecondIds),
-                State1 = apply_event(hd(Events1), State),
-                ?assertEqual(FirstChosen, route(State1)),
-                ok = application:set_env(ff_transfer, withdrawal_route_balancer, false),
-                ?assertEqual(FirstChosen, route(State1))
-            after
-                restore_balancer_flag(Prev)
-            end
+            Chosen = test_route(2, 8),
+            Other = test_route(1, 7),
+            Accounted = [Other, Chosen],
+            mock_weighted_candidates(
+                [internal_route(1, 7, 1000, 0), internal_route(2, 8, 1000, 100)],
+                Accounted
+            ),
+            State = test_withdrawal_state(),
+            {timeout, Events1} = process_transfer(State),
+            {timeout, Events2} = process_transfer(State),
+            ?assertEqual(Events1, Events2),
+            [{route_changed, #{route := FirstChosen, candidates := _}} | _] = Events1,
+            ?assertEqual(Chosen, FirstChosen),
+            Holds = lists:reverse(get(hold_calls)),
+            ?assertEqual(true, length(Holds) >= 2),
+            ?assertEqual(0, length(Holds) rem 2),
+            {FirstBatch, SecondBatch} = lists:split(length(Holds) div 2, Holds),
+            FirstIds = [{Route, Iter} || {_W, Route, Iter} <- FirstBatch],
+            SecondIds = [{Route, Iter} || {_W, Route, Iter} <- SecondBatch],
+            ?assertEqual(FirstIds, SecondIds),
+            State1 = apply_event(hd(Events1), State),
+            ?assertEqual(FirstChosen, route(State1))
         end
     ).
-
-restore_balancer_flag(undefined) ->
-    application:unset_env(ff_transfer, withdrawal_route_balancer);
-restore_balancer_flag({ok, Value}) ->
-    application:set_env(ff_transfer, withdrawal_route_balancer, Value).
 
 assert_fetched_revision(Expected) ->
     lists:foreach(
@@ -3239,7 +3252,7 @@ with_p_transfer_status(State, Status) ->
     ).
 
 prepared_session_failed_state(Route, Candidates, Failure) ->
-    State0 = apply_event({route_changed, Route, Candidates}, test_withdrawal_state()),
+    State0 = apply_event({route_changed, #{route => Route, candidates => Candidates}}, test_withdrawal_state()),
     State1 = with_p_transfer_status(State0, prepared),
     State2 = apply_event({limit_check, {wallet_sender, ok}}, State1),
     State3 = apply_event({session_started, <<"s1">>}, State2),
