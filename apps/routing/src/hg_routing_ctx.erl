@@ -305,7 +305,7 @@ new_test_route(ProviderID, TerminalID) ->
         #domain_TerminalRef{id = TerminalID},
         0,
         0,
-        #{}
+        0
     ).
 
 -endif.

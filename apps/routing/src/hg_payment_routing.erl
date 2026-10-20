@@ -10,7 +10,6 @@
 -export([compute_ruleset/3]).
 -export([resolve_terminal/2]).
 -export([validate_candidate/1]).
--export([enrich_pins/2]).
 -export([fill_accepted/4]).
 -export([fill_blacklist/2]).
 -export([fill_fd_overrides/2]).
@@ -20,25 +19,10 @@
 -type varset() :: hg_varset:varset().
 -type revision() :: hg_domain:revision().
 
--type currency() :: dmsl_domain_thrift:'CurrencyRef'().
--type payment_tool() :: dmsl_domain_thrift:'PaymentTool'().
--type client_ip() :: dmsl_domain_thrift:'IPAddress'().
--type email() :: binary().
--type card_token() :: dmsl_domain_thrift:'Token'().
-
--type gather_route_context() :: #{
-    currency := currency(),
-    payment_tool := payment_tool(),
-    client_ip := client_ip() | undefined,
-    email => email() | undefined,
-    card_token => card_token() | undefined
-}.
-
 -export_type([payment_institution/0]).
 -export_type([route_predestination/0]).
 -export_type([varset/0]).
 -export_type([revision/0]).
--export_type([gather_route_context/0]).
 
 -define(fd_overrides(Enabled), #domain_RouteFaultDetectorOverrides{enabled = Enabled}).
 -define(rejected(Reason), {rejected, Reason}).
@@ -70,26 +54,6 @@ validate_candidate(#domain_RoutingCandidate{allowed = {constant, true}}) ->
     ok;
 validate_candidate(Candidate) ->
     throw({misconfiguration, {routing_candidate, Candidate}}).
-
--spec enrich_pins([hg_route:t()], gather_route_context()) -> [hg_route:t()].
-enrich_pins(Routes, Ctx) ->
-    [enrich_pin(Route, Ctx) || Route <- Routes].
-
-enrich_pin(Route, Ctx) ->
-    Pin = maps:get(routing_pin, Route, undefined),
-    maps:remove(routing_pin, Route#{pin_data => gather_pin_info(Pin, Ctx)}).
-
-gather_pin_info(undefined, _Ctx) ->
-    #{};
-gather_pin_info(#domain_RoutingPin{features = Features}, Ctx) ->
-    FeaturesList = ordsets:to_list(Features),
-    lists:foldl(
-        fun(Feature, Acc) ->
-            Acc#{Feature => maps:get(Feature, Ctx, undefined)}
-        end,
-        #{},
-        FeaturesList
-    ).
 
 -spec fill_blacklist(hg_inspector:blacklist_context(), [hg_route:t()]) -> [hg_route:t()].
 fill_blacklist(_BlCtx, []) ->
@@ -524,7 +488,7 @@ test_route(N) ->
         #domain_TerminalRef{id = N},
         ?DOMAIN_CANDIDATE_WEIGHT,
         ?DOMAIN_CANDIDATE_PRIORITY,
-        undefined
+        0
     ).
 
 -endif.

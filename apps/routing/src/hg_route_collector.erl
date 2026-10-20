@@ -143,7 +143,7 @@ make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity) 
         TerminalRef,
         stored_weight(Weight),
         stored_priority(Priority),
-        #{}
+        0
     ),
     Route#{affinity => Affinity, routing_pin => Pin}.
 

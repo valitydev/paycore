@@ -17,7 +17,7 @@
     revision := hg_route:revision(),
     varset := hg_payment_routing:varset(),
     payment_institution := hg_payment_routing:payment_institution(),
-    pin_context := hg_payment_routing:gather_route_context(),
+    pin_context := hg_payment_route_pin:context(),
     blacklist_context => hg_inspector:blacklist_context()
 }.
 
@@ -89,7 +89,7 @@ get_routes(
         #{routes := Routes0} = hg_route_collector:get_routes(
             Revision, VS, RoutingRules, hg_payment_routing
         ),
-    Routes1 = hg_payment_routing:enrich_pins(Routes0, PinCtx),
+    Routes1 = hg_payment_route_pin:fill(Routes0, PinCtx),
     Routes2 = hg_payment_routing:fill_accepted(Predestination, Revision, VS, Routes1),
     Routes3 = hg_payment_routing:fill_fd_overrides(Revision, Routes2),
     Routes4 =
@@ -438,7 +438,9 @@ new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}) ->
     new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}, #{}).
 
 new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}, Pin) ->
-    Route0 = hg_route:new(1, ?prv(PNum), ?trm(TNum), Weight, ?DOMAIN_CANDIDATE_PRIORITY, Pin),
+    Route0 = hg_route:new(
+        1, ?prv(PNum), ?trm(TNum), Weight, ?DOMAIN_CANDIDATE_PRIORITY, hg_payment_route_pin:hash(Pin)
+    ),
     Route1 = hg_route:set_availability(ACond, AValue, Route0),
     hg_route:set_conversion(CCond, CValue, Route1).
 
@@ -488,7 +490,7 @@ filter_routes_splits_accepted_and_rejected_test() ->
 
 -spec preferable_route_scoring_test_() -> [testcase()].
 preferable_route_scoring_test_() ->
-    RouteFallback0 = hg_route:new(1, ?prv(2), ?trm(99), 0, 0, #{}),
+    RouteFallback0 = hg_route:new(1, ?prv(2), ?trm(99), 0, 0, 0),
     RouteFallback1 = hg_route:set_availability(1, 1.0, RouteFallback0),
     RouteFallback2 = hg_route:set_conversion(1, 1.0, RouteFallback1),
     [
@@ -582,9 +584,9 @@ prefer_priority_over_conversion_test() ->
 
 -spec balance_surviving_routes_test() -> _.
 balance_surviving_routes_test() ->
-    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
-    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
-    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
+    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0)),
+    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, 0),
+    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, 0),
     _ = rand:seed(exsss, {31, 41, 59}),
     Chosen = lists:map(
         fun(_) ->

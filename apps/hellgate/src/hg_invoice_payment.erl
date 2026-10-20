@@ -4460,7 +4460,7 @@ filter_attempted_routes_test_() ->
             #domain_TerminalRef{id = 307},
             20,
             1000,
-            #{client_ip => <<127, 0, 0, 1>>}
+            hg_payment_route_pin:hash(#{client_ip => <<127, 0, 0, 1>>})
         ),
         hg_route:new(
             1,
@@ -4468,7 +4468,7 @@ filter_attempted_routes_test_() ->
             #domain_TerminalRef{id = 344},
             80,
             1000,
-            #{}
+            0
         ),
         hg_route:new(
             1,
@@ -4476,7 +4476,7 @@ filter_attempted_routes_test_() ->
             #domain_TerminalRef{id = 227},
             1,
             2000,
-            #{client_ip => undefined}
+            hg_payment_route_pin:hash(#{client_ip => undefined})
         )
     ],
     [
@@ -4642,7 +4642,7 @@ terminal_affinities_snapshot_test_() ->
 
 -dialyzer({nowarn_function, terminal_affinities_snapshot/0}).
 terminal_affinities_snapshot() ->
-    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{}))#{affinity => #domain_RoutingAffinity{}},
+    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0))#{affinity => #domain_RoutingAffinity{}},
     GetResult = #{routes => [Route]},
     St = (customer_finalization_state())#st{activity = {payment, processing_failure}},
     ok = meck:expect(hg_customer_client, get_terminal_affinities, fun(_) -> [] end),
@@ -4756,7 +4756,7 @@ route_affinity_replay() ->
     ?assertEqual(Before + 1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')).
 
 replay_route_affinity(Affinity, St) ->
-    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{}))#{affinity => Affinity},
+    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0))#{affinity => Affinity},
     replay_route_decision(build_route_decision_context(Route, 1), St).
 
 replay_route_decision(Decision, St) ->

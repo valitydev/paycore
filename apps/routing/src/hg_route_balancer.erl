@@ -83,7 +83,7 @@ calc_random_condition(StartFrom, Random, [Route | Rest], Routes) ->
 -define(trm(ID), #domain_TerminalRef{id = ID}).
 
 balanced_test_route(ProviderId, Weight) ->
-    hg_route:new(1, ?prv(ProviderId), ?trm(1), Weight, ?DOMAIN_CANDIDATE_PRIORITY, #{}).
+    hg_route:new(1, ?prv(ProviderId), ?trm(1), Weight, ?DOMAIN_CANDIDATE_PRIORITY, 0).
 
 -spec balance_routes_test_() -> [testcase()].
 balance_routes_test_() ->
@@ -119,12 +119,12 @@ balance_routes_test_() ->
 -spec balance_routes_with_default_weight_test_() -> testcase().
 balance_routes_with_default_weight_test_() ->
     Routes = [
-        hg_route:new(1, ?prv(1), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, #{}),
-        hg_route:new(1, ?prv(2), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, #{})
+        hg_route:new(1, ?prv(1), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, 0),
+        hg_route:new(1, ?prv(2), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, 0)
     ],
     Result = [
-        hg_route:new(1, ?prv(1), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, #{}),
-        hg_route:new(1, ?prv(2), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, #{})
+        hg_route:new(1, ?prv(1), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, 0),
+        hg_route:new(1, ?prv(2), ?trm(1), 0, ?DOMAIN_CANDIDATE_PRIORITY, 0)
     ],
     ?_assertEqual(Result, set_routes_random_condition(Routes)).
 

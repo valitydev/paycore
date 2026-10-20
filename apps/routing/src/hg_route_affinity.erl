@@ -112,7 +112,7 @@ rank_scale_is_shared() ->
         last_used_at = <<"2000-01-01T00:00:00Z">>
     },
     Route = fun(ID, Ttl) ->
-        (hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = ID}, 50, 0, #{}))#{
+        (hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = ID}, 50, 0, 0))#{
             affinity => #domain_RoutingAffinity{ttl = Ttl}
         }
     end,
@@ -135,7 +135,7 @@ per_candidate_ttl() ->
         last_used_at = <<"2000-01-01T00:00:00Z">>
     },
     Route = fun(Ttl) ->
-        (hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 1}, 50, 0, #{}))#{
+        (hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 1}, 50, 0, 0))#{
             affinity => #domain_RoutingAffinity{ttl = Ttl}
         }
     end,
@@ -149,7 +149,7 @@ per_candidate_ttl() ->
     ?assertEqual(1, RankEternal).
 
 test_route(ID) ->
-    (hg_route:new(1, #domain_ProviderRef{id = ID}, #domain_TerminalRef{id = ID}, 50, 0, #{}))#{
+    (hg_route:new(1, #domain_ProviderRef{id = ID}, #domain_TerminalRef{id = ID}, 50, 0, 0))#{
         affinity => #domain_RoutingAffinity{}
     }.
 
