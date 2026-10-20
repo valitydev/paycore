@@ -9,7 +9,7 @@
 ## Оценка плана
 
 Направление верное: общий collector/filter/chooser, отдельные адаптеры terms и limiter,
-балансировка отдельным изменением трафика. Основной риск — жизненный цикл hold и восстановление исходной iteration.
+балансировка через priority и weight в ruleset. Основной риск — жизненный цикл hold и восстановление исходной iteration.
 
 При сверке с кодом обнаружены пробелы, которые нужно закрыть до реализации журнала:
 
@@ -150,6 +150,10 @@ Hold выполняется на кандидатах, затем выбирае
 
 ### Какие данные нужны в истории
 
+Внутренние события имеют форму `{route_changed, #{route => Route, candidates => Candidates}}`
+и `{rollback_started, #{reason => Failure, candidates => Candidates}}`.
+Кодек сохраняет существующие Thrift-структуры; старое `{route_changed, Route}` поддерживается при чтении.
+
 - `RouteChange.candidates`: учётные маршруты после hold, до отсева overflow, включая невыбранных.
 - `RollbackStartedChange.reason`: отказ выбранной попытки; маршрут уже есть в state.
 - `RollbackStartedChange.candidates`: optional список при отказе routing до выбора маршрута,
@@ -285,12 +289,13 @@ TransferChange не расширяется, нового routing/учёта ка
 `fill/1` заменяет исходный weight на bucket `0/1`; исходные веса для диагностики хранить отдельно.
 Платёжные поля FD/pin/affinity у выплат имеют нейтральные значения и не обогащаются payment callbacks.
 
-Это отдельное изменение трафика. Согласовать ruleset и включать явным флагом с ограниченным rollout.
+Balancer активен с момента выкатки, без feature flag. Распределение трафика задаётся конфигурацией
+ruleset: сначала выбирается максимальный priority, веса действуют внутри группы с одинаковым priority.
 Проверить `weight=0`, все веса нулевые, недопустимые веса, дубли и tie-break: текущий chooser при равном
 score сохраняет первый маршрут, а старый sort выбирает меньший `{provider_id, terminal_id}`.
 При всех нулевых весах явно сохранить старый порядок; weight=0 не означает запрет маршрута вообще.
 
-Первое включение balancer — только для новых раундов **без quote** после подтверждения совместимости hold-retry. `GetQuote` и выплаты с quote
+Balancer применяется к новым раундам **без quote**. Совместимость hold-retry проверить до выкатки. `GetQuote` и выплаты с quote
 сохраняют прежний selector и `validate_quote_route`. Независимые случайные выборы при выдаче quote
 и при исполнении дадут ложные mismatch даже при неизменных candidates. Балансировку quoted-выплат
 рассматривать отдельно: выбранный при quote маршрут потребуется закреплять при исполнении,
@@ -359,7 +364,7 @@ Eunit уже закрывает choose/balancer/ctx/equality:
 
 **Пересадить** на `hg_route_collector` / адаптер (новый `ff_withdrawal_routing` unit или CT в `apps/routing`). После удаления `ff_routing_rule` сьюит с тем же именем не нужен — сценарии важны.
 
-Eunit `convert_to_route_test` / `sort_routes` в [`ff_withdrawal_routing.erl`](../apps/ff_transfer/src/ff_withdrawal_routing.erl): до этапа 4 **оставить** (контракт детерминированного выбора); после balancer — добавить контракт priority+weight, оставив проверку старого порядка для выключенного флага и всех нулевых весов.
+Eunit `convert_to_route_test` / `sort_routes` в [`ff_withdrawal_routing.erl`](../apps/ff_transfer/src/ff_withdrawal_routing.erl): **оставить** контракт детерминированного выбора для quote и всех нулевых весов; добавить контракт priority+weight для баланса внутри одного priority.
 
 ### Интеграция выплаты — оставить, усилить ассертами
 
@@ -404,7 +409,7 @@ Codec: **дописать** round-trip RouteChange.candidates и RollbackStarted
 
 ### Дописать (нет покрытия)
 
-Пункты 1–4 и 6–10 — до включения нового writer, пункт 5 — до balancer, пункт 11 — до удаления legacy rollback.
+Пункты 1–10 — до выкатки нового writer и balancer, пункт 11 — до удаления legacy rollback.
 RPC/crash-сценарии проверять process/apply_event тестами с контролируемым limiter, денежные эффекты — CT.
 
 1. **Повтор hold до записи результата**
@@ -432,7 +437,7 @@ RPC/crash-сценарии проверять process/apply_event тестами
 
    Разные priority, веса одной группы, 0:100, все нули и tie-break; управляемая случайная величина/seed.
    После записи chosen неизменен; до записи допустим повторный выбор без второго hold.
-   Quote и выключенный balancer сохраняют прежний selector.
+   Quote и все нулевые веса сохраняют прежний selector; разные priority имеют преимущество перед весами.
 
 6. **Совместимость событий**
 
@@ -506,9 +511,9 @@ Iteration для limiter восстанавливается при replay на �
 | --- | --- |
 | A. Readers | Proto/codec/replay candidates и rollback_started. Writer пока прежний |
 | B. Исполнение | Новый cleanup по candidates, исходная iteration в производном state, legacy fallback; terms/context по-прежнему в runtime |
-| C. Writer | Постепенно включаем запись candidates/rollback_started; balancer выключен |
+| C. Writer | Запись candidates/rollback_started и balancer без quote активны с выкатки |
 | D. Расширение | Увеличиваем долю после проверки hold-retry, cleanup и старых активных машин |
-| E. Balancer | Отдельное изменение выбора без quote |
+| E. Настройка распределения | Доли трафика задаются priority и weight в ruleset |
 
 До C все обработчики timeout/notification/repair/adjustment и потребители GetEvents должны понимать
 новые данные. Настройка writer — эксплуатационное управление, не сохраняемый режим машины.
@@ -542,13 +547,13 @@ ff_withdrawal_machine нет; инвентаризация нужна до уд�
 | 3 | Отвязка apps/routing, payment adapter; выплаты ещё на ff_routing_rule | Платёжный регресс, нет обратных зависимостей |
 | 4 | Выплаты на collector + terms callback, удаление ff_routing_rule | Выбор, запросы hold и схема ids сохранены |
 | 5 | Candidates, rollback intent, исходная iteration в state, legacy cleanup | Идемпотентность и совместимость повторного шага подтверждены |
-| 6 | Balancer в выплатах без quote | Отдельный rollout трафика |
+| 6 | Balancer в выплатах без quote | Активен с выкатки; распределение задают priority и weight |
 | 7 (условно) | Удаление legacy gather на rollback | Нет старых незавершённых операций без candidates; решены adjustment/repair |
 
 Антифрод/FD — отдельно. Наблюдать pending cleanup, limiter errors/retries, reject/fail и доли balancer;
-не использовать withdrawal id в labels. Выключение balancer не пересчитывает сохранённый chosen.
+не использовать withdrawal id в labels. Изменение priority/weight не пересчитывает сохранённый chosen.
 
-## Критерий готовности этапа 3 (candidates, до balancer)
+## Критерий готовности этапа 3 (candidates)
 
 - Нет production-вызовов и remote types ff_routing_rule; routing не зависит от hellgate-модулей/headers/env.
 - Повтор hold до события сохраняет ids/параметры и не удваивает резервирование.

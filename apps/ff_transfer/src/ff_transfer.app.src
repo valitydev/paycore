@@ -15,9 +15,7 @@
         routing,
         limiter_proto
     ]},
-    {env, [
-        {withdrawal_route_balancer, false}
-    ]},
+    {env, []},
     {modules, []},
     {maintainers, []},
     {licenses, []},

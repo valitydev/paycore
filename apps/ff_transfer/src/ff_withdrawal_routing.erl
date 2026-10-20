@@ -242,16 +242,14 @@ select_routes(#{routes := []} = State, _Opts) ->
     routes(State);
 select_routes(#{routes := Routes} = State, Opts) ->
     HasQuote = maps:get(has_quote, Opts, false),
-    case {HasQuote, balancer_enabled(), has_negative_weight(Routes), all_zero_weights(Routes)} of
-        {true, _, _, _} ->
+    case {HasQuote, has_negative_weight(Routes), all_zero_weights(Routes)} of
+        {true, _, _} ->
             routes(State);
-        {false, false, _, _} ->
-            routes(State);
-        {false, true, true, _} ->
+        {false, true, _} ->
             {error, {misconfiguration, {negative_weight, Routes}}};
-        {false, true, false, true} ->
+        {false, false, true} ->
             routes(State);
-        {false, true, false, false} ->
+        {false, false, false} ->
             choose_balanced(Routes, maps:get(domain_revision, Opts))
     end.
 
@@ -265,9 +263,6 @@ get_routes(#{routes := Routes}) ->
             terminal_ref := #domain_TerminalRef{id = T}
         } <- Routes
     ].
-
-balancer_enabled() ->
-    genlib_app:env(ff_transfer, withdrawal_route_balancer, false) =:= true.
 
 has_negative_weight(Routes) ->
     lists:any(
@@ -676,152 +671,121 @@ convert_to_route_test() ->
         ])
     ).
 
--spec withdrawal_balancer_disabled_sort_test() -> _.
-withdrawal_balancer_disabled_sort_test() ->
-    with_balancer_flag(
-        false,
-        fun() ->
-            with_chooser_mocks(fun() ->
-                State = test_select_state([
-                    test_rule_route(2, 20, 1000, 100),
-                    test_rule_route(1, 10, 1000, 1)
-                ]),
-                {ok, Chosen} = select_routes(State, #{has_quote => false, domain_revision => 1}),
-                ?assertEqual(
-                    [
-                        #{provider_id => 1, terminal_id => 10, version => 1},
-                        #{provider_id => 2, terminal_id => 20, version => 1}
-                    ],
-                    Chosen
-                ),
-                ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-            end)
-        end
-    ).
+-spec withdrawal_balancer_priority_test() -> _.
+withdrawal_balancer_priority_test() ->
+    with_chooser_mocks(fun() ->
+        State = test_select_state([
+            test_rule_route(1, 10, 900, 100),
+            test_rule_route(2, 20, 1000, 0)
+        ]),
+        ?assertEqual(
+            {ok, [#{provider_id => 2, terminal_id => 20, version => 1}]},
+            select_routes(State, #{has_quote => false, domain_revision => 1})
+        )
+    end).
 
 -spec withdrawal_balancer_all_zero_weights_test() -> _.
 withdrawal_balancer_all_zero_weights_test() ->
-    with_balancer_flag(
-        true,
-        fun() ->
-            with_chooser_mocks(fun() ->
-                State = test_select_state([
-                    test_rule_route(2, 2, 900, 0),
-                    test_rule_route(1, 1, 1000, 0),
-                    test_rule_route(1, 2, 1000, 0)
-                ]),
-                {ok, Chosen} = select_routes(State, #{has_quote => false, domain_revision => 1}),
-                ?assertEqual(
-                    [
-                        #{provider_id => 1, terminal_id => 1, version => 1},
-                        #{provider_id => 1, terminal_id => 2, version => 1},
-                        #{provider_id => 2, terminal_id => 2, version => 1}
-                    ],
-                    Chosen
-                ),
-                ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-            end)
-        end
-    ).
+    with_chooser_mocks(fun() ->
+        State = test_select_state([
+            test_rule_route(2, 2, 900, 0),
+            test_rule_route(1, 1, 1000, 0),
+            test_rule_route(1, 2, 1000, 0)
+        ]),
+        {ok, Chosen} = select_routes(State, #{has_quote => false, domain_revision => 1}),
+        ?assertEqual(
+            [
+                #{provider_id => 1, terminal_id => 1, version => 1},
+                #{provider_id => 1, terminal_id => 2, version => 1},
+                #{provider_id => 2, terminal_id => 2, version => 1}
+            ],
+            Chosen
+        ),
+        ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+        ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
+    end).
 
 -spec withdrawal_balancer_quote_keeps_sort_test() -> _.
 withdrawal_balancer_quote_keeps_sort_test() ->
-    with_balancer_flag(
-        true,
-        fun() ->
-            with_chooser_mocks(fun() ->
-                State = test_select_state([
-                    test_rule_route(2, 20, 1000, 100),
-                    test_rule_route(1, 10, 1000, 1)
-                ]),
-                {ok, Chosen} = select_routes(State, #{has_quote => true, domain_revision => 1}),
-                ?assertEqual(
-                    [
-                        #{provider_id => 1, terminal_id => 10, version => 1},
-                        #{provider_id => 2, terminal_id => 20, version => 1}
-                    ],
-                    Chosen
-                ),
-                ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-            end)
-        end
-    ).
+    with_chooser_mocks(fun() ->
+        State = test_select_state([
+            test_rule_route(2, 20, 1000, 100),
+            test_rule_route(1, 10, 1000, 1)
+        ]),
+        {ok, Chosen} = select_routes(State, #{has_quote => true, domain_revision => 1}),
+        ?assertEqual(
+            [
+                #{provider_id => 1, terminal_id => 10, version => 1},
+                #{provider_id => 2, terminal_id => 20, version => 1}
+            ],
+            Chosen
+        ),
+        ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+        ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
+    end).
 
--spec withdrawal_balancer_enabled_after_filters_test() -> _.
-withdrawal_balancer_enabled_after_filters_test() ->
-    with_balancer_flag(
-        true,
+-spec withdrawal_balancer_after_filters_test() -> _.
+withdrawal_balancer_after_filters_test() ->
+    with_collector_mocks(
+        fun weighted_compute/3,
+        fun default_resolve/2,
+        fun limited_terms/4,
         fun() ->
-            with_collector_mocks(
-                fun weighted_compute/3,
-                fun default_resolve/2,
-                fun limited_terms/4,
-                fun() ->
-                    meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
-                    meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
-                    Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
-                    Gathered = gather_routes(test_varset(), Context),
-                    ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                    ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
-                    Overflow = filter_limit_overflow_routes(Gathered, test_varset(), Context),
-                    ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                    ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
-                    Result = select_routes(Overflow, #{has_quote => false, domain_revision => 1}),
-                    ?assertMatch({ok, [_]}, Result),
-                    ?assertEqual(1, meck:num_calls(hg_route_balancer, fill, '_')),
-                    ?assertEqual(1, meck:num_calls(hg_routing, choose_route, '_'))
-                end
-            )
+            meck:expect(ff_limiter, hold_withdrawal_limits, fun(_, _, _, _) -> ok end),
+            meck:expect(ff_limiter, check_limits, fun(_, _, _, _) -> {ok, []} end),
+            Context = (test_context())#{withdrawal => ff_withdrawal:test_withdrawal_state()},
+            Gathered = gather_routes(test_varset(), Context),
+            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
+            Overflow = filter_limit_overflow_routes(Gathered, test_varset(), Context),
+            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_')),
+            Result = select_routes(Overflow, #{has_quote => false, domain_revision => 1}),
+            ?assertMatch({ok, [_]}, Result),
+            ?assertEqual(1, meck:num_calls(hg_route_balancer, fill, '_')),
+            ?assertEqual(1, meck:num_calls(hg_routing, choose_route, '_'))
         end
     ).
 
 -spec withdrawal_balancer_weights_test() -> _.
 withdrawal_balancer_weights_test() ->
-    with_balancer_flag(
-        true,
-        fun() ->
-            with_chooser_mocks(fun() ->
-                _ = rand:seed(exsss, {1, 2, 3}),
-                ZeroKept = test_select_state([
-                    test_rule_route(1, 1, 1000, 0),
-                    test_rule_route(2, 2, 1000, 100)
-                ]),
-                meck:expect(hg_route_balancer, fill, fun(Routes) ->
-                    put(fill_args, Routes),
-                    meck:passthrough([Routes])
-                end),
-                {ok, [Chosen]} = select_routes(ZeroKept, #{has_quote => false, domain_revision => 7}),
-                Filled = get(fill_args),
-                ?assertEqual(2, length(Filled)),
-                ?assertEqual(
-                    true,
-                    lists:any(fun(Route) -> hg_route:weight(Route) =:= 0 end, Filled)
-                ),
-                ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, Chosen),
-                HighPriority = test_select_state([
-                    test_rule_route(1, 1, 100, 100),
-                    test_rule_route(2, 2, 1000, 1)
-                ]),
-                {ok, [PriorityChosen]} = select_routes(HighPriority, #{has_quote => false, domain_revision => 7}),
-                ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, PriorityChosen),
-                Negative = test_select_state([
-                    test_rule_route(1, 1, 1000, 10),
-                    test_rule_route(2, 2, 1000, -1)
-                ]),
-                FillCalls = meck:num_calls(hg_route_balancer, fill, '_'),
-                ChooseCalls = meck:num_calls(hg_routing, choose_route, '_'),
-                ?assertEqual(
-                    {error, {misconfiguration, {negative_weight, maps:get(routes, Negative)}}},
-                    select_routes(Negative, #{has_quote => false, domain_revision => 7})
-                ),
-                ?assertEqual(FillCalls, meck:num_calls(hg_route_balancer, fill, '_')),
-                ?assertEqual(ChooseCalls, meck:num_calls(hg_routing, choose_route, '_'))
-            end)
-        end
-    ).
+    with_chooser_mocks(fun() ->
+        _ = rand:seed(exsss, {1, 2, 3}),
+        ZeroKept = test_select_state([
+            test_rule_route(1, 1, 1000, 0),
+            test_rule_route(2, 2, 1000, 100)
+        ]),
+        meck:expect(hg_route_balancer, fill, fun(Routes) ->
+            put(fill_args, Routes),
+            meck:passthrough([Routes])
+        end),
+        {ok, [Chosen]} = select_routes(ZeroKept, #{has_quote => false, domain_revision => 7}),
+        Filled = get(fill_args),
+        ?assertEqual(2, length(Filled)),
+        ?assertEqual(
+            true,
+            lists:any(fun(Route) -> hg_route:weight(Route) =:= 0 end, Filled)
+        ),
+        ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, Chosen),
+        HighPriority = test_select_state([
+            test_rule_route(1, 1, 100, 100),
+            test_rule_route(2, 2, 1000, 1)
+        ]),
+        {ok, [PriorityChosen]} = select_routes(HighPriority, #{has_quote => false, domain_revision => 7}),
+        ?assertEqual(#{provider_id => 2, terminal_id => 2, version => 1}, PriorityChosen),
+        Negative = test_select_state([
+            test_rule_route(1, 1, 1000, 10),
+            test_rule_route(2, 2, 1000, -1)
+        ]),
+        FillCalls = meck:num_calls(hg_route_balancer, fill, '_'),
+        ChooseCalls = meck:num_calls(hg_routing, choose_route, '_'),
+        ?assertEqual(
+            {error, {misconfiguration, {negative_weight, maps:get(routes, Negative)}}},
+            select_routes(Negative, #{has_quote => false, domain_revision => 7})
+        ),
+        ?assertEqual(FillCalls, meck:num_calls(hg_route_balancer, fill, '_')),
+        ?assertEqual(ChooseCalls, meck:num_calls(hg_routing, choose_route, '_'))
+    end).
 
 -spec prepare_routes_no_hold_test() -> _.
 prepare_routes_no_hold_test() ->
@@ -850,21 +814,16 @@ prepare_routes_no_withdrawal_state_test() ->
 
 -spec prepare_routes_no_candidates_journal_test() -> _.
 prepare_routes_no_candidates_journal_test() ->
-    with_balancer_flag(
-        true,
+    with_collector_mocks(
+        fun default_compute/3,
+        fun default_resolve/2,
+        fun default_terms/4,
         fun() ->
-            with_collector_mocks(
-                fun default_compute/3,
-                fun default_resolve/2,
-                fun default_terms/4,
-                fun() ->
-                    Result = prepare_routes(test_varset(), test_context()),
-                    ?assertMatch({ok, [_ | _]}, Result),
-                    ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
-                    ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
-                    ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
-                end
-            )
+            Result = prepare_routes(test_varset(), test_context()),
+            ?assertMatch({ok, [_ | _]}, Result),
+            ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
+            ?assertEqual(0, meck:num_calls(hg_route_balancer, fill, '_')),
+            ?assertEqual(0, meck:num_calls(hg_routing, choose_route, '_'))
         end
     ).
 
@@ -1017,20 +976,6 @@ assert_weight_priority(#{routes := Routes}) ->
         end,
         Routes
     ).
-
-with_balancer_flag(Flag, Fun) ->
-    Prev = application:get_env(ff_transfer, withdrawal_route_balancer),
-    ok = application:set_env(ff_transfer, withdrawal_route_balancer, Flag),
-    try
-        Fun()
-    after
-        case Prev of
-            undefined ->
-                application:unset_env(ff_transfer, withdrawal_route_balancer);
-            {ok, Value} ->
-                application:set_env(ff_transfer, withdrawal_route_balancer, Value)
-        end
-    end.
 
 with_chooser_mocks(Fun) ->
     meck:new(hg_route_balancer, [passthrough, no_link, unstick]),
