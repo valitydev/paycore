@@ -743,7 +743,7 @@ choice_context_formats_ok(_C) ->
                 weight := ?DOMAIN_CANDIDATE_WEIGHT
             }
         },
-        hg_payment_routing:get_logger_metadata(Context, Revision)
+        hg_routing:get_logger_metadata(Context, Revision)
     ).
 
 -spec empty_terms_allow_test(config()) -> test_return().
@@ -1081,7 +1081,7 @@ to_rejected_routes(Rejections) when is_map(Rejections) ->
     [hg_route:to_rejected_route(R) || {_Group, Routes} <- maps:to_list(Rejections), R <- Routes].
 
 get_routes(Predestination, PaymentInstitution, VS, Revision, Ctx) ->
-    hg_payment_routing:get_routes(#{
+    hg_routing:get_routes(#{
         predestination => Predestination,
         revision => Revision,
         varset => VS,
