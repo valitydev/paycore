@@ -1,6 +1,5 @@
 -module(hg_route).
 
--include_lib("hellgate/include/domain.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export([new/6]).
@@ -21,7 +20,6 @@
 -export([provider_ref/1]).
 -export([priority/1]).
 -export([weight/1]).
--export([pin/1]).
 -export([affinity/1]).
 -export([set_affinity_rank/2]).
 -export([affinity_rank/1]).
@@ -37,14 +35,17 @@
 
 -export([from_payment_route/2]).
 -export([to_payment_route/1]).
+-export([to_withdrawal_route/1]).
 -export([to_rejected_route/1]).
 
 %%
 
--type revision() :: hg_domain:revision().
+-type revision() :: integer().
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 -type payment_route() :: dmsl_domain_thrift:'PaymentRoute'().
+-type withdrawal_route() :: ff_withdrawal_routing:route().
+-type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'() | undefined.
 
 -type fd_overrides() :: dmsl_domain_thrift:'RouteFaultDetectorOverrides'().
 -type route_rejection_reason() :: {atom(), term()} | {atom(), term(), term()}.
@@ -55,11 +56,12 @@
     provider_ref := dmsl_domain_thrift:'ProviderRef'(),
     terminal_ref := dmsl_domain_thrift:'TerminalRef'(),
     route_data := route_data(),
-    pin_data => pin_data(),
+    pin_hash => non_neg_integer(),
+    routing_pin => dmsl_domain_thrift:'RoutingPin'() | undefined,
     affinity => dmsl_domain_thrift:'RoutingAffinity'() | undefined,
     fd_overrides => fd_overrides(),
     rejection_reason => route_rejection_reason(),
-    exchange_context => hg_invoice_payment:exchange_context()
+    exchange_context => exchange_context()
 }.
 
 -type fd_score() :: #{
@@ -84,34 +86,22 @@
     blacklisted => blacklist_condition()
 }.
 
--type currency() :: dmsl_domain_thrift:'CurrencyRef'().
--type payment_tool() :: dmsl_domain_thrift:'PaymentTool'().
--type client_ip() :: dmsl_domain_thrift:'IPAddress'().
--type email() :: binary().
--type card_token() :: dmsl_domain_thrift:'Token'().
-
--type pin_data() :: #{
-    currency => currency(),
-    payment_tool => payment_tool(),
-    client_ip => client_ip() | undefined,
-    email => email() | undefined,
-    card_token => card_token() | undefined
-}.
-
 -type score() :: #domain_PaymentRouteScores{}.
 
 -export_type([t/0]).
+-export_type([revision/0]).
 -export_type([route_data/0]).
 -export_type([provider_ref/0]).
 -export_type([terminal_ref/0]).
 -export_type([payment_route/0]).
 -export_type([rejected_route/0]).
 -export_type([score/0]).
+-export_type([exchange_context/0]).
 
 %%
 
--spec new(revision(), provider_ref(), terminal_ref(), integer(), integer(), pin_data() | undefined) -> t().
-new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
+-spec new(revision(), provider_ref(), terminal_ref(), integer(), integer(), non_neg_integer()) -> t().
+new(Revision, ProviderRef, TerminalRef, Weight, Priority, PinHash) ->
     #{
         revision => Revision,
         provider_ref => ProviderRef,
@@ -130,7 +120,7 @@ new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
             affinity_rank => 0,
             blacklisted => 0
         },
-        pin_data => Pin
+        pin_hash => PinHash
     }.
 
 -spec set_fd_overrides(fd_overrides(), t()) ->
@@ -181,7 +171,7 @@ set_priority(V, #{route_data := Data} = R) ->
 set_rejection_reason(Reason, R) ->
     R#{rejection_reason => Reason}.
 
--spec set_exchange_context(hg_invoice_payment:exchange_context() | undefined, t()) ->
+-spec set_exchange_context(exchange_context(), t()) ->
     t().
 set_exchange_context(undefined, R) ->
     R;
@@ -220,15 +210,9 @@ set_affinity_rank(Rank, #{route_data := Data} = R) ->
 affinity_rank(#{route_data := Data}) ->
     maps:get(affinity_rank, Data, 0).
 
--spec pin(t()) -> pin_data() | undefined.
-pin(#{pin_data := Pin}) ->
-    Pin.
-
 -spec pin_hash(t()) -> non_neg_integer().
-pin_hash(#{pin_data := Pin}) when map_size(Pin) > 0 ->
-    erlang:phash2(Pin);
-pin_hash(_) ->
-    0.
+pin_hash(Route) ->
+    maps:get(pin_hash, Route, 0).
 
 -spec fd_overrides(t()) -> fd_overrides().
 fd_overrides(#{fd_overrides := FdOverrides}) ->
@@ -254,7 +238,7 @@ rejection_reason(#{rejection_reason := V}) ->
 rejection_reason(_) ->
     undefined.
 
--spec exchange_context(t()) -> hg_invoice_payment:exchange_context() | undefined.
+-spec exchange_context(t()) -> exchange_context().
 exchange_context(#{exchange_context := V}) ->
     V;
 exchange_context(_) ->
@@ -304,13 +288,18 @@ route_ref(_) ->
     undefined.
 
 -spec from_payment_route(revision(), payment_route()) -> t().
-from_payment_route(Revision, Route) ->
-    ?route(ProviderRef, TerminalRef) = Route,
-    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, undefined).
+from_payment_route(Revision, #domain_PaymentRoute{provider = ProviderRef, terminal = TerminalRef}) ->
+    new(Revision, ProviderRef, TerminalRef, ?DOMAIN_CANDIDATE_WEIGHT, ?DOMAIN_CANDIDATE_PRIORITY, 0).
 
 -spec to_payment_route(t()) -> payment_route().
 to_payment_route(Route) ->
-    ?route(provider_ref(Route), terminal_ref(Route)).
+    #domain_PaymentRoute{provider = provider_ref(Route), terminal = terminal_ref(Route)}.
+
+-spec to_withdrawal_route(t()) -> withdrawal_route().
+to_withdrawal_route(Route) ->
+    #domain_ProviderRef{id = ProviderID} = provider_ref(Route),
+    #domain_TerminalRef{id = TerminalID} = terminal_ref(Route),
+    #{version => 1, provider_id => ProviderID, terminal_id => TerminalID}.
 
 -spec to_rejected_route(t()) -> rejected_route().
 to_rejected_route(Route) ->
@@ -327,6 +316,11 @@ to_rejected_route(Route) ->
 
 -spec test() -> _.
 
+-spec from_payment_route_empty_pin_test() -> _.
+from_payment_route_empty_pin_test() ->
+    Route = from_payment_route(1, #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}),
+    ?assertEqual(0, pin_hash(Route)).
+
 -spec routes_equality_test_() -> [_].
 routes_equality_test_() ->
     lists:flatten([
@@ -341,8 +335,8 @@ route_pairs({Prv1, Trm1}, {Prv2, Trm2}) ->
         fun(X) -> X end,
         fun(X) -> {provider_ref(X), terminal_ref(X)} end
     ],
-    A = new(1, Prv1, Trm1, 1, 1, #{}),
-    B = new(1, Prv2, Trm2, 1, 1, #{}),
+    A = new(1, Prv1, Trm1, 1, 1, 0),
+    B = new(1, Prv2, Trm2, 1, 1, 0),
     lists:flatten([[{F1(A), F2(B)} || F1 <- Fs] || F2 <- Fs]).
 
 -endif.

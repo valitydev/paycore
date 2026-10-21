@@ -851,19 +851,19 @@ gather_pinned_route(_C) ->
     },
     ?assert_set_equal(
         [
-            {?trm(1), Ctx, ?fd_overrides(undefined), #{
+            {?trm(1), hg_payment_route_pin:hash(Ctx), ?fd_overrides(undefined), #{
                 availability_condition => 0,
                 availability => fd_value(0.9),
                 conversion_condition => 0,
                 conversion => fd_value(0.9)
             }},
-            {?trm(2), Pin, ?fd_overrides(true), #{
+            {?trm(2), hg_payment_route_pin:hash(Pin), ?fd_overrides(true), #{
                 availability_condition => 1,
                 availability => 1.0,
                 conversion_condition => 1,
                 conversion => 1.0
             }},
-            {?trm(3), Pin, ?fd_overrides(false), #{
+            {?trm(3), hg_payment_route_pin:hash(Pin), ?fd_overrides(false), #{
                 availability_condition => 1,
                 availability => 0.8,
                 conversion_condition => 1,
@@ -871,7 +871,12 @@ gather_pinned_route(_C) ->
             }}
         ],
         [
-            {hg_route:terminal_ref(Route), hg_route:pin(Route), hg_route:fd_overrides(Route), hg_route:fd_score(Route)}
+            {
+                hg_route:terminal_ref(Route),
+                hg_route:pin_hash(Route),
+                hg_route:fd_overrides(Route),
+                hg_route:fd_score(Route)
+            }
          || Route <- Routes
         ]
     ).
@@ -884,7 +889,7 @@ choose_route_w_override(_C) ->
         new_route(Revision, ?prv(2), ?trm(2)),
         new_route(Revision, ?prv(3), ?trm(3))
     ],
-    [Route1, Route2, Route3] = hg_route_fd:fill(hg_route_collector:fill_fd_overrides(Revision, Routes0)),
+    [Route1, Route2, Route3] = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         #{
             availability_condition => 0,
@@ -923,7 +928,7 @@ fd_fill_preserves_route_order(_C) ->
         new_route(Revision, ?prv(1), ?trm(1)),
         new_route(Revision, ?prv(2), ?trm(2))
     ],
-    Routes = hg_route_fd:fill(hg_route_collector:fill_fd_overrides(Revision, Routes0)),
+    Routes = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         [?trm(3), ?trm(1), ?trm(2)],
         [hg_route:terminal_ref(Route) || Route <- Routes]
@@ -1102,7 +1107,7 @@ new_route(Revision, ProviderRef, TerminalRef, Weight, Priority) ->
     new_route(Revision, ProviderRef, TerminalRef, Weight, Priority, #{}).
 
 new_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin) ->
-    hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin).
+    hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, hg_payment_route_pin:hash(Pin)).
 
 set_route_fd_score(Route0, {AvailabilityCondition, Availability}, {ConversionCondition, Conversion}) ->
     Route1 = hg_route:set_availability(AvailabilityCondition, Availability, Route0),
