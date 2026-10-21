@@ -511,8 +511,7 @@ no_route_found_for_payment(_C) ->
 
     Ctx0 = #{
         currency => Currency0,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := [], rejections := Rejected1} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx0
@@ -569,8 +568,7 @@ gather_route_success(_C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := [Route], rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -611,8 +609,7 @@ rejected_by_table_prohibitions(_C) ->
 
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := [], rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -652,8 +649,7 @@ empty_candidate_ok(_C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(2)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     ?assertMatch(
         #{routes := []},
@@ -672,8 +668,7 @@ ruleset_misconfig(_C) ->
 
     Ctx = #{
         currency => ?cur(<<"RUB">>),
-        payment_tool => {payment_terminal, #domain_PaymentTerminal{payment_service = ?pmt_srv(<<"euroset-ref">>)}},
-        client_ip => undefined
+        payment_tool => {payment_terminal, #domain_PaymentTerminal{payment_service = ?pmt_srv(<<"euroset-ref">>)}}
     },
     ?assertMatch(
         {misconfiguration, {routing_decisions, {delegates, []}}},
@@ -704,8 +699,7 @@ routes_selected_with_risk_score(_C, RiskScore, ProviderRefs) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := _} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -773,8 +767,7 @@ do_gather_routes(Revision, ExpectedRouteTerminal, ExpectedRejectedRoutes) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -813,8 +806,7 @@ terminal_priority_for_shop(ShopID, _C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -837,10 +829,7 @@ gather_pinned_route(_C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined,
-        card_token => undefined,
-        email => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
@@ -953,8 +942,7 @@ recurrent_payment_skip_recurrent_terms(_C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
         recurrent_payment, PaymentInstitution, VS, Revision, Ctx
@@ -982,8 +970,7 @@ recurrent_payment_rejected_without_terms(_C) ->
     PaymentInstitution = hg_domain:get(Revision, {payment_institution, ?pinst(1)}),
     Ctx = #{
         currency => Currency,
-        payment_tool => PaymentTool,
-        client_ip => undefined
+        payment_tool => PaymentTool
     },
     #{routes := Routes, rejections := RejectedRoutes} = get_routes(
         recurrent_payment, PaymentInstitution, VS, Revision, Ctx

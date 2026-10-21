@@ -45,7 +45,7 @@
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 -type payment_route() :: dmsl_domain_thrift:'PaymentRoute'().
 -type withdrawal_route() :: ff_withdrawal_routing:route().
--type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'() | undefined.
+-type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'().
 
 -type fd_overrides() :: dmsl_domain_thrift:'RouteFaultDetectorOverrides'().
 -type route_rejection_reason() :: {atom(), term()} | {atom(), term(), term()}.
@@ -57,8 +57,8 @@
     terminal_ref := dmsl_domain_thrift:'TerminalRef'(),
     route_data := route_data(),
     pin_hash => non_neg_integer(),
-    routing_pin => dmsl_domain_thrift:'RoutingPin'() | undefined,
-    affinity => dmsl_domain_thrift:'RoutingAffinity'() | undefined,
+    routing_pin => dmsl_domain_thrift:'RoutingPin'(),
+    affinity => dmsl_domain_thrift:'RoutingAffinity'(),
     fd_overrides => fd_overrides(),
     rejection_reason => route_rejection_reason(),
     exchange_context => exchange_context()
@@ -171,7 +171,7 @@ set_priority(V, #{route_data := Data} = R) ->
 set_rejection_reason(Reason, R) ->
     R#{rejection_reason => Reason}.
 
--spec set_exchange_context(exchange_context(), t()) ->
+-spec set_exchange_context(exchange_context() | undefined, t()) ->
     t().
 set_exchange_context(undefined, R) ->
     R;
@@ -238,7 +238,7 @@ rejection_reason(#{rejection_reason := V}) ->
 rejection_reason(_) ->
     undefined.
 
--spec exchange_context(t()) -> exchange_context().
+-spec exchange_context(t()) -> exchange_context() | undefined.
 exchange_context(#{exchange_context := V}) ->
     V;
 exchange_context(_) ->

@@ -798,13 +798,13 @@ get_routes_(PaymentInstitution, VS, Revision, St) ->
         revision => Revision,
         varset => VS,
         payment_institution => PaymentInstitution,
-        pin_context => #{
+        pin_context => genlib_map:compact(#{
             currency => Currency,
             payment_tool => PaymentTool,
             client_ip => ClientIP,
             email => Email,
             card_token => CardToken
-        },
+        }),
         blacklist_context => #{
             revision => Revision,
             token => CardToken,
@@ -4795,7 +4795,8 @@ route_affinity_replay() ->
     ?assertEqual(Before + 1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')).
 
 replay_route_affinity(Affinity, St) ->
-    Route = (hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0))#{affinity => Affinity},
+    Route0 = hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0),
+    Route = maps:merge(Route0, genlib_map:compact(#{affinity => Affinity})),
     replay_route_decision(build_route_decision_context(Route, 1), St).
 
 replay_route_decision(Decision, St) ->

@@ -8,9 +8,9 @@
 -type context() :: #{
     currency := dmsl_domain_thrift:'CurrencyRef'(),
     payment_tool := dmsl_domain_thrift:'PaymentTool'(),
-    client_ip := dmsl_domain_thrift:'IPAddress'() | undefined,
-    email => binary() | undefined,
-    card_token => dmsl_domain_thrift:'Token'() | undefined
+    client_ip => dmsl_domain_thrift:'IPAddress'(),
+    email => binary(),
+    card_token => dmsl_domain_thrift:'Token'()
 }.
 
 -export_type([context/0]).
@@ -48,7 +48,6 @@ fill_pin_features_test() ->
         currency => #domain_CurrencyRef{symbolic_code = <<"RUB">>},
         payment_tool =>
             {generic, #domain_GenericPaymentTool{payment_service = #domain_PaymentServiceRef{id = <<"test">>}}},
-        client_ip => undefined,
         email => <<"payer@example.com">>
     },
     Pin = #domain_RoutingPin{features = ordsets:from_list([email, card_token])},

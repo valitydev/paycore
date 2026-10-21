@@ -102,8 +102,8 @@
 -type event() ::
     {created, withdrawal()}
     | {resource_got, destination_resource()}
-    | {route_changed, #{route := route(), candidates := routing_candidates()}}
-    | {rollback_started, #{reason := failure(), candidates := routing_candidates()}}
+    | {route_changed, #{route := route(), candidates => routing_candidates()}}
+    | {rollback_started, #{reason := failure(), candidates => routing_candidates()}}
     | {p_transfer, ff_postings_transfer:event()}
     | {limit_check, limit_check_details()}
     | {validation, {sender | receiver, validation_result()}}
@@ -125,7 +125,7 @@
     | {customer, notfound}.
 
 -type route() :: ff_withdrawal_routing:route().
--type routing_candidates() :: undefined | [route()].
+-type routing_candidates() :: [route()].
 -type realm() :: ff_payment_institution:realm().
 
 -type attempts() :: ff_withdrawal_route_attempt_utils:attempts().
@@ -888,11 +888,11 @@ do_process_transfer(compensate_routing_failure, Withdrawal) ->
 -spec process_routing(withdrawal_state()) -> process_result().
 process_routing(Withdrawal) ->
     case do_process_routing(Withdrawal) of
-        {ok, [Route | _Rest], Accounted} ->
+        {ok, {[Route | _Rest], Accounted}} ->
             {timeout, [
                 {route_changed, #{route => Route, candidates => Accounted}}
             ]};
-        {error, Reason, Accounted} ->
+        {error, {Reason, Accounted}} ->
             process_routing_failure(Reason, Accounted, Withdrawal)
     end.
 
@@ -921,7 +921,7 @@ process_compensate_routing_failure(Withdrawal) ->
     {timeout, [{status_changed, {failed, Failure}}]}.
 
 -spec do_process_routing(withdrawal_state()) ->
-    {ok, [route()], [route()]} | {error, Reason, [route()]}
+    {ok, {[route()], routing_candidates()}} | {error, {Reason, routing_candidates()}}
 when
     Reason ::
         ff_withdrawal_routing:route_not_found()
@@ -940,22 +940,22 @@ do_process_routing(Withdrawal) ->
         has_quote => quote(Withdrawal) =/= undefined,
         domain_revision => maps:get(domain_revision, Context)
     },
-    case ff_withdrawal_routing:select_routes(FilterResult, SelectOpts) of
+    Result = do(fun() ->
+        Routes = unwrap(ff_withdrawal_routing:select_routes(FilterResult, SelectOpts)),
+        case quote(Withdrawal) of
+            undefined ->
+                Routes;
+            Quote ->
+                Route = hd(Routes),
+                valid = unwrap(validate_quote_route(Route, Quote)),
+                [Route]
+        end
+    end),
+    case Result of
         {ok, Routes} ->
-            case quote(Withdrawal) of
-                undefined ->
-                    {ok, Routes, Accounted};
-                Quote ->
-                    Route = hd(Routes),
-                    case validate_quote_route(Route, Quote) of
-                        {ok, valid} ->
-                            {ok, [Route], Accounted};
-                        {error, Reason} ->
-                            {error, Reason, Accounted}
-                    end
-            end;
+            {ok, {Routes, Accounted}};
         {error, Reason} ->
-            {error, Reason, Accounted}
+            {error, {Reason, Accounted}}
     end.
 
 do_rollback_routing(ExcludeRoutes0, Withdrawal) ->
@@ -1906,9 +1906,9 @@ process_route_change(Withdrawal, Reason) ->
     case is_failure_transient(Reason, Withdrawal) of
         true ->
             case do_process_routing(Withdrawal) of
-                {ok, Routes, Accounted} ->
+                {ok, {Routes, Accounted}} ->
                     do_process_route_change(Routes, Accounted, Withdrawal, Reason);
-                {error, _GatherReason, Accounted} ->
+                {error, {_GatherReason, Accounted}} ->
                     process_routing_failure(Reason, Accounted, Withdrawal)
             end;
         false ->
@@ -2100,7 +2100,7 @@ get_quote_field(terminal_id, #{route := Route}) ->
 
 -spec apply_event(event() | legacy_event(), ff_maybe:'maybe'(withdrawal_state())) -> withdrawal_state().
 apply_event({route_changed, #{provider_id := _} = Route}, T0) ->
-    apply_event({route_changed, #{route => Route, candidates => undefined}}, T0);
+    apply_event({route_changed, #{route => Route}}, T0);
 apply_event(Ev, T0) ->
     T1 = apply_event_(Ev, T0),
     T2 = save_adjustable_info(Ev, T1),
@@ -2149,19 +2149,26 @@ apply_event_({session_finished, {SessionID, Result}}, T) ->
     update_attempts(R, T);
 apply_event_({body_changed, #{new_body := NewBody}}, T) ->
     T#{new_body => NewBody, p_transfer_rebuild_needed => true};
-apply_event_({route_changed, #{route := Route, candidates := Candidates}}, T0) ->
+apply_event_({route_changed, #{route := Route} = Change}, T0) ->
     R = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(T0)),
-    maps:remove(failure, T0#{
-        route => Route,
-        attempts => R,
-        routing_candidates => Candidates
-    });
-apply_event_({rollback_started, #{reason := Failure, candidates := Candidates}}, T0) when is_list(Candidates) ->
-    T0#{routing_candidates => Candidates, failure => Failure};
-%% Older events also journalled failures of the chosen attempt. Its session
-%% or limit check already holds the failure, and cancellation handles its hold.
-apply_event_({rollback_started, #{candidates := undefined}}, T) ->
-    T;
+    T1 = maps:without([failure, routing_candidates], T0),
+    maps:merge(
+        T1,
+        genlib_map:compact(#{
+            route => Route,
+            attempts => R,
+            routing_candidates => maps:get(candidates, Change, undefined)
+        })
+    );
+apply_event_({rollback_started, #{reason := Failure} = Change}, T) ->
+    case maps:get(candidates, Change, undefined) of
+        Candidates when is_list(Candidates) ->
+            T#{routing_candidates => Candidates, failure => Failure};
+        undefined ->
+            %% Older events journalled failures of the chosen attempt. Its session
+            %% or limit check already holds the failure, and cancellation handles its hold.
+            T
+    end;
 apply_event_({validation, {Part, ValidationResult}}, T) ->
     Validates = maps:get(validation, T, #{}),
     PartValidations = maps:get(Part, Validates, []),
@@ -2376,6 +2383,7 @@ chosen_rollback_iteration_test() ->
             Cancelled,
             apply_event({rollback_started, #{reason => Failure, candidates => undefined}}, Cancelled)
         ),
+        ?assertEqual(Cancelled, apply_event({rollback_started, #{reason => Failure}}, Cancelled)),
         ?assertEqual(2, ff_withdrawal_route_attempt_utils:get_index(attempts(Cancelled))),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Route, 1])),
         {timeout, [{route_changed, #{route := NextRoute}} = NextEvent]} = process_routing(Cancelled),
@@ -2427,13 +2435,22 @@ legacy_routing_cleanup_test() ->
     Chosen = test_route(1, 7),
     Unused = test_route(2, 8),
     with_routing_mocks([Chosen, Unused], fun() ->
-        State = apply_event({route_changed, Chosen}, test_withdrawal_state()),
-        ?assertEqual(undefined, maps:get(routing_candidates, State)),
-        {timeout, CreationEvents} = process_transfer(State),
-        Created = lists:foldl(fun apply_event/2, State, CreationEvents),
-        ?assertMatch(
-            {timeout, [{p_transfer, {status_changed, prepared}}]},
-            process_transfer(Created)
+        lists:foreach(
+            fun(Event) ->
+                State = apply_event(Event, (test_withdrawal_state())#{routing_candidates => [Chosen]}),
+                ?assertNot(maps:is_key(routing_candidates, State)),
+                {timeout, CreationEvents} = process_transfer(State),
+                Created = lists:foldl(fun apply_event/2, State, CreationEvents),
+                ?assertMatch(
+                    {timeout, [{p_transfer, {status_changed, prepared}}]},
+                    process_transfer(Created)
+                )
+            end,
+            [
+                {route_changed, Chosen},
+                {route_changed, #{route => Chosen}},
+                {route_changed, #{route => Chosen, candidates => undefined}}
+            ]
         ),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Unused, 1])),
         ?assertNot(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Chosen, 1]))

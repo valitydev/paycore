@@ -15,7 +15,7 @@
     (dmsl_domain_thrift:'RoutingRulesetRef'(), varset(), revision()) -> {ok, dmsl_domain_thrift:'RoutingRuleset'()}
 ).
 -type resolve_terminal() :: fun(
-    (hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound | _Reason}
+    (hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound}
 ).
 -type validate_candidate() :: fun((dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return()).
 -type callbacks() :: #{
@@ -145,7 +145,7 @@ make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity) 
         stored_priority(Priority),
         0
     ),
-    Route#{affinity => Affinity, routing_pin => Pin}.
+    maps:merge(Route, genlib_map:compact(#{affinity => Affinity, routing_pin => Pin})).
 
 stored_weight(undefined) ->
     ?DOMAIN_CANDIDATE_WEIGHT;
