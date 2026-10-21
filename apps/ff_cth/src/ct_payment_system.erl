@@ -202,7 +202,8 @@ services(Options) ->
         partymgmt => "http://party-management:8022/v1/processing/partymgmt",
         binbase => "http://localhost:8222/binbase",
         limiter => "http://limiter:8022/v1/limiter",
-        party_config => "http://party-management:8022/v1/processing/partymgmt"
+        party_config => "http://party-management:8022/v1/processing/partymgmt",
+        customer_management => "http://cubasty:8022/v1/customer/management"
     },
     maps:get(services, Options, Default).
 
@@ -572,6 +573,10 @@ domain_config(Config, Options) ->
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 33)
                 ),
                 delegate(
+                    condition(cost_in, {1358, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 60)
+                ),
+                delegate(
                     condition(cost_in, {1357, <<"RUB">>}),
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 41)
                 ),
@@ -780,6 +785,16 @@ domain_config(Config, Options) ->
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 33),
             {candidates, [
                 candidate({constant, true}, ?trm(3300))
+            ]}
+        ),
+
+        %% Two candidates carrying turnover limits, used to exercise limits rollback when the body
+        %% has been changed by the provider.
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 60),
+            {candidates, [
+                candidate({constant, true}, ?trm(4100), 1000),
+                candidate({constant, true}, ?trm(6000), 4000)
             ]}
         ),
 
@@ -1313,6 +1328,17 @@ domain_config(Config, Options) ->
         ),
 
         ct_domain:withdrawal_terminal(?trm(4100), ?prv(1), #domain_ProvisionTermSet{
+            wallet = #domain_WalletProvisionTerms{
+                withdrawals = #domain_WithdrawalProvisionTerms{
+                    turnover_limit =
+                        {value, [
+                            ?trnvrlimit(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, 1000000000, Config)
+                        ]}
+                }
+            }
+        }),
+
+        ct_domain:withdrawal_terminal(?trm(6000), ?prv(1), #domain_ProvisionTermSet{
             wallet = #domain_WalletProvisionTerms{
                 withdrawals = #domain_WithdrawalProvisionTerms{
                     turnover_limit =
