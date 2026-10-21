@@ -48,6 +48,7 @@ handle_function_('Create', {InvoiceParams}, _Opts) ->
     },
     MerchantTerms = hg_invoice_utils:compute_shop_terms(DomainRevision, Shop, VS),
     ok = validate_invoice_params(InvoiceParams, Shop, MerchantTerms),
+    ok = validate_client_identity(InvoiceParams),
     ok = ensure_started(InvoiceID, undefined, InvoiceParams, undefined, Mutations, DomainRevision),
     get_invoice_state(get_state(InvoiceID, #{use_cache => false}));
 handle_function_('CreateWithTemplate', {Params}, _Opts) ->
@@ -341,6 +342,18 @@ make_invoice_params(Params) ->
 
 validate_invoice_params(#payproc_InvoiceParams{cost = Cost}, Shop, MerchantTerms) ->
     ok = validate_invoice_cost(Cost, Shop, MerchantTerms),
+    ok.
+
+%% The payer is a Customer of the party of the invoice
+validate_client_identity(#payproc_InvoiceParams{
+    client_identity = #domain_ClientIdentity{customer_id = CustomerID},
+    party_id = PartyConfigRef
+}) ->
+    case hg_customer_client:check_customer(CustomerID, PartyConfigRef) of
+        ok -> ok;
+        {error, not_found} -> throw(#base_InvalidRequest{errors = [<<"Customer not found">>]})
+    end;
+validate_client_identity(#payproc_InvoiceParams{client_identity = undefined}) ->
     ok.
 
 validate_invoice_mutations(#payproc_InvoiceParams{mutations = Mutations, details = Details}) ->
