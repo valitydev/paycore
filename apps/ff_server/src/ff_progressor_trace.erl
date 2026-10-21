@@ -75,11 +75,11 @@ marshal_body(Args) ->
 marshal_event(Domain, Event) ->
     Payload = maps:get(event_payload, Event),
     Timestamped = ff_machine_codec:unmarshal_event(Domain, Payload),
-    Codec = codec(Domain),
     #progressor_trace_TraceEvent{
         event_id = maps:get(event_id, Event),
         event_timestamp = maps:get(event_timestamp, Event),
-        payload = {payload_tag(Domain), Codec:marshal(timestamped_change, Timestamped)}
+        payload =
+            {payload_tag(Domain), ff_codec:marshal(codec(Domain), timestamped_change, Timestamped)}
     }.
 
 payload_tag(withdrawal_session) ->

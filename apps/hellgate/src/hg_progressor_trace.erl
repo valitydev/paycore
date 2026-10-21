@@ -81,10 +81,9 @@ thrift_call(invoice_template, <<"init">>, Args) when is_binary(Args) ->
         _:_ ->
             false
     end;
-thrift_call(_NS, _TaskType, {thrift_call, ServiceName, {Service, Function}, EncodedArgs}) ->
+thrift_call(_NS, _TaskType, {thrift_call, ServiceName, {_Service, Function}, EncodedArgs}) ->
     {Module, Service} = hg_proto:get_service(ServiceName),
-    Type = Module:function_info(Service, Function, params_type),
-    Params = hg_proto_utils:deserialize(Type, EncodedArgs),
+    Params = hg_proto_utils:deserialize_function_args({Module, {Service, Function}}, EncodedArgs),
     {ok, thrift_call_record(to_bin(Service), to_bin(Function), Params)};
 thrift_call(_NS, _TaskType, {{Service, Function}, Args}) ->
     {ok, thrift_call_record(to_bin(Service), to_bin(Function), Args)};
