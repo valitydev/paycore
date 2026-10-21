@@ -819,7 +819,9 @@ do_finished_activity(#{status := {failed, _}}) ->
 do_process_transfer(routing, Withdrawal) ->
     process_routing(Withdrawal);
 do_process_transfer(p_transfer_start, Withdrawal) ->
-    process_p_transfer_creation(Withdrawal);
+    Result = process_p_transfer_creation(Withdrawal),
+    ok = do_rollback_routing([route(Withdrawal)], Withdrawal),
+    Result;
 do_process_transfer(p_transfer_recreate, Withdrawal) ->
     %% route limits already rolled back when p_transfer was cancelled
     %% new route limits with new amount are required
@@ -841,7 +843,6 @@ do_process_transfer(p_transfer_recreate, Withdrawal) ->
     ok = ff_limiter:hold_withdrawal_limits(TurnoverLimits, WithdrawalWithNewBody, Route, IterWithMultiplication),
     process_p_transfer_creation(Withdrawal);
 do_process_transfer(p_transfer_prepare, Withdrawal) ->
-    ok = do_rollback_routing([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:prepare(Tr),
     {timeout, [{p_transfer, Ev} || Ev <- Events]};
