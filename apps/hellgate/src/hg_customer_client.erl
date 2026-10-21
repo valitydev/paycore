@@ -12,6 +12,7 @@
 
 %% Customer operations
 -export([create_customer/1]).
+-export([check_customer/2]).
 -export([get_by_parent_payment/3]).
 -export([get_recurrent_tokens/3]).
 -export([add_payment/4]).
@@ -169,6 +170,14 @@ bind_terminal_affinity(
         {exception, #base_InvalidRequest{errors = Errors}} ->
             _ = logger:error("Terminal affinity bind rejected: ~p", [Errors]),
             {error, invalid_request}
+    end.
+
+%% A Customer that is unknown, or linked to other parties only, is not found in the party
+-spec check_customer(dmsl_customer_thrift:'CustomerID'(), party_ref()) -> ok | {error, not_found}.
+check_customer(CustomerID, PartyRef) ->
+    case call(customer_management, 'Get', {CustomerID, PartyRef}) of
+        {ok, #customer_CustomerState{}} -> ok;
+        {exception, #customer_CustomerNotFound{}} -> {error, not_found}
     end.
 
 %% A Customer deleted mid-payment has no history left to record the payment or the card in,

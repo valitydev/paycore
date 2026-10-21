@@ -118,7 +118,8 @@
     | {inconsistent_currency, {Withdrawal :: currency_id(), Wallet :: currency_id(), Destination :: currency_id()}}
     | {terms, ff_party:validate_withdrawal_creation_error()}
     | {realms_mismatch, {realm(), realm()}}
-    | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}.
+    | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}
+    | {customer, notfound}.
 
 -type route() :: ff_withdrawal_routing:route().
 -type realm() :: ff_payment_institution:realm().
@@ -499,6 +500,7 @@ create(Params) ->
         Terms = ff_party:get_terms(DomainRevision, Wallet, Varset),
 
         valid = unwrap(validate_withdrawal_creation(Terms, Body, Wallet, Destination, Resource)),
+        ok = unwrap(customer, check_client_identity(maps:get(client_identity, Params, undefined), PartyID)),
 
         TransferParams = genlib_map:compact(#{
             party_id => PartyID,
@@ -525,6 +527,12 @@ create(Params) ->
             {resource_got, Resource}
         ]
     end).
+
+%% The recipient is a Customer of the party owning the wallet
+check_client_identity(#{customer_id := CustomerID}, PartyID) ->
+    ff_customer:check(CustomerID, PartyID);
+check_client_identity(undefined, _PartyID) ->
+    ok.
 
 create_resource(
     {bank_card, #{bank_card := #{token := Token}} = ResourceBankCardParams},
