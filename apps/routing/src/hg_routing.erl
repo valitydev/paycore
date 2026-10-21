@@ -4,8 +4,8 @@
 
 %%
 -export([prepare_log_message/1]).
--export([get_routes/1]).
 -export([get_logger_metadata/2]).
+-export([get_routes/1]).
 -export([filter_routes/2]).
 -export([choose_route/1]).
 -export([filter/2]).
@@ -21,15 +21,6 @@
     blacklist_context => hg_inspector:blacklist_context()
 }.
 
--type get_routes_result() :: #{
-    routes := [hg_route:t()],
-    rejections => #{hg_routing:initial_rejection_group() => [hg_route:t()]},
-    error => hg_route_collector:get_routes_error()
-}.
-
--export_type([get_route_params/0]).
--export_type([get_routes_result/0]).
-
 -type route_choice_context() :: #{
     chosen_route => hg_route:t(),
     preferable_route => hg_route:t(),
@@ -38,6 +29,12 @@
 }.
 
 -type initial_rejection_group() :: accepted | prohibit | blacklisted.
+
+-type get_routes_result() :: #{
+    routes := [hg_route:t()],
+    rejections => #{initial_rejection_group() => [hg_route:t()]},
+    error => hg_route_collector:get_routes_error()
+}.
 
 -type filter_routes_result() :: hg_routing_ctx:t().
 -type filter_routes_fun() :: fun((filter_routes_result()) -> filter_routes_result()).
@@ -54,6 +51,8 @@
         | {payment_routing_rules, empty}
         | {terminal, hg_route:terminal_ref(), notfound}}.
 
+-export_type([get_route_params/0]).
+-export_type([get_routes_result/0]).
 -export_type([filter_routes_result/0]).
 -export_type([route_choice_context/0]).
 -export_type([route_scores/0]).
@@ -73,6 +72,35 @@ prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
     {"PaymentRoutingRules are empty", []};
 prepare_log_message({misconfiguration, {terminal, TerminalRef, notfound}}) ->
     {"Routing terminal not found: ~p", [TerminalRef]}.
+
+-spec get_logger_metadata(hg_routing:route_choice_context(), hg_route:revision()) -> LoggerFormattedMetadata :: map().
+get_logger_metadata(RouteChoiceContext, Revision) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            Acc#{K => format_logger_metadata(K, V, Revision)}
+        end,
+        #{},
+        RouteChoiceContext
+    ).
+
+format_logger_metadata(reject_reason, Reason, _) ->
+    Reason;
+format_logger_metadata(Meta, Route, Revision) when
+    Meta =:= chosen_route;
+    Meta =:= preferable_route
+->
+    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
+    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
+    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
+    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
+    genlib_map:compact(#{
+        provider => #{id => ProviderID, name => ProviderName},
+        terminal => #{id => TerminalID, name => TerminalName},
+        priority => hg_route:priority(Route),
+        weight => hg_route:weight(Route),
+        terminal_affinity => hg_route:affinity_rank(Route),
+        affinity_enabled => hg_route:affinity(Route) =/= undefined
+    }).
 
 -spec get_routes(get_route_params()) -> get_routes_result().
 get_routes(
@@ -106,35 +134,6 @@ get_routes(
             hg_routing:filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
         )
     ).
-
--spec get_logger_metadata(hg_routing:route_choice_context(), hg_route:revision()) -> LoggerFormattedMetadata :: map().
-get_logger_metadata(RouteChoiceContext, Revision) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            Acc#{K => format_logger_metadata(K, V, Revision)}
-        end,
-        #{},
-        RouteChoiceContext
-    ).
-
-format_logger_metadata(reject_reason, Reason, _) ->
-    Reason;
-format_logger_metadata(Meta, Route, Revision) when
-    Meta =:= chosen_route;
-    Meta =:= preferable_route
-->
-    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
-    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
-    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
-    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
-    genlib_map:compact(#{
-        provider => #{id => ProviderID, name => ProviderName},
-        terminal => #{id => TerminalID, name => TerminalName},
-        priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route),
-        terminal_affinity => hg_route:affinity_rank(Route),
-        affinity_enabled => hg_route:affinity(Route) =/= undefined
-    }).
 
 -spec filter_routes(filter_routes_result(), [filter_routes_fun()]) -> filter_routes_result().
 filter_routes(Result0, WithFilterFuns) ->
