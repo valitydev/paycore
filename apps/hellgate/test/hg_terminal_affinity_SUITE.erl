@@ -5,6 +5,7 @@
 -include("invoice_events.hrl").
 -include("payment_events.hrl").
 -include("hg_invoice_payment.hrl").
+-include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
@@ -13,7 +14,7 @@
 -export([lower_priority_cascade/1, limit_overflow_and_return/1, disabled_affinity/1, mixed_candidates/1]).
 -export([cubasty_failure_init/1, cubasty_failure_routing/1, cubasty_failure_capture/1, collector_affinity/1]).
 -export([replay/1, hold_capture_order/1, cancelled_hold/1, deleted_customer_capture/1, expired_deadline/1]).
--export([negative_timeout/1]).
+-export([negative_timeout/1, unknown_customer_invoice/1]).
 -export([payment_recorded_once/1, cubasty_failure_add_payment/1, failed_payment_adjusted_to_captured/1]).
 
 -type config() :: hg_ct_helper:config().
@@ -40,6 +41,7 @@ all() ->
         deleted_customer_capture,
         expired_deadline,
         negative_timeout,
+        unknown_customer_invoice,
         payment_recorded_once,
         failed_payment_adjusted_to_captured
     ].
@@ -80,6 +82,7 @@ init_per_suite(C) ->
 
 -spec end_per_suite(config()) -> _.
 end_per_suite(C) ->
+    _ = hg_invoice_helper:stop_kv_store(cfg(test_sup, C)),
     hg_direct_recurrent_tests_SUITE:end_per_suite(C).
 
 -spec init_per_testcase(atom(), config()) -> config().
@@ -345,6 +348,35 @@ deleted_customer_capture(C) ->
     _ = await_status(InvoiceID, PaymentID, captured, C),
     ?assertEqual([], history(Payment)).
 
+%% An invoice is made for a Customer of its party only: one unknown, or linked to another party, is
+%% rejected
+-spec unknown_customer_invoice(config()) -> _.
+unknown_customer_invoice(C) ->
+    OtherPartyRef = #domain_PartyConfigRef{id = hg_utils:unique_id()},
+    #customer_Customer{id = OtherPartyCustomerID} = hg_customer_client:create_customer(OtherPartyRef),
+    lists:foreach(
+        fun(CustomerID) ->
+            Params0 = invoice_params(C),
+            Params = Params0#payproc_InvoiceParams{
+                client_identity = #domain_ClientIdentity{customer_id = CustomerID}
+            },
+            ?assertMatch(
+                {exception, #base_InvalidRequest{errors = [<<"Customer not found">>]}},
+                hg_client_invoicing:create(Params, cfg(client, C))
+            ),
+            ?assertMatch(
+                {exception, #payproc_InvoiceNotFound{}},
+                hg_client_invoicing:get(Params#payproc_InvoiceParams.id, cfg(client, C))
+            )
+        end,
+        [hg_utils:unique_id(), OtherPartyCustomerID]
+    ),
+    #customer_Customer{id = PartyCustomerID} = hg_customer_client:create_customer(cfg(party_config_ref, C)),
+    Params1 = (invoice_params(C))#payproc_InvoiceParams{
+        client_identity = #domain_ClientIdentity{customer_id = PartyCustomerID}
+    },
+    ?assertMatch(?invoice_state(?invoice(_)), hg_client_invoicing:create(Params1, cfg(client, C))).
+
 %% A failed payment made captured by an adjustment is recorded for its Customer, as one
 %% captured on its own is
 -spec failed_payment_adjusted_to_captured(config()) -> _.
@@ -457,15 +489,17 @@ start_payment(C, FlowType) ->
     {InvoiceID, PaymentID}.
 
 create_invoice(C) ->
-    Params = hg_ct_helper:make_invoice_params(
+    ?invoice_state(?invoice(InvoiceID)) = hg_client_invoicing:create(invoice_params(C), cfg(client, C)),
+    InvoiceID.
+
+invoice_params(C) ->
+    hg_ct_helper:make_invoice_params(
         cfg(party_config_ref, C),
         cfg(shop_config_ref, C),
         <<"terminal affinity">>,
         genlib_time:unow() + 60,
         hg_ct_helper:make_cash(42000, <<"RUB">>)
-    ),
-    ?invoice_state(?invoice(InvoiceID)) = hg_client_invoicing:create(Params, cfg(client, C)),
-    InvoiceID.
+    ).
 
 payment_params(C, FlowType) ->
     {{bank_card, Card}, Session} = hg_dummy_provider:make_payment_tool(no_preauth, ?pmt_sys(<<"visa-ref">>)),
