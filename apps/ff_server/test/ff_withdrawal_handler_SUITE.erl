@@ -2,6 +2,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+-include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_session_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_wthd_adj_thrift.hrl").
@@ -29,6 +30,7 @@
 -export([create_withdrawal_and_get_session_ok_test/1]).
 
 -export([create_withdrawal_ok_test/1]).
+-export([create_withdrawal_unknown_customer_fail_test/1]).
 -export([create_withdrawal_fail_email_test/1]).
 -export([create_cashlimit_validation_error_test/1]).
 -export([create_inconsistent_currency_validation_error_test/1]).
@@ -52,6 +54,7 @@
 -export([withdrawal_with_provider_guarantee_account_test/1]).
 -export([trace_withdrawal_test/1]).
 -export([create_withdrawal_with_changed_body_test/1]).
+-export([body_change_with_several_routes/1]).
 
 -type config() :: ct_helper:config().
 -type test_case_name() :: ct_helper:test_case_name().
@@ -80,7 +83,9 @@ groups() ->
             create_withdrawal_and_get_session_ok_test,
 
             create_withdrawal_ok_test,
+            create_withdrawal_unknown_customer_fail_test,
             create_withdrawal_with_changed_body_test,
+            body_change_with_several_routes,
             create_withdrawal_fail_email_test,
             create_cashlimit_validation_error_test,
             create_currency_validation_error_test,
@@ -271,6 +276,11 @@ create_withdrawal_ok_test(_C) ->
         ip_address = <<"10.10.10.10">>,
         fingerprint = <<"fingerprint">>
     },
+    CustomerID = create_customer(PartyID),
+    ClientIdentity = #fistful_base_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = <<"user">>
+    },
     Params = #wthd_WithdrawalParams{
         id = WithdrawalID,
         party_id = PartyID,
@@ -280,7 +290,8 @@ create_withdrawal_ok_test(_C) ->
         metadata = Metadata,
         external_id = ExternalID,
         contact_info = ContactInfo,
-        client_info = ClientInfo
+        client_info = ClientInfo,
+        client_identity = ClientIdentity
     },
     {ok, WithdrawalState} = call_withdrawal('Create', {Params, Context}),
 
@@ -301,12 +312,47 @@ create_withdrawal_ok_test(_C) ->
     ),
     ?assertEqual(ContactInfo, WithdrawalState#wthd_WithdrawalState.contact_info),
     ?assertEqual(ClientInfo, WithdrawalState#wthd_WithdrawalState.client_info),
+    ?assertEqual(ClientIdentity, WithdrawalState#wthd_WithdrawalState.client_identity),
 
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
     {ok, FinalWithdrawalState} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
     ?assertMatch(
         {succeeded, _},
         FinalWithdrawalState#wthd_WithdrawalState.status
+    ),
+    %% A succeeded withdrawal is recorded for the Customer it identifies, in its party
+    {ok, #customer_CustomerState{customer = #customer_Customer{id = CustomerID}}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, #domain_PartyConfigRef{id = PartyID}}).
+
+%% A Customer that cubasty does not know leaves the withdrawal unrecorded, not stuck
+-spec create_withdrawal_unknown_customer_fail_test(config()) -> test_return().
+create_withdrawal_unknown_customer_fail_test(_C) ->
+    Cash = make_cash({1000, <<"RUB">>}),
+    Ctx = ct_objects:build_default_ctx(),
+    #{
+        party_id := PartyID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+    %% A Customer unknown to cubasty, and one linked to another party only
+    OtherPartyCustomerID = create_customer(ct_objects:create_party()),
+    lists:foreach(
+        fun(CustomerID) ->
+            WithdrawalID = genlib:bsuuid(),
+            Params = #wthd_WithdrawalParams{
+                id = WithdrawalID,
+                party_id = PartyID,
+                wallet_id = WalletID,
+                destination_id = DestinationID,
+                body = Cash,
+                client_identity = #fistful_base_ClientIdentity{customer_id = CustomerID}
+            },
+            {exception, #fistful_CustomerNotFound{}} =
+                call_withdrawal('Create', {Params, ff_entity_context_codec:marshal(#{})}),
+            {exception, #fistful_WithdrawalNotFound{}} =
+                call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}})
+        end,
+        [genlib:bsuuid(), OtherPartyCustomerID]
     ).
 
 -spec create_withdrawal_with_changed_body_test(config()) -> test_return().
@@ -423,6 +469,60 @@ create_withdrawal_with_changed_body_test(C) ->
         },
         #wthd_Event{change = {status_changed, _}}
     ] = Events,
+    ok.
+
+-spec body_change_with_several_routes(config()) -> test_return().
+body_change_with_several_routes(C) ->
+    Cash = make_cash({1358, <<"RUB">>}),
+    Ctx = ct_objects:build_default_ctx(),
+    LimitsRev = ct_helper:cfg('$limits_domain_revision', C),
+    #{
+        party_id := PartyID,
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        withdrawal_id := PreviousWithdrawalID
+    } = ct_objects:prepare_standard_environment(Ctx#{body => Cash}),
+
+    PreviousWithdrawal = get_withdrawal(PreviousWithdrawalID),
+    Limit0 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, PreviousWithdrawal, C),
+
+    WithdrawalID = genlib:bsuuid(),
+    ExternalID = genlib:bsuuid(),
+    Context = ff_entity_context_codec:marshal(#{<<"NS">> => #{}}),
+    Metadata = ff_entity_context_codec:marshal(#{<<"metadata">> => #{<<"some key">> => <<"some data">>}}),
+    ContactInfo = #fistful_base_ContactInfo{
+        phone_number = <<"1234567890">>,
+        email = <<"test@mail.com">>
+    },
+    Params = #wthd_WithdrawalParams{
+        id = WithdrawalID,
+        party_id = PartyID,
+        wallet_id = WalletID,
+        destination_id = DestinationID,
+        body = Cash,
+        metadata = Metadata,
+        external_id = ExternalID,
+        contact_info = ContactInfo
+    },
+    {ok, _WithdrawalState} = call_withdrawal('Create', {Params, Context}),
+    %% Adapter will change amount on 1247
+    succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
+    {ok, #wthd_WithdrawalState{
+        effective_final_cash_flow = #cashflow_FinalCashFlow{postings = Postings},
+        new_body = #fistful_base_Cash{amount = NewAmount}
+    }} = call_withdrawal('Get', {WithdrawalID, #'fistful_base_EventRange'{}}),
+
+    ?assertEqual(1247, NewAmount),
+    [
+        ?posting({system, settlement}, {provider, settlement}, 10),
+        ?posting({wallet, receiver_destination}, {system, settlement}, 125),
+        ?posting({wallet, receiver_destination}, {system, subagent}, 125),
+        ?posting({wallet, sender_settlement}, {wallet, receiver_destination}, 1247)
+    ] = lists:sort(Postings),
+
+    Withdrawal = get_withdrawal(WithdrawalID),
+    Limit1 = ct_limiter:get_limit_amount(?LIMIT_TURNOVER_AMOUNT_PAYTOOL_ID999, LimitsRev, Withdrawal, C),
+    ?assertEqual(1247, Limit1 - Limit0),
     ok.
 
 -spec trace_withdrawal_test(config()) -> test_return().
@@ -1026,6 +1126,14 @@ call_withdrawal(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
+
+call_customer(Fun, Args) ->
+    ff_woody_client:call(customer_management, {{dmsl_customer_thrift, 'CustomerManagement'}, Fun, Args}).
+
+create_customer(PartyID) ->
+    Params = #customer_CustomerParams{party_ref = #domain_PartyConfigRef{id = PartyID}},
+    {ok, #customer_Customer{id = CustomerID}} = call_customer('Create', {Params}),
+    CustomerID.
 
 get_withdrawal(WithdrawalID) ->
     {ok, Machine} = ff_withdrawal_machine:get(WithdrawalID),

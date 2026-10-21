@@ -424,13 +424,13 @@ init_(PaymentID, Params, #{timestamp := CreatedAt} = Opts) ->
         make_recurrent = MakeRecurrent,
         context = Context,
         external_id = ExternalID,
-        processing_deadline = Deadline,
-        customer_id = CustomerID
+        processing_deadline = Deadline
     } = Params,
     Revision = hg_domain:head(),
     PartyConfigRef = get_party_config_ref(Opts),
     ShopObj = get_shop_obj(Opts, Revision),
     Invoice = get_invoice(Opts),
+    CustomerID = get_invoice_customer_id(Invoice),
     Cost = #domain_Cash{currency = Currency} = get_invoice_cost(Invoice),
     {ok, Payer, VS0} = construct_payer(PayerParams),
     VS1 = collect_validation_varset_(PartyConfigRef, ShopObj, Currency, VS0),
@@ -1750,6 +1750,7 @@ process_adjustment_capture(ID, _Action, St) ->
     Adjustment = get_adjustment(ID, St),
     ok = assert_adjustment_status(processed, Adjustment),
     ok = finalize_adjustment_cashflow(Adjustment, St, Opts),
+    ok = maybe_add_adjusted_payment_to_customer(Adjustment, St),
     Status = ?adjustment_captured(maps:get(timestamp, Opts)),
     Event = ?adjustment_ev(ID, ?adjustment_status_changed(Status)),
     {done, {[Event], idle}}.
@@ -1823,6 +1824,19 @@ get_adjustment_cashflow(#domain_InvoicePaymentAdjustment{new_cash_flow = Cashflo
             scenario = #domain_InvoicePaymentAdjustmentTransactionInfo{trx = Trx}
         }}
 }).
+
+%% A payment made captured by an adjustment is recorded for its Customer, as one captured on
+%% its own is. A failed payment never reached the finalization that records it, and the record
+%% of a cancelled one is idempotent
+maybe_add_adjusted_payment_to_customer(
+    ?adjustment_target_status({captured, _}),
+    #st{payment = #domain_InvoicePayment{id = PaymentID, customer_id = CustomerID}} = St
+) when CustomerID =/= undefined ->
+    Opts = get_opts(St),
+    InvoiceID = get_invoice_id(get_invoice(Opts)),
+    hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID, get_party_config_ref(Opts));
+maybe_add_adjusted_payment_to_customer(_Adjustment, _St) ->
+    ok.
 
 %%
 
@@ -2717,8 +2731,14 @@ maybe_bind_terminal_affinity(
     Route = get_route(St),
     case hg_terminal_affinity:can_bind(Ttl, erlang:system_time(millisecond)) of
         true ->
-            InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
-            case hg_customer_client:bind_terminal_affinity(CustomerID, Route, Ttl, {InvoiceID, PaymentID}) of
+            Opts = get_opts(St),
+            InvoiceID = get_invoice_id(get_invoice(Opts)),
+            PartyConfigRef = get_party_config_ref(Opts),
+            case
+                hg_customer_client:bind_terminal_affinity(
+                    CustomerID, Route, Ttl, {InvoiceID, PaymentID}, PartyConfigRef
+                )
+            of
                 ok ->
                     _ = hg_customer_metrics:bound(Route#domain_PaymentRoute.terminal),
                     bound;
@@ -2744,14 +2764,15 @@ maybe_save_recurrent_token_to_customer(
         recurrent_token = RecToken
     } = St
 ) when CustomerID =/= undefined ->
-    InvoiceID = get_invoice_id(get_invoice(get_opts(St))),
+    Opts = get_opts(St),
+    InvoiceID = get_invoice_id(get_invoice(Opts)),
     %% A binding remembers the payment for the Customer with the same call, so AddPayment
     %% is needed only when there was no binding: without it the payment is lost to the
     %% personal account
     ok =
         case Bound of
             bound -> ok;
-            not_bound -> hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID)
+            not_bound -> hg_customer_client:add_payment(CustomerID, InvoiceID, PaymentID, get_party_config_ref(Opts))
         end,
     _ = maybe_save_recurrent_token_to_bankcard(RecToken, Payer, St),
     maybe_link_bankcard_to_customer(CustomerID, Payer);
@@ -3379,6 +3400,11 @@ get_invoice(#{invoice := Invoice}) ->
 
 get_invoice_id(#domain_Invoice{id = ID}) ->
     ID.
+
+get_invoice_customer_id(#domain_Invoice{client_identity = #domain_ClientIdentity{customer_id = CustomerID}}) ->
+    CustomerID;
+get_invoice_customer_id(#domain_Invoice{}) ->
+    undefined.
 
 get_invoice_cost(#domain_Invoice{cost = Cost}) ->
     Cost.
@@ -4701,7 +4727,16 @@ customer_resolution() ->
     end),
     ?assertEqual(<<"resolved">>, resolve_customer_id(undefined, PartyRef, Contact)),
     ?assertEqual(<<"explicit">>, resolve_customer_id(<<"explicit">>, PartyRef, Contact)),
+    %% The merchant names the Customer on the invoice, not on the payment
     Parent0 = customer_finalization_state(),
+    Invoice = get_invoice(get_opts(Parent0)),
+    ?assertEqual(
+        <<"identified">>,
+        get_invoice_customer_id(Invoice#domain_Invoice{
+            client_identity = #domain_ClientIdentity{customer_id = <<"identified">>, user_id = <<"user">>}
+        })
+    ),
+    ?assertEqual(undefined, get_invoice_customer_id(Invoice)),
     Parent = Parent0#st{payment = (Parent0#st.payment)#domain_InvoicePayment{customer_id = <<"parent">>}},
     Inherited = inherit_or_validate_customer_id(undefined, #{parent_payment => Parent}),
     ?assertEqual(<<"parent">>, resolve_customer_id(Inherited, PartyRef, Contact)),
@@ -4732,7 +4767,7 @@ route_affinity_replay() ->
         end,
         [undefined, {since_bound, 3600}, {since_last_use, 1800}, {deadline, <<"2030-01-01T00:00:00Z">>}]
     ),
-    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, ok),
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 5, ok),
     Before = meck:num_calls(hg_customer_client, bind_terminal_affinity, '_'),
     Legacy = #payproc_RouteDecisionContext{terminal_affinity = true},
     St1 = replay_route_decision(Legacy, St0#st{affinity_ttl = {since_bound, 3600}}),
@@ -4741,7 +4776,11 @@ route_affinity_replay() ->
     ?assertEqual(Before + 1, meck:num_calls(hg_customer_client, bind_terminal_affinity, '_')),
     ?assert(
         meck:called(hg_customer_client, bind_terminal_affinity, [
-            <<"customer">>, get_route(St1), undefined, {<<"invoice">>, <<"payment">>}
+            <<"customer">>,
+            get_route(St1),
+            undefined,
+            {<<"invoice">>, <<"payment">>},
+            #domain_PartyConfigRef{id = <<"party">>}
         ])
     ),
     lists:foreach(
@@ -4854,7 +4893,7 @@ customer_finalization() ->
         %% without a binding, and the payment goes on to AddPayment
         lists:foreach(
             fun(Rejection) ->
-                ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, {error, Rejection}),
+                ok = meck:expect(hg_customer_client, bind_terminal_affinity, 5, {error, Rejection}),
                 BeforeRejected = meck:num_calls(hg_customer_client, add_payment, '_'),
                 ?assertMatch({done, _}, process_result({payment, finalizing_accounter}, idle, St)),
                 ?assertEqual(BeforeRejected + 1, meck:num_calls(hg_customer_client, add_payment, '_'))
@@ -4882,8 +4921,8 @@ customer_finalization() ->
                 ?assertError({woody_error, _}, process_result({payment, finalizing_accounter}, idle, Failing))
             end,
             [
-                {bind_terminal_affinity, fun(_, _, _, _) -> erlang:error(Timeout) end, St},
-                {add_payment, fun(_, _, _) -> erlang:error(Timeout) end, St#st{route_affinity = false}},
+                {bind_terminal_affinity, fun(_, _, _, _, _) -> erlang:error(Timeout) end, St},
+                {add_payment, fun(_, _, _, _) -> erlang:error(Timeout) end, St#st{route_affinity = false}},
                 {link_bank_card, fun(_, _) -> erlang:error(Timeout) end, St}
             ]
         )
@@ -4899,8 +4938,8 @@ assert_customer_finalization(St) ->
         ok
     end),
     ok = customer_operations_succeed(),
-    ok = meck:expect(hg_customer_client, bind_terminal_affinity, fun(CustomerID, Route, Ttl, Payment) ->
-        Caller ! {Ref, bind, CustomerID, Route, Ttl, Payment},
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, fun(CustomerID, Route, Ttl, Payment, PartyRef) ->
+        Caller ! {Ref, bind, CustomerID, Route, Ttl, Payment, PartyRef},
         ok
     end),
     BeforeAddPayment = meck:num_calls(hg_customer_client, add_payment, '_'),
@@ -4915,7 +4954,7 @@ assert_customer_finalization(St) ->
     ExpectedTtl = St#st.affinity_ttl,
     receive
         {Ref, bind, <<"customer">>, #domain_PaymentRoute{provider = ?prv(1), terminal = ?trm(1)}, ExpectedTtl,
-            {<<"invoice">>, <<"payment">>}} ->
+            {<<"invoice">>, <<"payment">>}, #domain_PartyConfigRef{id = <<"party">>}} ->
             ok
     after 0 -> error(affinity_not_bound)
     end,
@@ -4923,9 +4962,9 @@ assert_customer_finalization(St) ->
     ?assertEqual(BeforeAddPayment, meck:num_calls(hg_customer_client, add_payment, '_')).
 
 customer_operations_succeed() ->
-    ok = meck:expect(hg_customer_client, add_payment, 3, ok),
+    ok = meck:expect(hg_customer_client, add_payment, 4, ok),
     ok = meck:expect(hg_customer_client, link_bank_card, 2, ok),
-    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 4, ok).
+    ok = meck:expect(hg_customer_client, bind_terminal_affinity, 5, ok).
 
 customer_finalization_state() ->
     Cash = ?cash(1000, <<"RUB">>),

@@ -45,7 +45,8 @@ marshal_withdrawal_params(Params) ->
         external_id = maybe_marshal(id, maps:get(external_id, Params, undefined)),
         metadata = maybe_marshal(ctx, maps:get(metadata, Params, undefined)),
         contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined)),
-        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined))
+        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined)),
+        client_identity = maybe_marshal(client_identity, maps:get(client_identity, Params, undefined))
     }.
 
 -spec unmarshal_withdrawal_params(fistful_wthd_thrift:'WithdrawalParams'()) -> ff_withdrawal:params().
@@ -60,7 +61,8 @@ unmarshal_withdrawal_params(Params) ->
         external_id => maybe_unmarshal(id, Params#wthd_WithdrawalParams.external_id),
         metadata => maybe_unmarshal(ctx, Params#wthd_WithdrawalParams.metadata),
         contact_info => maybe_unmarshal(contact_info, Params#wthd_WithdrawalParams.contact_info),
-        client_info => maybe_unmarshal(client_info, Params#wthd_WithdrawalParams.client_info)
+        client_info => maybe_unmarshal(client_info, Params#wthd_WithdrawalParams.client_info),
+        client_identity => maybe_unmarshal(client_identity, Params#wthd_WithdrawalParams.client_identity)
     }).
 
 -spec marshal_withdrawal_state(ff_withdrawal:withdrawal_state(), ff_entity_context:context()) ->
@@ -91,7 +93,8 @@ marshal_withdrawal_state(WithdrawalState, Context) ->
         withdrawal_validation = maybe_marshal(withdrawal_validation, ff_withdrawal:validation(WithdrawalState)),
         contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState)),
         new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState)),
-        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(WithdrawalState))
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(WithdrawalState)),
+        client_identity = maybe_marshal(client_identity, ff_withdrawal:client_identity(WithdrawalState))
     }.
 
 -spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_thrift:'Event'().
@@ -173,7 +176,8 @@ marshal(withdrawal, Withdrawal) ->
         metadata = maybe_marshal(ctx, ff_withdrawal:metadata(Withdrawal)),
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(Withdrawal)),
         contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(Withdrawal)),
-        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(Withdrawal))
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(Withdrawal)),
+        client_identity = maybe_marshal(client_identity, ff_withdrawal:client_identity(Withdrawal))
     };
 marshal(route, Route) ->
     #{
@@ -312,7 +316,8 @@ unmarshal(withdrawal, #wthd_Withdrawal{} = Withdrawal) ->
         created_at => maybe_unmarshal(timestamp_ms, Withdrawal#wthd_Withdrawal.created_at),
         metadata => maybe_unmarshal(ctx, Withdrawal#wthd_Withdrawal.metadata),
         contact_info => maybe_unmarshal(contact_info, Withdrawal#wthd_Withdrawal.contact_info),
-        client_info => maybe_unmarshal(client_info, Withdrawal#wthd_Withdrawal.client_info)
+        client_info => maybe_unmarshal(client_info, Withdrawal#wthd_Withdrawal.client_info),
+        client_identity => maybe_unmarshal(client_identity, Withdrawal#wthd_Withdrawal.client_identity)
     });
 unmarshal(route, Route) ->
     genlib_map:compact(#{
@@ -417,6 +422,10 @@ withdrawal_symmetry_test() ->
         contact_info = #fistful_base_ContactInfo{
             phone_number = <<"1234567890">>,
             email = <<"test@mail.com">>
+        },
+        client_identity = #fistful_base_ClientIdentity{
+            customer_id = genlib:unique(),
+            user_id = <<"user">>
         }
     },
     ?assertEqual(In, marshal(withdrawal, unmarshal(withdrawal, In))).
@@ -436,6 +445,9 @@ withdrawal_params_symmetry_test() ->
         contact_info = #fistful_base_ContactInfo{
             phone_number = <<"1234567890">>,
             email = <<"test@mail.com">>
+        },
+        client_identity = #fistful_base_ClientIdentity{
+            customer_id = genlib:unique()
         }
     },
     ?assertEqual(In, marshal_withdrawal_params(unmarshal_withdrawal_params(In))).

@@ -27,14 +27,11 @@
     validation => withdrawal_validation(),
     contact_info => contact_info(),
     client_info => client_info(),
+    client_identity => client_identity(),
     new_body => body(),
     p_transfer_rebuild_needed => boolean(),
     routing_candidates => routing_candidates(),
-    routing_iteration => non_neg_integer(),
-    routing_revision => domain_revision(),
-    routing_varset => party_varset(),
-    rollback_started => failure(),
-    rollback_source => rollback_source()
+    failure => failure()
 }.
 
 -opaque withdrawal() :: #{
@@ -48,7 +45,8 @@
     metadata => metadata(),
     external_id => id(),
     contact_info => contact_info(),
-    client_info => client_info()
+    client_info => client_info(),
+    client_identity => client_identity()
 }.
 
 -type params() :: #{
@@ -61,7 +59,8 @@
     quote => quote(),
     metadata => metadata(),
     contact_info => contact_info(),
-    client_info => client_info()
+    client_info => client_info(),
+    client_identity => client_identity()
 }.
 
 -type status() ::
@@ -82,6 +81,11 @@
 -type client_info() :: #{
     ip_address => binary(),
     fingerprint => binary()
+}.
+
+-type client_identity() :: #{
+    customer_id := binary(),
+    user_id => binary()
 }.
 
 -type validation_result() ::
@@ -117,11 +121,11 @@
     | {inconsistent_currency, {Withdrawal :: currency_id(), Wallet :: currency_id(), Destination :: currency_id()}}
     | {terms, ff_party:validate_withdrawal_creation_error()}
     | {realms_mismatch, {realm(), realm()}}
-    | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}.
+    | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}
+    | {customer, notfound}.
 
 -type route() :: ff_withdrawal_routing:route().
 -type routing_candidates() :: undefined | [route()].
--type rollback_source() :: routing_failure | chosen_attempt.
 -type realm() :: ff_payment_institution:realm().
 
 -type attempts() :: ff_withdrawal_route_attempt_utils:attempts().
@@ -228,6 +232,7 @@
 -export_type([activity/0]).
 -export_type([contact_info/0]).
 -export_type([client_info/0]).
+-export_type([client_identity/0]).
 
 %% Transfer logic callbacks
 
@@ -259,6 +264,7 @@
 -export([validation/1]).
 -export([contact_info/1]).
 -export([client_info/1]).
+-export([client_identity/1]).
 
 %% API
 
@@ -462,6 +468,12 @@ client_info(#{client_info := ClientInfo}) ->
 client_info(_) ->
     undefined.
 
+-spec client_identity(withdrawal_state()) -> client_identity() | undefined.
+client_identity(#{client_identity := ClientIdentity}) ->
+    ClientIdentity;
+client_identity(_) ->
+    undefined.
+
 %% API
 
 -spec create(params()) ->
@@ -494,6 +506,7 @@ create(Params) ->
         Terms = ff_party:get_terms(DomainRevision, Wallet, Varset),
 
         valid = unwrap(validate_withdrawal_creation(Terms, Body, Wallet, Destination, Resource)),
+        ok = unwrap(customer, check_client_identity(maps:get(client_identity, Params, undefined), PartyID)),
 
         TransferParams = genlib_map:compact(#{
             party_id => PartyID,
@@ -513,12 +526,19 @@ create(Params) ->
                     external_id => maps:get(external_id, Params, undefined),
                     metadata => maps:get(metadata, Params, undefined),
                     contact_info => maps:get(contact_info, Params, undefined),
-                    client_info => maps:get(client_info, Params, undefined)
+                    client_info => maps:get(client_info, Params, undefined),
+                    client_identity => maps:get(client_identity, Params, undefined)
                 })},
             {status_changed, pending},
             {resource_got, Resource}
         ]
     end).
+
+%% The recipient is a Customer of the party owning the wallet
+check_client_identity(#{customer_id := CustomerID}, PartyID) ->
+    ff_customer:check(CustomerID, PartyID);
+check_client_identity(undefined, _PartyID) ->
+    ok.
 
 create_resource(
     {bank_card, #{bank_card := #{token := Token}} = ResourceBankCardParams},
@@ -753,7 +773,7 @@ deduce_activity(Withdrawal) ->
         status => status(Withdrawal),
         limit_check => limit_check_processing_status(Withdrawal),
         active_adjustment => ff_adjustment_utils:is_active(adjustments_index(Withdrawal)),
-        rollback_source => maps:get(rollback_source, Withdrawal, undefined)
+        failure => maps:get(failure, Withdrawal, undefined)
     },
     do_deduce_activity(Params).
 
@@ -764,7 +784,7 @@ do_deduce_activity(#{status := succeeded} = Params) ->
 do_deduce_activity(#{status := {failed, _}} = Params) ->
     do_finished_activity(Params).
 
-do_pending_activity(#{rollback_source := routing_failure}) ->
+do_pending_activity(#{failure := Failure}) when Failure =/= undefined ->
     compensate_routing_failure;
 do_pending_activity(#{route := unknown, p_transfer := undefined}) ->
     routing;
@@ -808,7 +828,9 @@ do_finished_activity(#{status := {failed, _}}) ->
 do_process_transfer(routing, Withdrawal) ->
     process_routing(Withdrawal);
 do_process_transfer(p_transfer_start, Withdrawal) ->
-    process_p_transfer_creation(Withdrawal);
+    Result = process_p_transfer_creation(Withdrawal),
+    ok = rollback_unused_candidates(Withdrawal),
+    Result;
 do_process_transfer(p_transfer_recreate, Withdrawal) ->
     %% route limits already rolled back when p_transfer was cancelled
     %% new route limits with new amount are required
@@ -830,7 +852,6 @@ do_process_transfer(p_transfer_recreate, Withdrawal) ->
     ok = ff_limiter:hold_withdrawal_limits(TurnoverLimits, WithdrawalWithNewBody, Route, IterWithMultiplication),
     process_p_transfer_creation(Withdrawal);
 do_process_transfer(p_transfer_prepare, Withdrawal) ->
-    ok = rollback_unused_candidates(Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:prepare(Tr),
     {timeout, [{p_transfer, Ev} || Ev <- Events]};
@@ -843,11 +864,10 @@ do_process_transfer(p_transfer_commit, Withdrawal) ->
     ok = ff_party:wallet_log_balance(wallet_id(Withdrawal), Wallet),
     {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(p_transfer_cancel, Withdrawal) ->
-    ChosenRollback = maybe_chosen_rollback_started(Withdrawal),
-    ok = rollback_chosen_hold(Withdrawal),
+    ok = rollback_routes_limits([route(Withdrawal)], Withdrawal),
     Tr = ff_withdrawal_route_attempt_utils:get_current_p_transfer(attempts(Withdrawal)),
     {ok, Events} = ff_postings_transfer:cancel(Tr),
-    {timeout, ChosenRollback ++ [{p_transfer, Ev} || Ev <- Events]};
+    {timeout, [{p_transfer, Ev} || Ev <- Events]};
 do_process_transfer(limit_check, Withdrawal) ->
     process_limit_check(Withdrawal);
 do_process_transfer(session_starting, Withdrawal) ->
@@ -896,8 +916,8 @@ process_rollback_routing(Withdrawal) ->
 -spec process_compensate_routing_failure(withdrawal_state()) -> process_result().
 process_compensate_routing_failure(Withdrawal) ->
     Candidates = maps:get(routing_candidates, Withdrawal, []),
-    ok = rollback_stashed_routes(Candidates, Withdrawal),
-    Failure = maps:get(rollback_started, Withdrawal),
+    ok = rollback_routes_limits(Candidates, Withdrawal),
+    Failure = maps:get(failure, Withdrawal),
     {timeout, [{status_changed, {failed, Failure}}]}.
 
 -spec do_process_routing(withdrawal_state()) ->
@@ -960,77 +980,7 @@ rollback_unused_candidates(Withdrawal) ->
             do_rollback_routing([route(Withdrawal)], Withdrawal);
         Candidates ->
             Unused = exclude_same_route(Candidates, route(Withdrawal)),
-            rollback_stashed_routes(Unused, Withdrawal)
-    end.
-
-rollback_chosen_hold(Withdrawal) ->
-    case maps:get(routing_candidates, Withdrawal, undefined) of
-        undefined ->
-            rollback_routes_limits([route(Withdrawal)], Withdrawal);
-        _Candidates ->
-            rollback_stashed_routes([route(Withdrawal)], Withdrawal)
-    end.
-
-maybe_chosen_rollback_started(#{rollback_started := _}) ->
-    [];
-maybe_chosen_rollback_started(Withdrawal) ->
-    Session = get_current_session_status(Withdrawal),
-    LimitCheck = limit_check_processing_status(Withdrawal),
-    BodyChanged = is_body_changed(Withdrawal),
-    case {Session, LimitCheck, BodyChanged} of
-        {failed, _, false} ->
-            [{rollback_started, #{reason => build_failure(session, Withdrawal), candidates => undefined}}];
-        {_, failed, false} ->
-            [{rollback_started, #{reason => build_failure(limit_check, Withdrawal), candidates => undefined}}];
-        _ ->
-            []
-    end.
-
-rollback_stashed_routes([], _Withdrawal) ->
-    ok;
-rollback_stashed_routes(Routes, Withdrawal) ->
-    {Varset, Context} = stashed_routing_varset_and_context(Withdrawal),
-    rollback_routes_limits(Routes, Varset, Context).
-
-stashed_routing_varset_and_context(Withdrawal) ->
-    case maps:get(routing_varset, Withdrawal, undefined) of
-        undefined ->
-            make_routing_varset_and_context(Withdrawal);
-        Varset ->
-            Revision = stashed_or_final_revision(Withdrawal),
-            Iteration = maps:get(
-                routing_iteration,
-                Withdrawal,
-                ff_withdrawal_route_attempt_utils:get_index(attempts(Withdrawal))
-            ),
-            WalletID = wallet_id(Withdrawal),
-            PartyID = party_id(Withdrawal),
-            {ok, Wallet} = fetch_wallet(WalletID, PartyID, Revision),
-            Context = #{
-                domain_revision => Revision,
-                wallet => Wallet,
-                withdrawal => Withdrawal#{domain_revision => Revision},
-                iteration => Iteration
-            },
-            {restore_routing_varset(Varset, Withdrawal), Context}
-    end.
-
-restore_routing_varset(#{payment_tool := _} = Varset, _Withdrawal) ->
-    Varset;
-restore_routing_varset(Varset, Withdrawal) ->
-    %% Legacy histories without resource need the same runtime recovery as routing.
-    %% Keep the stashed cost and context; replay must not fetch the resource.
-    Resource = destination_resource(Withdrawal),
-    Varset#{payment_tool => construct_payment_tool(Resource)}.
-
-%% Treat an explicit undefined the same as a missing key: maps:get/3 default
-%% does not fire when the key is present. Never pass undefined into party/limiter.
-stashed_or_final_revision(Withdrawal) ->
-    case maps:get(routing_revision, Withdrawal, undefined) of
-        undefined ->
-            final_domain_revision(Withdrawal);
-        Revision ->
-            Revision
+            rollback_routes_limits(Unused, Withdrawal)
     end.
 
 exclude_same_route(Candidates, Chosen) ->
@@ -1044,6 +994,8 @@ same_provider_terminal(#{provider_id := P, terminal_id := T}, #{provider_id := P
 same_provider_terminal(_, _) ->
     false.
 
+rollback_routes_limits([], _Withdrawal) ->
+    ok;
 rollback_routes_limits(Routes, Withdrawal) ->
     {Varset, Context} = make_routing_varset_and_context(Withdrawal),
     rollback_routes_limits(Routes, Varset, Context).
@@ -1218,8 +1170,17 @@ process_session_sleep(_Withdrawal) ->
     {suspend, []}.
 
 -spec process_transfer_finish(withdrawal_state()) -> process_result().
-process_transfer_finish(_Withdrawal) ->
+process_transfer_finish(Withdrawal) ->
+    ok = maybe_add_to_customer(Withdrawal),
     {idle, [{status_changed, succeeded}]}.
+
+maybe_add_to_customer(Withdrawal) ->
+    case client_identity(Withdrawal) of
+        #{customer_id := CustomerID} ->
+            ff_customer:add_withdrawal(CustomerID, id(Withdrawal), party_id(Withdrawal));
+        undefined ->
+            ok
+    end.
 
 -spec process_transfer_fail(fail_type(), withdrawal_state()) -> [event()].
 process_transfer_fail(FailType, Withdrawal) ->
@@ -2032,13 +1993,18 @@ do_process_route_change(Routes, Accounted, Withdrawal, Reason) ->
 
 -spec handle_adjustment_changes(ff_adjustment:changes(), withdrawal_state()) -> [event()].
 handle_adjustment_changes(Changes, Withdrawal) ->
-    handle_adjustment_status_change(maps:get(new_status, Changes, undefined)) ++
+    handle_adjustment_status_change(maps:get(new_status, Changes, undefined), Withdrawal) ++
         handle_adjustment_body_change(maps:get(new_body, Changes, undefined), Withdrawal).
 
--spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined) -> [event()].
-handle_adjustment_status_change(undefined) ->
+-spec handle_adjustment_status_change(ff_adjustment:status_change() | undefined, withdrawal_state()) -> [event()].
+handle_adjustment_status_change(undefined, _Withdrawal) ->
     [];
-handle_adjustment_status_change(#{new_status := Status}) ->
+%% A withdrawal made succeeded by an adjustment is recorded for its Customer, as one that
+%% succeeded on its own is
+handle_adjustment_status_change(#{new_status := succeeded}, Withdrawal) ->
+    ok = maybe_add_to_customer(Withdrawal),
+    [{status_changed, succeeded}];
+handle_adjustment_status_change(#{new_status := Status}, _Withdrawal) ->
     [{status_changed, Status}].
 
 -spec handle_adjustment_body_change(ff_adjustment:body_change() | undefined, withdrawal_state()) -> [event()].
@@ -2147,7 +2113,7 @@ apply_event_({status_changed, Status}, T0) ->
     T1 =
         case Status of
             {failed, _} ->
-                maps:without([rollback_started, rollback_source], T0);
+                maps:remove(failure, T0);
             _ ->
                 T0
         end,
@@ -2184,56 +2150,24 @@ apply_event_({session_finished, {SessionID, Result}}, T) ->
 apply_event_({body_changed, #{new_body := NewBody}}, T) ->
     T#{new_body => NewBody, p_transfer_rebuild_needed => true};
 apply_event_({route_changed, #{route := Route, candidates := Candidates}}, T0) ->
-    Iteration = ff_withdrawal_route_attempt_utils:get_index(attempts(T0)),
-    T1 = stash_routing_round(T0, Candidates, Iteration),
-    R = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(T1)),
-    maps:without([rollback_started, rollback_source], T1#{
+    R = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(T0)),
+    maps:remove(failure, T0#{
         route => Route,
-        attempts => R
+        attempts => R,
+        routing_candidates => Candidates
     });
 apply_event_({rollback_started, #{reason := Failure, candidates := Candidates}}, T0) when is_list(Candidates) ->
-    Iteration = ff_withdrawal_route_attempt_utils:get_index(attempts(T0)),
-    T1 = stash_routing_round(T0, Candidates, Iteration),
-    T1#{rollback_started => Failure, rollback_source => routing_failure};
-apply_event_({rollback_started, #{reason := Failure, candidates := undefined}}, T) ->
-    T#{rollback_started => Failure, rollback_source => chosen_attempt};
+    T0#{routing_candidates => Candidates, failure => Failure};
+%% Older events also journalled failures of the chosen attempt. Its session
+%% or limit check already holds the failure, and cancellation handles its hold.
+apply_event_({rollback_started, #{candidates := undefined}}, T) ->
+    T;
 apply_event_({validation, {Part, ValidationResult}}, T) ->
     Validates = maps:get(validation, T, #{}),
     PartValidations = maps:get(Part, Validates, []),
     T#{validation => Validates#{Part => [ValidationResult | PartValidations]}};
 apply_event_({adjustment, _Ev} = Event, T) ->
     apply_adjustment_event(Event, T).
-
-stash_routing_round(T, Candidates, Iteration) ->
-    Stashed = T#{
-        routing_candidates => Candidates,
-        routing_iteration => Iteration,
-        routing_varset => stash_routing_varset(T)
-    },
-    case domain_revision(T) of
-        undefined ->
-            maps:without([routing_revision], Stashed);
-        Revision ->
-            Stashed#{routing_revision => Revision}
-    end.
-
-stash_routing_varset(#{body := Body} = T) ->
-    {_, CurrencyID} = Body,
-    Resource = maps:get(resource, T, undefined),
-    PaymentTool =
-        case Resource of
-            undefined ->
-                undefined;
-            _ ->
-                construct_payment_tool(Resource)
-        end,
-    genlib_map:compact(#{
-        currency => ff_dmsl_codec:marshal(currency_ref, CurrencyID),
-        cost => ff_dmsl_codec:marshal(cash, Body),
-        party_id => party_id(T),
-        wallet_id => wallet_id(T),
-        payment_tool => PaymentTool
-    }).
 
 -spec make_state(withdrawal()) -> withdrawal_state().
 make_state(#{route := Route} = T) ->
@@ -2369,14 +2303,14 @@ routing_journal_test() ->
         State = apply_event(Event, test_withdrawal_state()),
         %% meck 0.9.2 incorrectly specifies meck:raise/2's reason as the atom 'term'.
         ok = meck:expect(ff_withdrawal_routing, gather_routes, 3, meck_ret_spec:raise(error, ruleset_unavailable)),
-        ok = meck:expect(ff_postings_transfer, prepare, fun(_) ->
-            ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Overflowed, 1])),
-            {ok, [{status_changed, prepared}]}
-        end),
+        {timeout, CreationEvents} = process_transfer(State),
+        ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Overflowed, 1])),
+        Created = lists:foldl(fun apply_event/2, State, CreationEvents),
         ?assertMatch(
             {timeout, [{p_transfer, {status_changed, prepared}}]},
-            process_transfer(test_p_transfer(State, created))
+            process_transfer(Created)
         ),
+        ?assertEqual(1, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_')),
         ?assertNot(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Chosen, 1]))
     end).
 
@@ -2421,8 +2355,9 @@ empty_routing_failure_test() ->
 -spec chosen_rollback_iteration_test() -> _.
 chosen_rollback_iteration_test() ->
     Route = test_route(1, 7),
+    NextRoute = test_route(2, 8),
     Failure = #{code => <<"authorization_error">>},
-    with_routing_mocks([Route], fun() ->
+    with_routing_mocks([Route, NextRoute], fun() ->
         Routed = apply_event({route_changed, #{route => Route, candidates => [Route]}}, test_withdrawal_state()),
         Prepared = test_p_transfer(Routed, prepared),
         State = lists:foldl(fun apply_event/2, Prepared, [
@@ -2433,20 +2368,25 @@ chosen_rollback_iteration_test() ->
         ok = meck:expect(ff_postings_transfer, cancel, 1, {ok, [{status_changed, cancelled}]}),
         {timeout, Events} = process_transfer(State),
         ?assertMatch(
-            [
-                {rollback_started, #{reason := Failure, candidates := undefined}},
-                {p_transfer, {status_changed, cancelled}}
-            ],
+            [{p_transfer, {status_changed, cancelled}}],
             Events
         ),
         Cancelled = lists:foldl(fun apply_event/2, State, Events),
+        ?assertEqual(
+            Cancelled,
+            apply_event({rollback_started, #{reason => Failure, candidates => undefined}}, Cancelled)
+        ),
         ?assertEqual(2, ff_withdrawal_route_attempt_utils:get_index(attempts(Cancelled))),
-        ?assertEqual(1, maps:get(routing_iteration, Cancelled)),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Route, 1])),
+        {timeout, [{route_changed, #{route := NextRoute}} = NextEvent]} = process_routing(Cancelled),
+        ?assert(meck:called(ff_limiter, hold_withdrawal_limits, [[], '_', NextRoute, 2])),
+        NextState = apply_event(NextEvent, Cancelled),
+        ok = rollback_routes_limits([NextRoute], NextState),
+        ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', NextRoute, 2])),
         %% An empty new round must not inherit the preceding attempt's candidates.
         Exhausted = apply_event({rollback_started, #{reason => Failure, candidates => []}}, Cancelled),
         ?assertEqual({timeout, [{status_changed, {failed, Failure}}]}, process_transfer(Exhausted)),
-        ?assertEqual(1, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
+        ?assertEqual(2, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
     end).
 
 -spec routing_hold_retry_test() -> _.
@@ -2489,9 +2429,11 @@ legacy_routing_cleanup_test() ->
     with_routing_mocks([Chosen, Unused], fun() ->
         State = apply_event({route_changed, Chosen}, test_withdrawal_state()),
         ?assertEqual(undefined, maps:get(routing_candidates, State)),
+        {timeout, CreationEvents} = process_transfer(State),
+        Created = lists:foldl(fun apply_event/2, State, CreationEvents),
         ?assertMatch(
             {timeout, [{p_transfer, {status_changed, prepared}}]},
-            process_transfer(test_p_transfer(State, created))
+            process_transfer(Created)
         ),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Unused, 1])),
         ?assertNot(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Chosen, 1]))
@@ -2518,16 +2460,17 @@ legacy_resource_routing_context_test() ->
                     ResourceReads = meck:num_calls(ff_resource, create_resource, '_'),
                     State = apply_event(Event, Legacy),
                     ?assertEqual(ResourceReads, meck:num_calls(ff_resource, create_resource, '_')),
-                    Attempts = ff_withdrawal_route_attempt_utils:new_route(Route, attempts(State)),
-                    Cancelled = test_p_transfer(State#{attempts => Attempts}, cancelled),
-                    ?assertEqual(2, ff_withdrawal_route_attempt_utils:get_index(attempts(Cancelled))),
-                    Current = Cancelled#{
-                        body => {200, <<"RUB">>},
-                        domain_revision => 43
-                    },
-                    {RollbackVarset, Context} = stashed_routing_varset_and_context(Current),
-                    ?assertEqual(RoutingVarset, RollbackVarset),
-                    ?assertMatch(#{domain_revision := 42, iteration := 1}, Context)
+                    Current = apply_event(
+                        {body_changed, #{old_body => body(State), new_body => {200, <<"RUB">>}}},
+                        State
+                    ),
+                    ok = meck:expect(ff_party, compute_provider_terminal_terms, fun(_, _, Varset, Revision) ->
+                        ?assertEqual(RoutingVarset, Varset),
+                        ?assertEqual(42, Revision),
+                        test_route_terms()
+                    end),
+                    ok = rollback_routes_limits([Route], Current),
+                    ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], Current, Route, 1]))
                 end,
                 Events
             )
@@ -2543,7 +2486,15 @@ test_p_transfer(State, Status) ->
     ]).
 
 with_routing_mocks(Routes, Fun) ->
-    Modules = [ff_party, ff_limiter, ff_destination_machine, ff_postings_transfer, ff_withdrawal_routing],
+    Modules = [
+        ff_party,
+        ff_limiter,
+        ff_destination_machine,
+        ff_postings_transfer,
+        ff_withdrawal_routing,
+        ff_payouts_provider,
+        ff_payment_institution
+    ],
     ok = meck:new(Modules, [passthrough]),
     try
         ok = meck:expect(ff_party, get_wallet, 3, {ok, test_wallet()}),
@@ -2554,7 +2505,19 @@ with_routing_mocks(Routes, Fun) ->
         ok = meck:expect(ff_limiter, hold_withdrawal_limits, 4, ok),
         ok = meck:expect(ff_limiter, check_limits, 4, {ok, []}),
         ok = meck:expect(ff_limiter, rollback_withdrawal_limits, 4, ok),
+        ok = meck:expect(ff_postings_transfer, create, fun(ID, CashFlow) ->
+            {ok, [
+                {created, #{id => ID, final_cash_flow => CashFlow}},
+                {status_changed, created}
+            ]}
+        end),
         ok = meck:expect(ff_postings_transfer, prepare, 1, {ok, [{status_changed, prepared}]}),
+        ok = meck:expect(ff_party, get_wallet_realm, 2, test),
+        ok = meck:expect(ff_party, get_terms, 3, #domain_TermSet{}),
+        ok = meck:expect(ff_party, get_withdrawal_cash_flow_plan, 1, {ok, #{postings => []}}),
+        ok = meck:expect(ff_payouts_provider, get, 2, {ok, #{accounts => #{}}}),
+        ok = meck:expect(ff_payment_institution, get, 3, {ok, #{}}),
+        ok = meck:expect(ff_payment_institution, system_accounts, 2, {ok, #{}}),
         ok = meck:expect(ff_withdrawal_routing, gather_routes, fun(VS, _, Exclude) ->
             Candidates = [
                 #{
