@@ -116,7 +116,7 @@ decode_context(<<>>) ->
 decode_context(Ctx) when is_map(Ctx) ->
     Ctx;
 decode_context(Value) ->
-    woody_rpc_helper:decode_rpc_context(decode_value(Value)).
+    decode_value(Value).
 
 extract_trace_id(#{<<"otel">> := [OtelTraceID | _]}) ->
     to_binary(OtelTraceID);
@@ -207,7 +207,15 @@ json_value(V) ->
 json_key(K) when is_atom(K) ->
     atom_to_binary(K, utf8);
 json_key(K) when is_binary(K) ->
-    K;
+    try unicode:characters_to_binary(K) of
+        Binary when is_binary(Binary) ->
+            Binary;
+        _ ->
+            base64:encode(K)
+    catch
+        _:_ ->
+            base64:encode(K)
+    end;
 json_key(K) when is_integer(K); is_float(K) ->
     K;
 json_key(K) ->
