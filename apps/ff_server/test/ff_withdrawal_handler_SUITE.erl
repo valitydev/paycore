@@ -13,6 +13,7 @@
 -include_lib("fistful_proto/include/fistful_account_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_transfer_thrift.hrl").
 -include_lib("ff_cth/include/ct_domain.hrl").
+-include_lib("fistful_proto/include/fistful_progressor_trace_thrift.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -554,52 +555,66 @@ trace_withdrawal_test(_C) ->
     },
     {ok, _WithdrawalState} = call_withdrawal('Create', {Params, Context}),
     succeeded = ct_objects:await_final_withdrawal_status(WithdrawalID),
-
-    TraceUrl = <<"http://localhost:8022/traces/internal/withdrawal_v2/", WithdrawalID/binary>>,
-    {ok, 200, _Headers, Ref} = hackney:get(TraceUrl),
-    {ok, Body} = hackney:body(Ref),
     [
-        #{
-            <<"args">> := [
-                [
-                    #{<<"created">> := _},
-                    #{<<"status_changed">> := <<"pending">>},
-                    #{<<"resource_got">> := #{<<"bank_card">> := _}}
-                ],
-                #{<<"NS">> := #{}}
-            ],
-            <<"error">> := null,
-            <<"events">> := [
-                #{<<"event_id">> := 1, <<"event_timestamp">> := _, <<"event_payload">> := #{<<"created">> := _}},
-                #{<<"event_id">> := 2, <<"event_timestamp">> := _, <<"event_payload">> := #{<<"status_changed">> := _}},
-                #{<<"event_id">> := 3, <<"event_timestamp">> := _, <<"event_payload">> := #{<<"resource_got">> := _}}
-            ],
-            <<"finished">> := _,
-            <<"otel_trace_id">> := _,
-            <<"retry_attempts">> := _,
-            <<"retry_interval">> := _,
-            <<"running">> := _,
-            <<"scheduled">> := _,
-            <<"task_id">> := _,
-            <<"task_metadata">> := #{<<"range">> := #{}},
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"init">>
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{
+                task_type = <<"init">>,
+                task_status = <<"finished">>,
+                error = undefined,
+                scheduled = _,
+                running = _,
+                finished = _,
+                retry_attempts = _,
+                retry_interval = _,
+                task_id = _,
+                task_metadata = _,
+                otel_trace_id = _
+            },
+            body = InitBody,
+            events = [
+                #progressor_trace_TraceEvent{
+                    event_id = 1,
+                    event_timestamp = _,
+                    payload = {withdrawal, #wthd_TimestampedChange{change = {created, _}}}
+                },
+                #progressor_trace_TraceEvent{
+                    event_id = 2,
+                    event_timestamp = _,
+                    payload = {withdrawal, #wthd_TimestampedChange{change = {status_changed, _}}}
+                },
+                #progressor_trace_TraceEvent{
+                    event_id = 3,
+                    event_timestamp = _,
+                    payload = {withdrawal, #wthd_TimestampedChange{change = {resource, _}}}
+                }
+            ]
         },
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{
-            <<"args">> := #{<<"notify">> := [<<"session_finished">> | _]},
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"call">>
+        Timeout1,
+        Timeout2,
+        Timeout3,
+        Timeout4,
+        Timeout5,
+        Timeout6,
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{task_type = <<"call">>, task_status = <<"finished">>},
+            body = CallBody
         },
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-        #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>}
-    ] = json:decode(Body),
-    ok.
+        Timeout7,
+        Timeout8
+    ] = ff_trace_ct:await_trace(<<"ff/withdrawal_v2">>, WithdrawalID, fun match_withdrawal_trace/1),
+    [
+        [
+            #{<<"created">> := _},
+            #{<<"status_changed">> := <<"pending">>},
+            #{<<"resource_got">> := #{<<"bank_card">> := _}}
+        ],
+        #{<<"NS">> := #{}}
+    ] = ff_trace_ct:body_json(InitBody),
+    #{<<"notify">> := [<<"session_finished">> | _]} = ff_trace_ct:body_json(CallBody),
+    true = lists:all(
+        fun ff_trace_ct:is_finished_timeout/1,
+        [Timeout1, Timeout2, Timeout3, Timeout4, Timeout5, Timeout6, Timeout7, Timeout8]
+    ).
 
 -spec create_withdrawal_fail_email_test(config()) -> test_return().
 create_withdrawal_fail_email_test(_C) ->
@@ -1117,6 +1132,27 @@ call_withdrawal_session(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
+
+match_withdrawal_trace([
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"init">>, task_status = <<"finished">>},
+        events = [_, _, _]
+    },
+    T1,
+    T2,
+    T3,
+    T4,
+    T5,
+    T6,
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"call">>, task_status = <<"finished">>}
+    },
+    T7,
+    T8
+]) ->
+    lists:all(fun ff_trace_ct:is_finished_timeout/1, [T1, T2, T3, T4, T5, T6, T7, T8]);
+match_withdrawal_trace(_) ->
+    false.
 
 call_withdrawal(Fun, Args) ->
     ServiceName = withdrawal_management,

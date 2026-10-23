@@ -4,6 +4,7 @@
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_account_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_progressor_trace_thrift.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -155,27 +156,31 @@ trace_destination_test(C) ->
             receiver = <<"ReceiverToken">>
         }},
     {ok, #destination_DestinationState{id = ID}} = create_destination_ok(AuthData, Resource, C),
-    TraceUrl = <<"http://localhost:8022/traces/internal/destination_v2/", ID/binary>>,
-    {ok, 200, _Headers, Ref} = hackney:get(TraceUrl),
-    {ok, Body} = hackney:body(Ref),
     [
-        #{
-            <<"args">> := [
-                [
-                    #{<<"created">> := _},
-                    #{<<"account">> := _}
-                ],
-                #{<<"NS">> := #{}}
-            ],
-            <<"events">> :=
-                [
-                    #{<<"event_id">> := 1, <<"event_payload">> := #{<<"created">> := _}, <<"event_timestamp">> := _},
-                    #{<<"event_id">> := 2, <<"event_payload">> := #{<<"account">> := _}, <<"event_timestamp">> := _}
-                ],
-            <<"task_status">> := <<"finished">>,
-            <<"task_type">> := <<"init">>
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{task_type = <<"init">>, task_status = <<"finished">>},
+            body = InitBody,
+            events = [
+                #progressor_trace_TraceEvent{
+                    event_id = 1,
+                    event_timestamp = _,
+                    payload = {destination, #destination_TimestampedChange{change = {created, _}}}
+                },
+                #progressor_trace_TraceEvent{
+                    event_id = 2,
+                    event_timestamp = _,
+                    payload = {destination, #destination_TimestampedChange{change = {account, _}}}
+                }
+            ]
         }
-    ] = json:decode(Body),
+    ] = ff_trace_ct:await_trace(<<"ff/destination_v2">>, ID),
+    [
+        [
+            #{<<"created">> := _},
+            #{<<"account">> := _}
+        ],
+        #{<<"NS">> := #{}}
+    ] = ff_trace_ct:body_json(InitBody),
     ok.
 
 %%----------------------------------------------------------------------
