@@ -86,7 +86,7 @@
     client_info => ff_withdrawal:client_info()
 }.
 
--type route() :: ff_withdrawal_routing:route().
+-type route() :: w_routing:route().
 
 -type params() :: #{
     resource := ff_destination:resource(),
@@ -394,10 +394,10 @@ create_callback(Tag, Session) ->
             erlang:error({callback_already_exists, Callback})
     end.
 
--spec get_adapter_with_opts(ff_withdrawal_routing:route()) -> adapter_with_opts().
+-spec get_adapter_with_opts(w_routing:route()) -> adapter_with_opts().
 get_adapter_with_opts(Route) ->
-    ProviderID = ff_withdrawal_routing:get_provider(Route),
-    TerminalID = ff_withdrawal_routing:get_terminal(Route),
+    ProviderID = w_routing:get_provider(Route),
+    TerminalID = w_routing:get_terminal(Route),
     get_adapter_with_opts(ProviderID, TerminalID).
 
 -spec get_adapter_with_opts(ProviderID, TerminalID) -> adapter_with_opts() when

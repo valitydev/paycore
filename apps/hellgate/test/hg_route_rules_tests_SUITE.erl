@@ -513,7 +513,7 @@ no_route_found_for_payment(_C) ->
         currency => Currency0,
         payment_tool => PaymentTool
     },
-    #{routes := [], rejections := Rejected1} = get_routes(
+    #{candidates := [], rejections := Rejected1} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx0
     ),
 
@@ -536,7 +536,7 @@ no_route_found_for_payment(_C) ->
     Ctx1 = Ctx0#{
         currency => Currency1
     },
-    #{routes := [], rejections := Rejected2} = get_routes(
+    #{candidates := [], rejections := Rejected2} = get_routes(
         payment, PaymentInstitution, VS1, Revision, Ctx1
     ),
     ?assert_set_equal(
@@ -570,7 +570,7 @@ gather_route_success(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := [Route], rejections := RejectedRoutes} = get_routes(
+    #{candidates := [Route], rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
     ?assertMatch(?trm(1), hg_route:terminal_ref(Route)),
@@ -611,7 +611,7 @@ rejected_by_table_prohibitions(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := [], rejections := RejectedRoutes} = get_routes(
+    #{candidates := [], rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
     ?assert_set_equal(
@@ -652,7 +652,7 @@ empty_candidate_ok(_C) ->
         payment_tool => PaymentTool
     },
     ?assertMatch(
-        #{routes := []},
+        #{candidates := []},
         get_routes(payment, PaymentInstitution, VS, Revision, Ctx)
     ).
 
@@ -701,7 +701,7 @@ routes_selected_with_risk_score(_C, RiskScore, ProviderRefs) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := _} = get_routes(
+    #{candidates := Routes, rejections := _} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
     ?assert_set_equal(ProviderRefs, lists:map(fun hg_route:provider_ref/1, Routes)).
@@ -716,7 +716,7 @@ choice_context_formats_ok(_C) ->
         {0, 0.8},
         {1, 1.0}
     ),
-    Result = {_, Context} = hg_routing:choose_route([Route1, Route2, Route3]),
+    Result = {_, Context} = routing:choose_route([Route1, Route2, Route3]),
     ?assertMatch(
         {Route2, #{reject_reason := availability_condition, preferable_route := Route1}},
         Result
@@ -737,7 +737,7 @@ choice_context_formats_ok(_C) ->
                 weight := ?DOMAIN_CANDIDATE_WEIGHT
             }
         },
-        hg_routing:get_logger_metadata(Context, Revision)
+        p_routing:get_logger_metadata(Context, Revision)
     ).
 
 -spec empty_terms_allow_test(config()) -> test_return().
@@ -769,7 +769,7 @@ do_gather_routes(Revision, ExpectedRouteTerminal, ExpectedRejectedRoutes) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := RejectedRoutes} = get_routes(
+    #{candidates := Routes, rejections := RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
     case ExpectedRouteTerminal of
@@ -808,10 +808,10 @@ terminal_priority_for_shop(ShopID, _C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
+    #{candidates := Routes, rejections := _RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
-    hg_routing:choose_route(hg_route_balancer:fill(Routes)).
+    routing:choose_route(hg_route_balancer:fill(Routes)).
 
 -spec gather_pinned_route(config()) -> test_return().
 gather_pinned_route(_C) ->
@@ -831,7 +831,7 @@ gather_pinned_route(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
+    #{candidates := Routes, rejections := _RejectedRoutes} = get_routes(
         payment, PaymentInstitution, VS, Revision, Ctx
     ),
     Pin = #{
@@ -879,7 +879,7 @@ choose_route_w_override(_C) ->
         new_route(Revision, ?prv(2), ?trm(2)),
         new_route(Revision, ?prv(3), ?trm(3))
     ],
-    [Route1, Route2, Route3] = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
+    [Route1, Route2, Route3] = hg_route_fd:fill(p_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         #{
             availability_condition => 0,
@@ -907,7 +907,7 @@ choose_route_w_override(_C) ->
         },
         hg_route:fd_score(Route3)
     ),
-    {ChosenRoute, _} = hg_routing:choose_route([Route1, Route2, Route3]),
+    {ChosenRoute, _} = routing:choose_route([Route1, Route2, Route3]),
     ?assertMatch(?trm(2), hg_route:terminal_ref(ChosenRoute)).
 
 -spec fd_fill_preserves_route_order(config()) -> test_return().
@@ -918,7 +918,7 @@ fd_fill_preserves_route_order(_C) ->
         new_route(Revision, ?prv(1), ?trm(1)),
         new_route(Revision, ?prv(2), ?trm(2))
     ],
-    Routes = hg_route_fd:fill(hg_payment_routing:fill_fd_overrides(Revision, Routes0)),
+    Routes = hg_route_fd:fill(p_routing:fill_fd_overrides(Revision, Routes0)),
     ?assertEqual(
         [?trm(3), ?trm(1), ?trm(2)],
         [hg_route:terminal_ref(Route) || Route <- Routes]
@@ -945,7 +945,7 @@ recurrent_payment_skip_recurrent_terms(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := _RejectedRoutes} = get_routes(
+    #{candidates := Routes, rejections := _RejectedRoutes} = get_routes(
         recurrent_payment, PaymentInstitution, VS, Revision, Ctx
     ),
     ?assertEqual(1, length(Routes)),
@@ -973,7 +973,7 @@ recurrent_payment_rejected_without_terms(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
-    #{routes := Routes, rejections := RejectedRoutes} = get_routes(
+    #{candidates := Routes, rejections := RejectedRoutes} = get_routes(
         recurrent_payment, PaymentInstitution, VS, Revision, Ctx
     ),
     ?assertEqual([], Routes),
@@ -1074,7 +1074,7 @@ to_rejected_routes(Rejections) when is_map(Rejections) ->
     [hg_route:to_rejected_route(R) || {_Group, Routes} <- maps:to_list(Rejections), R <- Routes].
 
 get_routes(Predestination, PaymentInstitution, VS, Revision, Ctx) ->
-    hg_routing:get_routes(#{
+    p_routing:get_routes(#{
         predestination => Predestination,
         revision => Revision,
         varset => VS,

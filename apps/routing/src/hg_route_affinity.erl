@@ -88,7 +88,7 @@ assert_distribution(History, Routes, IDs) ->
     ).
 
 choose(History, Routes) ->
-    {Chosen, _} = hg_routing:choose_route(hg_route_balancer:fill(fill(History, Routes, now_ms()))),
+    {Chosen, _} = routing:choose_route(hg_route_balancer:fill(fill(History, Routes, now_ms()))),
     (hg_route:terminal_ref(Chosen))#domain_TerminalRef.id.
 
 now_ms() ->

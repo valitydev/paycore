@@ -260,7 +260,12 @@ collector_merge_duplicate_provider_terminal_test() ->
 collector_missing_terminal_error_test() ->
     Candidate = candidate(?trm(99), {constant, true}, 1000, 0),
     Error = {object_not_found, {1, {terminal, ?trm(99)}}},
-    Callbacks = callbacks([Candidate], [], payment, fun(_Ref, _) -> erlang:error(Error) end),
+    Callbacks = callbacks([Candidate], [], payment, fun(Ref, _) ->
+        case Ref of
+            ?trm(99) -> erlang:error(Error);
+            _ -> {ok, ?prv(1)}
+        end
+    end),
     ?assertError(Error, hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks)).
 
 -spec collector_merge_duplicate_default_priority_test() -> _.
@@ -316,8 +321,8 @@ callbacks_with_compute(Compute) ->
     }.
 
 candidate_validator(payment) ->
-    fun hg_payment_routing:validate_candidate/1;
+    fun p_routing:validate_candidate/1;
 candidate_validator(withdrawal_legacy) ->
-    fun ff_withdrawal_routing:validate_candidate/1.
+    fun w_routing:validate_candidate/1.
 
 -endif.

@@ -1,4 +1,4 @@
--module(hg_routing_domain).
+-module(routing_domain).
 
 -callback compute_ruleset(
     dmsl_domain_thrift:'RoutingRulesetRef'(), map(), hg_route:revision()

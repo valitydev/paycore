@@ -150,7 +150,7 @@ deposit_quote_withdrawal_ok(C) ->
             created_at => <<"2016-03-22T06:12:27Z">>,
             expires_on => <<"2016-03-22T06:12:27Z">>,
             quote_data => #{<<"test">> => <<"test">>},
-            route => ff_withdrawal_routing:make_route(1, 1),
+            route => w_routing:make_route(1, 1),
             domain_revision => ct_domain_config:head(),
             operation_timestamp => ff_time:from_rfc3339(<<"2016-03-22T06:12:27Z">>)
         }

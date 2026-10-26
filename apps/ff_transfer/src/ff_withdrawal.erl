@@ -124,7 +124,7 @@
     | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}
     | {customer, notfound}.
 
--type route() :: ff_withdrawal_routing:route().
+-type route() :: w_routing:route().
 -type routing_candidates() :: [route()].
 -type routing_rollback_data() :: #{reason := failure(), candidates := nonempty_list(route())}.
 -type realm() :: ff_payment_institution:realm().
@@ -360,7 +360,7 @@
 
 -type fail_type() ::
     limit_check
-    | ff_withdrawal_routing:route_not_found()
+    | w_routing:route_not_found()
     | {inconsistent_quote_route, route()}
     | {validation_personal_data, sender | receiver}
     | session.
@@ -923,7 +923,7 @@ process_compensate_routing_failure(Withdrawal) ->
     {ok, {[route()], routing_candidates()}} | {error, {Reason, routing_candidates()}}
 when
     Reason ::
-        ff_withdrawal_routing:route_not_found()
+        w_routing:route_not_found()
         | attempt_limit_exceeded
         | InconsistentQuote,
     InconsistentQuote :: {inconsistent_quote_route, route()}.
@@ -931,19 +931,10 @@ do_process_routing(Withdrawal) ->
     do(fun() ->
         {Varset, Context} = make_routing_varset_and_context(Withdrawal),
         ExcludeRoutes = ff_withdrawal_route_attempt_utils:get_terminals(attempts(Withdrawal)),
-        GatherResult = ff_withdrawal_routing:gather_routes(Varset, Context, ExcludeRoutes),
-        FilterResult = ff_withdrawal_routing:filter_limit_overflow_routes(GatherResult, Varset, Context),
-        ff_withdrawal_routing:log_reject_context(FilterResult),
-        Accounted = ff_withdrawal_routing:accounted_candidates(FilterResult),
-        Selection =
-            case quote(Withdrawal) of
-                undefined ->
-                    ff_withdrawal_routing:select_routes(FilterResult);
-                Quote ->
-                    Routes = unwrap_routing_result(ff_withdrawal_routing:routes(FilterResult), Accounted),
-                    select_quote_route(Routes, Quote)
-            end,
-        ValidatedRoutes = unwrap_routing_result(Selection, Accounted),
+        Result = w_routing:route(Varset, Context, ExcludeRoutes, quote(Withdrawal)),
+        w_routing:log_reject_context(Result, Varset),
+        Accounted = w_routing:accounted_candidates(Result),
+        ValidatedRoutes = unwrap_routing_result(w_routing:result(Result), Accounted),
         {ValidatedRoutes, Accounted}
     end).
 
@@ -965,8 +956,8 @@ do_rollback_routing(ExcludeRoutes0, Withdrawal) ->
                 lists:filter(fun(R) -> CurrentRoute =/= R end, ExcludeUsedRoutes0)
         end,
     ExcludeRoutes1 =
-        ExcludeUsedRoutes1 ++ lists:map(fun(R) -> ff_withdrawal_routing:get_terminal(R) end, ExcludeRoutes0),
-    Routes = ff_withdrawal_routing:get_routes(ff_withdrawal_routing:gather_routes(Varset, Context, ExcludeRoutes1)),
+        ExcludeUsedRoutes1 ++ lists:map(fun(R) -> w_routing:get_terminal(R) end, ExcludeRoutes0),
+    Routes = w_routing:get_routes(w_routing:gather_routes(Varset, Context, ExcludeRoutes1)),
     rollback_routes_limits(Routes, Varset, Context).
 
 rollback_unused_candidates(Withdrawal) ->
@@ -996,7 +987,7 @@ rollback_routes_limits(Routes, Withdrawal) ->
     rollback_routes_limits(Routes, Varset, Context).
 
 rollback_routes_limits(Routes, Varset, Context) ->
-    ff_withdrawal_routing:rollback_routes_limits(Routes, Varset, Context).
+    w_routing:rollback_routes_limits(Routes, Varset, Context).
 
 commit_routes_limits(Routes, Withdrawal) ->
     {Varset, Context0} = make_routing_varset_and_context(Withdrawal),
@@ -1008,7 +999,7 @@ commit_routes_limits(Routes, Withdrawal) ->
             false ->
                 Context0
         end,
-    ff_withdrawal_routing:commit_routes_limits(Routes, Varset, Context).
+    w_routing:commit_routes_limits(Routes, Varset, Context).
 
 make_routing_varset_and_context(Withdrawal) ->
     DomainRevision = final_domain_revision(Withdrawal),
@@ -1035,15 +1026,6 @@ make_routing_varset_and_context(Withdrawal) ->
 
 update_context_iteration(Multiplicator, #{iteration := Iter} = Context) ->
     Context#{iteration => Iter * Multiplicator}.
-
--spec select_quote_route([route()], quote_state()) -> {ok, [route()]} | {error, {inconsistent_quote_route, route()}}.
-select_quote_route(Routes, #{route := QuoteRoute}) ->
-    case lists:search(fun(Route) -> same_provider_terminal(Route, QuoteRoute) end, Routes) of
-        {value, Route} ->
-            {ok, [Route]};
-        false ->
-            {error, {inconsistent_quote_route, QuoteRoute}}
-    end.
 
 -spec process_limit_check(withdrawal_state()) -> process_result().
 process_limit_check(Withdrawal) ->
@@ -1366,7 +1348,7 @@ construct_payment_tool(
 %% Quote helpers
 
 -spec get_quote(quote_params()) ->
-    {ok, quote()} | {error, create_error() | {route, ff_withdrawal_routing:route_not_found()}}.
+    {ok, quote()} | {error, create_error() | {route, w_routing:route_not_found()}}.
 get_quote(#{destination_id := DestinationID, body := Body, wallet_id := WalletID, party_id := PartyID} = Params) ->
     do(fun() ->
         Destination = unwrap(destination, get_destination(DestinationID)),
@@ -1442,7 +1424,7 @@ get_quote_(Params) ->
         Wallet = unwrap(wallet, fetch_wallet(WalletID, PartyID, DomainRevision)),
 
         %% TODO: don't apply turnover limits here
-        [Route | _] = unwrap(route, ff_withdrawal_routing:prepare_routes(Varset, Wallet, DomainRevision)),
+        [Route | _] = unwrap(route, w_routing:prepare_routes(Varset, Wallet, DomainRevision)),
         {Adapter, AdapterOpts} = ff_withdrawal_session:get_adapter_with_opts(Route),
         GetQuoteParams = #{
             external_id => maps:get(external_id, Params, undefined),
@@ -2055,7 +2037,7 @@ build_failure(session, Withdrawal) ->
 build_route_not_found_sub_failure([]) ->
     undefined;
 %% NOTE If limit overflow reason present in any rejected route See reason-tuple
-%% construction in `ff_withdrawal_routing:validate_turnover_limits/4` and
+%% construction in `w_routing:validate_turnover_limits/4` and
 %% `ff_limiter:check_limits/4`.
 build_route_not_found_sub_failure([
     ?rejected_route({terms_violation, {overflow, OverflowedLimits}}) | _
@@ -2267,7 +2249,7 @@ routing_journal_test() ->
         ?assertEqual(lists:sort([Chosen, Overflowed]), lists:sort(Candidates)),
         State = apply_event(Event, test_withdrawal_state()),
         %% meck 0.9.2 incorrectly specifies meck:raise/2's reason as the atom 'term'.
-        ok = meck:expect(ff_withdrawal_routing, gather_routes, 3, meck_ret_spec:raise(error, ruleset_unavailable)),
+        ok = meck:expect(hg_route_collector, get_routes, 4, meck_ret_spec:raise(error, ruleset_unavailable)),
         {timeout, CreationEvents} = process_transfer(State),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Overflowed, 1])),
         Created = lists:foldl(fun apply_event/2, State, CreationEvents),
@@ -2371,15 +2353,12 @@ quote_route_selection_test() ->
     Preferred = test_route(1, 7),
     Quoted = test_route(2, 8),
     with_routing_mocks([Preferred, Quoted], fun() ->
-        ok = meck:expect(ff_withdrawal_routing, gather_routes, fun(VS, _, _) ->
+        ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) ->
             Candidates = [
                 hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 7}, 100, 1000, 0),
                 hg_route:new(1, #domain_ProviderRef{id = 2}, #domain_TerminalRef{id = 8}, 0, 900, 0)
             ],
-            #{
-                routes => Candidates,
-                reject_context => #{varset => VS, accepted_routes => Candidates, rejected_routes => []}
-            }
+            #{routes => Candidates}
         end),
         State0 = test_withdrawal_state(),
         Params = maps:get(params, State0),
@@ -2486,7 +2465,7 @@ with_routing_mocks(Routes, Fun) ->
         ff_limiter,
         ff_destination_machine,
         ff_postings_transfer,
-        ff_withdrawal_routing,
+        hg_route_collector,
         ff_payouts_provider,
         ff_payment_institution
     ],
@@ -2511,17 +2490,14 @@ with_routing_mocks(Routes, Fun) ->
         ok = meck:expect(ff_party, get_terms, 3, #domain_TermSet{}),
         ok = meck:expect(ff_party, get_withdrawal_cash_flow_plan, 1, {ok, #{postings => []}}),
         ok = meck:expect(ff_payouts_provider, get, 2, {ok, #{accounts => #{}}}),
-        ok = meck:expect(ff_payment_institution, get, 3, {ok, #{}}),
+        ok = meck:expect(ff_payment_institution, get, 3, {ok, #{withdrawal_routing_rules => undefined}}),
         ok = meck:expect(ff_payment_institution, system_accounts, 2, {ok, #{}}),
-        ok = meck:expect(ff_withdrawal_routing, gather_routes, fun(VS, _, Exclude) ->
+        ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) ->
             Candidates = [
                 hg_route:new(1, #domain_ProviderRef{id = P}, #domain_TerminalRef{id = T}, 0, 1000, 0)
-             || #{provider_id := P, terminal_id := T} <- Routes, not lists:member(T, Exclude)
+             || #{provider_id := P, terminal_id := T} <- Routes
             ],
-            #{
-                routes => Candidates,
-                reject_context => #{varset => VS, accepted_routes => Candidates, rejected_routes => []}
-            }
+            #{routes => Candidates}
         end),
         Fun()
     after
@@ -2531,7 +2507,22 @@ with_routing_mocks(Routes, Fun) ->
 test_route_terms() ->
     {ok, #domain_ProvisionTermSet{
         wallet = #domain_WalletProvisionTerms{
-            withdrawals = #domain_WithdrawalProvisionTerms{cash_flow = {value, []}, turnover_limit = {value, []}}
+            withdrawals = #domain_WithdrawalProvisionTerms{
+                currencies = {value, [#domain_CurrencyRef{symbolic_code = <<"RUB">>}]},
+                cash_limit =
+                    {value, #domain_CashRange{
+                        lower =
+                            {inclusive, #domain_Cash{
+                                amount = 0, currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>}
+                            }},
+                        upper =
+                            {inclusive, #domain_Cash{
+                                amount = 1000000, currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>}
+                            }}
+                    }},
+                cash_flow = {value, []},
+                turnover_limit = {value, []}
+            }
         }
     }}.
 

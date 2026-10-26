@@ -1,4 +1,4 @@
--module(hg_routing_ctx).
+-module(routing_ctx).
 
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -compile({no_auto_import, [error/1]}).
@@ -17,6 +17,7 @@
     considered_candidates/1,
     initial_candidates/1,
     accounted_candidates/1,
+    account/2,
     latest_rejected_error/1,
     set_choosen/3,
     choosen_route/1,
@@ -26,18 +27,19 @@
     stash_route_scores/2,
     route_limits/1,
     route_scores/1,
-    build_route_selection_context/3
+    explainable_routes/1
 ]).
 
 -type rejection_group() :: atom().
 -type routes() :: [hg_route:t()].
--type limits() :: #{hg_route:payment_route() => [dmsl_payproc_thrift:'TurnoverLimitValue'()]}.
--type scores() :: #{hg_route:payment_route() => #domain_PaymentRouteScores{}}.
+-type limits() :: map().
+-type scores() :: map().
 -type error() :: {atom(), _Description}.
 
 -type t() :: #{
     initial_candidates := routes(),
     candidates := routes(),
+    accounted := routes(),
     rejections := #{rejection_group() => routes()},
     latest_rejection => rejection_group(),
     stashed_candidates => routes(),
@@ -53,21 +55,22 @@ new(Candidates) ->
     #{
         initial_candidates => Candidates,
         candidates => Candidates,
+        accounted => [],
         rejections => #{},
         error => undefined,
         choosen_route => undefined,
         choice_meta => undefined
     }.
 
--spec from_result(#{routes := routes(), rejections => #{rejection_group() => routes()}}) -> t().
+-spec from_result(#{routes := routes(), rejections => #{rejection_group() => routes()}, error => error()}) -> t().
 from_result(#{routes := Routes} = RoutingResult) ->
     Rejections = maps:get(rejections, RoutingResult, #{}),
     lists:foldl(
         fun(Group, Ctx) ->
             append_rejected_routes(Group, Routes, maps:get(Group, Rejections, []), Ctx)
         end,
-        new(Routes),
-        [blacklisted, accepted, prohibit]
+        set_error(maps:get(error, RoutingResult, undefined), new(Routes)),
+        lists:sort(maps:keys(Rejections))
     ).
 
 -spec append_rejected_routes(
@@ -87,7 +90,7 @@ append_rejected_routes(Group, Candidates, RejectedRoutes, Ctx0) ->
         latest_rejection => Group
     }.
 
--spec reject(rejection_group(), hg_route:rejected_route(), t()) -> t().
+-spec reject(rejection_group(), hg_route:t(), t()) -> t().
 reject(GroupReason, RejectedRoute, Ctx0) ->
     Rejections0 = maps:get(rejections, Ctx0, #{}),
     RejectedList = maps:get(GroupReason, Rejections0, []) ++ [RejectedRoute],
@@ -97,7 +100,7 @@ reject(GroupReason, RejectedRoute, Ctx0) ->
         latest_rejection => GroupReason
     }.
 
--spec rejected_routes(t()) -> [hg_route:rejected_route()].
+-spec rejected_routes(t()) -> routes().
 rejected_routes(Ctx) ->
     lists:flatten([R || {_, R} <- maps:to_list(rejection_map(Ctx))]).
 
@@ -130,14 +133,18 @@ initial_candidates(#{initial_candidates := InitialCandidates}) ->
 
 -spec accounted_candidates(t()) -> routes().
 accounted_candidates(Ctx) ->
-    maps:get(stashed_candidates, Ctx, initial_candidates(Ctx)).
+    maps:get(accounted, Ctx).
+
+-spec account(hg_route:t(), t()) -> t().
+account(Route, #{accounted := Accounted} = Ctx) ->
+    Ctx#{accounted := Accounted ++ [Route]}.
 
 -spec latest_rejected_error(t()) -> {rejected_routes, {atom(), routes()}}.
 latest_rejected_error(Result) ->
     {Group, RejectedRoutes} = latest_rejected_routes(Result),
     {rejected_routes, {Group, RejectedRoutes}}.
 
--spec set_choosen(hg_route:t(), hg_routing:route_choice_context(), t()) -> t().
+-spec set_choosen(hg_route:t(), routing:route_choice_context(), t()) -> t().
 set_choosen(Route, ChoiceMeta, Ctx) ->
     Ctx#{
         choosen_route => Route,
@@ -174,15 +181,6 @@ route_scores(Ctx) ->
 stash_route_scores(RouteScores, Ctx) ->
     Ctx#{route_scores => maps:merge(maps:get(route_scores, Ctx, #{}), RouteScores)}.
 
--spec build_route_selection_context(hg_route:t(), map(), t()) -> t().
-build_route_selection_context(ChosenRoute, ChoiceMeta, Ctx) ->
-    ExplainableRoutes = get_explainable_routes(Ctx),
-    Ctx#{
-        choosen_route => ChosenRoute,
-        choice_meta => ChoiceMeta,
-        route_scores => build_route_scores(ExplainableRoutes)
-    }.
-
 -spec latest_rejected_routes(t()) -> {rejection_group(), routes()}.
 latest_rejected_routes(Result) ->
     RejectionMap = rejection_map(Result),
@@ -193,7 +191,8 @@ latest_rejected_routes(Result) ->
 rejection_map(Result) ->
     maps:get(rejections, Result, #{}).
 
-get_explainable_routes(Result) ->
+-spec explainable_routes(t()) -> routes().
+explainable_routes(Result) ->
     merge_explainable_routes(
         rejected_routes(Result),
         candidates(Result)
@@ -211,15 +210,6 @@ merge_explainable_routes(Routes0, Routes1) ->
         end,
         [],
         Routes0 ++ Routes1
-    ).
-
-build_route_scores(Routes) ->
-    lists:foldl(
-        fun(Route, Acc) ->
-            Acc#{hg_route:to_payment_route(Route) => hg_route:score(Route)}
-        end,
-        #{},
-        Routes
     ).
 
 exclude_route(Route, Routes) ->
@@ -264,7 +254,8 @@ considered_and_accounted_candidates_test() ->
     R1 = new_test_route(2, 1),
     R2 = new_test_route(2, 2),
     Base = new([R1, R2]),
-    ?assertEqual([R1, R2], accounted_candidates(Base)),
+    ?assertEqual([], accounted_candidates(Base)),
+    ?assertEqual([R1], accounted_candidates(account(R1, Base))),
     ?assertEqual(
         [R1],
         considered_candidates(stash_current_candidates(append_rejected_routes(test, [R1], [R2], Base)))
@@ -291,7 +282,7 @@ route_data_helpers_test() ->
     R1 = new_test_route(4, 1),
     PaymentRoute = hg_route:to_payment_route(R1),
     Result0 = new([R1]),
-    Result1 = stash_current_candidates(Result0),
+    Result1 = account(R1, stash_current_candidates(Result0)),
     Result2 = stash_route_scores(
         #{PaymentRoute => hg_route:score(R1)},
         stash_route_limits(#{PaymentRoute => []}, Result1)

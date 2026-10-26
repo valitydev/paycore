@@ -52,7 +52,7 @@
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type p_transfer_status() :: ff_postings_transfer:status().
 -type limit_check_details() :: ff_withdrawal:limit_check_details().
--type route() :: ff_withdrawal_routing:route().
+-type route() :: w_routing:route().
 -type route_key() :: {ff_payouts_provider:id(), ff_payouts_terminal:id()} | unknown.
 -type session() :: ff_withdrawal:session().
 -type attempt_limit() :: ff_party:attempt_limit().
@@ -202,7 +202,7 @@ get_current_terminal(_) ->
 
 -spec route_key(route()) -> route_key().
 route_key(Route) ->
-    {ff_withdrawal_routing:get_provider(Route), ff_withdrawal_routing:get_terminal(Route)}.
+    {w_routing:get_provider(Route), w_routing:get_terminal(Route)}.
 
 -spec add_route(route_key(), attempts()) -> attempts().
 add_route(RouteKey, R) ->

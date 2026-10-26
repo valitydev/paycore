@@ -1,11 +1,11 @@
--module(hg_payment_routing).
+-module(p_routing).
 
 -include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_payproc_thrift.hrl").
 -include_lib("fault_detector_proto/include/fd_proto_fault_detector_thrift.hrl").
 
--behaviour(hg_routing_domain).
+-behaviour(routing_domain).
 
 -export([compute_ruleset/3]).
 -export([resolve_terminal/2]).
@@ -23,6 +23,120 @@
 -export_type([route_predestination/0]).
 -export_type([varset/0]).
 -export_type([revision/0]).
+
+-type get_route_params() :: #{
+    predestination := route_predestination(),
+    revision := revision(),
+    varset := varset(),
+    payment_institution := payment_institution(),
+    pin_context := hg_payment_route_pin:context(),
+    blacklist_context => hg_inspector:blacklist_context()
+}.
+-type limits() :: #{hg_route:payment_route() => [dmsl_payproc_thrift:'TurnoverLimitValue'()]}.
+-type route_scores() :: #domain_PaymentRouteScores{}.
+-type scores() :: #{hg_route:payment_route() => route_scores()}.
+-type misconfiguration_error() :: hg_route_collector:get_routes_error().
+-export_type([get_route_params/0, limits/0, route_scores/0, scores/0]).
+-export([get_routes/1, steps/1, select/2, prepare_log_message/1, get_logger_metadata/2]).
+
+-spec prepare_log_message(misconfiguration_error()) -> {io:format(), [term()]}.
+prepare_log_message({misconfiguration, {routing_decisions, Details}}) ->
+    {"PaymentRoutingDecisions couldn't be reduced to candidates, ~p", [Details]};
+prepare_log_message({misconfiguration, {routing_candidate, Candidate}}) ->
+    {"PaymentRoutingCandidate couldn't be reduced, ~p", [Candidate]};
+prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
+    {"PaymentRoutingRules are empty", []}.
+
+-spec get_logger_metadata(routing:route_choice_context(), hg_route:revision()) -> LoggerFormattedMetadata :: map().
+get_logger_metadata(RouteChoiceContext, Revision) ->
+    maps:fold(
+        fun(K, V, Acc) ->
+            Acc#{K => format_logger_metadata(K, V, Revision)}
+        end,
+        #{},
+        RouteChoiceContext
+    ).
+
+format_logger_metadata(reject_reason, Reason, _) ->
+    Reason;
+format_logger_metadata(Meta, Route, Revision) when
+    Meta =:= chosen_route;
+    Meta =:= preferable_route
+->
+    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
+    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
+    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
+    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
+    genlib_map:compact(#{
+        provider => #{id => ProviderID, name => ProviderName},
+        terminal => #{id => TerminalID, name => TerminalName},
+        priority => hg_route:priority(Route),
+        weight => hg_route:weight(Route),
+        terminal_affinity => hg_route:affinity_rank(Route),
+        affinity_enabled => hg_route:affinity(Route) =/= undefined
+    }).
+
+-spec get_routes(get_route_params()) -> routing_ctx:t().
+get_routes(Params) ->
+    routing:run(routing_ctx:new([]), steps(Params)).
+
+-spec steps(get_route_params()) -> [routing:step()].
+steps(
+    #{
+        predestination := Predestination,
+        revision := Revision,
+        varset := VS,
+        payment_institution := PI,
+        pin_context := PinCtx
+    } = Params
+) ->
+    Rules = PI#domain_PaymentInstitution.payment_routing_rules,
+    [
+        {collect, fun(_) -> routing:collect(Revision, VS, Rules, ?MODULE) end},
+        {pin, fun(S) -> routing:fill(S, fun(Rs) -> hg_payment_route_pin:fill(Rs, PinCtx) end) end},
+        {accepted, fun(S) -> routing:fill(S, fun(Rs) -> fill_accepted(Predestination, Revision, VS, Rs) end) end},
+        {prohibition, fun(S) ->
+            routing:fill(S, fun(Rs) -> hg_route_collector:fill_prohibition(Revision, VS, Rules, ?MODULE, Rs) end)
+        end},
+        {fd_overrides, fun(S) -> routing:fill(S, fun(Rs) -> fill_fd_overrides(Revision, Rs) end) end},
+        {blacklist, fun(S) -> maybe_fill_blacklist(S, maps:get(blacklist_context, Params, undefined)) end},
+        {fd, fun(S) -> routing:fill(S, fun hg_route_fd:fill/1) end},
+        %% An explicit ban outranks a terms mismatch: the recorded reason must be the rule that forbade the route.
+        {filter, fun(S) -> routing:filter(S, [{prohibit, true}, {blacklisted, 1}, {accepted, false}]) end}
+    ].
+
+maybe_fill_blacklist(State, undefined) -> State;
+maybe_fill_blacklist(State, Context) -> routing:fill(State, fun(Routes) -> fill_blacklist(Context, Routes) end).
+
+%% Machine-specific steps can be inserted before the common balance and selection.
+-spec select(routing_ctx:t(), [routing:step()]) -> routing_ctx:t().
+select(State, Steps) ->
+    Result = routing:run(
+        routing_ctx:stash_current_candidates(State),
+        Steps ++ [{balance, fun routing:balance/1}, {choose, fun routing:select/1}]
+    ),
+    case routing_ctx:choosen_route(Result) of
+        undefined -> Result;
+        Chosen -> build_route_selection_context(Chosen, maps:get(choice_meta, Result), Result)
+    end.
+
+-spec build_route_selection_context(hg_route:t(), map(), routing_ctx:t()) -> routing_ctx:t().
+build_route_selection_context(ChosenRoute, ChoiceMeta, Ctx) ->
+    ExplainableRoutes = routing_ctx:explainable_routes(Ctx),
+    Ctx#{
+        choosen_route => ChosenRoute,
+        choice_meta => ChoiceMeta,
+        route_scores => build_route_scores(ExplainableRoutes)
+    }.
+
+build_route_scores(Routes) ->
+    lists:foldl(
+        fun(Route, Acc) ->
+            Acc#{hg_route:to_payment_route(Route) => hg_route:score(Route)}
+        end,
+        #{},
+        Routes
+    ).
 
 -define(fd_overrides(Enabled), #domain_RouteFaultDetectorOverrides{enabled = Enabled}).
 -define(rejected(Reason), {rejected, Reason}).
@@ -354,6 +468,17 @@ getv(Name, VS, Default) ->
 
 -spec test() -> _.
 
+-spec selection_without_holds_preserves_candidates_test() -> _.
+selection_without_holds_preserves_candidates_test() ->
+    Routes = [test_route(1), test_route(2)],
+    Result = select(routing_ctx:new(Routes), [
+        {hold, fun(S) -> routing:hold(S, limit_misconfiguration, fun(_) -> {error, invalid_limit} end) end}
+    ]),
+    ?assertEqual([], routing_ctx:candidates(Result)),
+    ?assertEqual([], routing_ctx:accounted_candidates(Result)),
+    ?assertEqual(Routes, routing_ctx:considered_candidates(Result)),
+    ?assertEqual(undefined, routing_ctx:choosen_route(Result)).
+
 -spec merge_fd_overrides_test_() -> _.
 merge_fd_overrides_test_() ->
     [
@@ -405,7 +530,7 @@ fill_blacklist_preserves_hg_context_in_workers() ->
         Route
     end),
     try
-        ?assertEqual(Routes, hg_payment_routing:fill_blacklist(BlCtx, Routes)),
+        ?assertEqual(Routes, p_routing:fill_blacklist(BlCtx, Routes)),
         WorkerPids = collect_worker_pids(Ref, 3),
         ?assertEqual(3, length(WorkerPids)),
         ?assert(lists:all(fun(Pid) -> Pid =/= Parent end, WorkerPids))
@@ -432,7 +557,7 @@ fill_blacklist_timeout_raises_transient_error() ->
     try
         ?assertError(
             {woody_error, {system, resource_unavailable, blacklist_fill_timeout}},
-            hg_payment_routing:fill_blacklist(BlCtx, Routes)
+            p_routing:fill_blacklist(BlCtx, Routes)
         )
     after
         ok = application:set_env(hellgate, inspect_timeout, PrevTimeout),

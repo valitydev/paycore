@@ -1,6 +1,6 @@
--module(ff_withdrawal_routing).
+-module(w_routing).
 
--behaviour(hg_routing_domain).
+-behaviour(routing_domain).
 
 -export([compute_ruleset/3]).
 -export([resolve_terminal/2]).
@@ -12,18 +12,18 @@
 -export([prepare_routes/2]).
 -export([prepare_routes/3]).
 -export([gather_routes/2]).
--export([gather_routes/3]).
+-export([gather_routes/3, steps/3]).
 -export([filter_limit_overflow_routes/3]).
 -export([rollback_routes_limits/3]).
 -export([commit_routes_limits/3]).
 -export([make_route/2]).
 -export([get_provider/1]).
 -export([get_terminal/1]).
--export([routes/1]).
+-export([route/4, result/1, rejected_routes/1]).
 -export([select_routes/1]).
 -export([get_routes/1]).
 -export([accounted_candidates/1]).
--export([log_reject_context/1]).
+-export([log_reject_context/2]).
 
 -import(ff_pipeline, [do/1, unwrap/1]).
 
@@ -41,11 +41,7 @@
     withdrawal => withdrawal()
 }.
 
--type routing_state() :: #{
-    routes := [routing_rule_route()],
-    reject_context := reject_context(),
-    accounted => [route()]
-}.
+-type routing_state() :: routing_ctx:t().
 
 -type rejected_route() :: {provider_ref(), terminal_ref(), Reason :: term()}.
 
@@ -65,14 +61,6 @@
 -type terminal_id() :: ff_payouts_terminal:id().
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
-
--type routing_rule_route() :: hg_route:t().
-
--type reject_context() :: #{
-    varset := party_varset(),
-    accepted_routes := [routing_rule_route()],
-    rejected_routes := [rejected_route()]
-}.
 
 -type withdrawal_provision_terms() :: dmsl_domain_thrift:'WithdrawalProvisionTerms'().
 -type currency_selector() :: dmsl_domain_thrift:'CurrencySelector'().
@@ -97,7 +85,7 @@ prepare_routes(PartyVarset, Wallet, DomainRevision) ->
     {ok, [route()]} | {error, route_not_found()}.
 prepare_routes(PartyVarset, Context) ->
     State = gather_routes(PartyVarset, Context),
-    log_reject_context(State),
+    log_reject_context(State, PartyVarset),
     select_routes(State).
 
 -spec gather_routes(party_varset(), routing_context()) ->
@@ -107,87 +95,88 @@ gather_routes(PartyVarset, Context) ->
 
 -spec gather_routes(party_varset(), routing_context(), [terminal_id()]) ->
     routing_state().
-gather_routes(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision} = Context, ExcludeRoutes) ->
+gather_routes(PartyVarset, Context, ExcludeRoutes) ->
+    try
+        State = routing:run(routing_ctx:new([]), steps(PartyVarset, Context, ExcludeRoutes)),
+        case routing_ctx:error(State) of
+            undefined -> State;
+            {misconfiguration, Reason} -> misconfigured_routes(Reason, PartyVarset)
+        end
+    catch
+        throw:{misconfiguration, CatchReason} -> misconfigured_routes(CatchReason, PartyVarset)
+    end.
+
+-spec steps(party_varset(), routing_context(), [terminal_id()]) -> [routing:step()].
+steps(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision} = Context, ExcludeRoutes) ->
     #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
     {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
     RoutingRules = maps:get(withdrawal_routing_rules, PaymentInstitution),
-    CollectorResult =
-        try hg_route_collector:get_routes(DomainRevision, PartyVarset, RoutingRules, ?MODULE) of
-            #{error := _} = ErrorResult ->
-                ErrorResult;
-            #{routes := Routes} ->
-                #{
-                    routes => hg_route_collector:fill_prohibition(
-                        DomainRevision, PartyVarset, RoutingRules, ?MODULE, Routes
-                    )
-                }
-        catch
-            throw:{misconfiguration, _} = Error ->
-                #{routes => [], error => Error}
-        end,
-    case maps:get(error, CollectorResult, undefined) of
-        {misconfiguration, Reason} ->
-            logger:warning("Routing rule misconfiguration. Reason:~n~p~nVarset:~n~p", [Reason, PartyVarset]),
-            #{
-                routes => [],
-                reject_context => new_reject_context(PartyVarset)
-            };
-        undefined ->
-            #{routes := Collected} = CollectorResult,
-            {Accepted, Rejected} = split_prohibited(Collected),
-            RejectContext = (new_reject_context(PartyVarset))#{
-                accepted_routes => Accepted,
-                rejected_routes => Rejected
-            },
-            State = exclude_routes(#{routes => Accepted, reject_context => RejectContext}, ExcludeRoutes),
-            filter_valid_routes(State, PartyVarset, Context)
-    end.
+    [
+        {collect, fun(_) -> routing:collect(DomainRevision, PartyVarset, RoutingRules, ?MODULE) end},
+        {prohibition, fun(S) ->
+            routing:fill(S, fun(Rs) ->
+                hg_route_collector:fill_prohibition(DomainRevision, PartyVarset, RoutingRules, ?MODULE, Rs)
+            end)
+        end},
+        {filter_prohibited, fun(S) -> routing:filter(S, [{prohibit, true}]) end},
+        {attempted, fun(S) -> exclude_routes(S, ExcludeRoutes) end},
+        {accepted, fun(S) -> routing:fill(S, fun(Rs) -> fill_accepted(PartyVarset, Context, Rs) end) end},
+        {filter_accepted, fun(S) -> routing:filter(S, [{accepted, false}]) end}
+    ].
 
--spec filter_limit_overflow_routes(routing_state(), party_varset(), routing_context()) ->
-    routing_state().
-filter_limit_overflow_routes(#{routes := Routes, reject_context := RejectContext}, PartyVarset, RoutingContext) ->
-    State = lists:foldl(
-        fun(Route, #{routes := Valid, reject_context := RC, accounted := Acc} = St) ->
-            ProviderRef = maps:get(provider_ref, Route),
-            TerminalRef = maps:get(terminal_ref, Route),
-            EventRoute = make_route(ProviderRef#domain_ProviderRef.id, TerminalRef#domain_TerminalRef.id),
+misconfigured_routes(Reason, PartyVarset) ->
+    logger:warning("Routing rule misconfiguration. Reason:~n~p~nVarset:~n~p", [Reason, PartyVarset]),
+    routing_ctx:new([]).
+
+%% Quote and normal routing share all eligibility and hold steps.
+-spec route(party_varset(), routing_context(), [terminal_id()], map() | undefined) -> routing_state().
+route(Varset, Context, Exclude, Quote) ->
+    State = gather_routes(Varset, Context, Exclude),
+    Selection =
+        case Quote of
+            undefined -> [{balance, fun routing:balance/1}, {choose, fun routing:select/1}];
+            _ -> [{quote, fun(S) -> select_quote(S, Quote) end}]
+        end,
+    routing:run(State, [{limits, fun(S) -> filter_limit_overflow_routes(S, Varset, Context) end} | Selection]).
+
+select_quote(State, #{route := QuoteRoute}) ->
+    case routing_ctx:candidates(State) of
+        [] ->
+            State;
+        Routes ->
             case
-                get_route_terms_and_process(
-                    fun do_validate_limits/4, ProviderRef, TerminalRef, PartyVarset, RoutingContext
+                lists:search(
+                    fun(#{provider_ref := #domain_ProviderRef{id = P}, terminal_ref := #domain_TerminalRef{id = T}}) ->
+                        P =:= get_provider(QuoteRoute) andalso T =:= get_terminal(QuoteRoute)
+                    end,
+                    Routes
                 )
             of
-                {ok, valid} ->
-                    St#{
-                        routes => [Route | Valid],
-                        accounted => [EventRoute | Acc]
-                    };
-                {held, RejectReason} ->
-                    Rejected = maps:get(rejected_routes, RC),
-                    St#{
-                        accounted => [EventRoute | Acc],
-                        reject_context => RC#{
-                            rejected_routes => [{ProviderRef, TerminalRef, RejectReason} | Rejected]
-                        }
-                    };
-                {error, RejectReason} ->
-                    Rejected = maps:get(rejected_routes, RC),
-                    St#{
-                        reject_context => RC#{
-                            rejected_routes => [{ProviderRef, TerminalRef, RejectReason} | Rejected]
-                        }
-                    }
+                {value, Chosen} -> routing_ctx:set_choosen(Chosen, #{chosen_route => Chosen}, State);
+                false -> routing_ctx:set_error({inconsistent_quote_route, QuoteRoute}, State)
             end
-        end,
-        #{routes => [], reject_context => RejectContext, accounted => []},
-        Routes
-    ),
-    State#{routes := lists:reverse(maps:get(routes, State))}.
+    end.
+
+-spec filter_limit_overflow_routes(routing_state(), party_varset(), routing_context()) -> routing_state().
+filter_limit_overflow_routes(State, PartyVarset, Context) ->
+    routing:hold(State, limit_overflow, fun(Route) ->
+        case
+            get_route_terms_and_process(
+                fun do_validate_limits/4,
+                hg_route:provider_ref(Route),
+                hg_route:terminal_ref(Route),
+                PartyVarset,
+                Context
+            )
+        of
+            {ok, valid} -> ok;
+            Other -> Other
+        end
+    end).
 
 -spec accounted_candidates(routing_state()) -> [route()].
-accounted_candidates(#{accounted := Accounted}) ->
-    Accounted;
-accounted_candidates(_) ->
-    [].
+accounted_candidates(State) ->
+    [hg_route:to_withdrawal_route(Route) || Route <- routing_ctx:accounted_candidates(State)].
 
 -spec rollback_routes_limits([route()], party_varset(), routing_context()) ->
     ok.
@@ -225,75 +214,41 @@ get_provider(#{provider_id := ProviderID}) ->
 get_terminal(#{terminal_id := TerminalID}) ->
     TerminalID.
 
--spec routes(routing_state()) ->
-    {ok, [route()]} | {error, route_not_found()}.
-routes(#{routes := Routes = [_ | _]}) ->
-    {ok, sort_routes(Routes)};
-routes(#{
-    routes := _Routes,
-    reject_context := #{
-        varset := _Varset,
-        accepted_routes := _Accepted,
-        rejected_routes := Rejected
-    }
-}) ->
-    {error, {route_not_found, Rejected}}.
-
 -spec select_routes(routing_state()) -> {ok, [route()]} | {error, route_not_found()}.
-select_routes(#{routes := []} = State) ->
-    routes(State);
-select_routes(#{routes := Routes}) ->
-    choose_balanced(Routes).
+select_routes(State) ->
+    result(routing:run(State, [{balance, fun routing:balance/1}, {choose, fun routing:select/1}])).
 
--spec get_routes(routing_state()) ->
-    [route()].
-get_routes(#{routes := Routes}) ->
-    [hg_route:to_withdrawal_route(Route) || Route <- Routes].
+-spec result(routing_state()) -> {ok, [route()]} | {error, route_not_found() | {inconsistent_quote_route, route()}}.
+result(State) ->
+    case {routing_ctx:error(State), routing_ctx:choosen_route(State)} of
+        {undefined, undefined} -> {error, {route_not_found, rejected_routes(State)}};
+        {undefined, Chosen} -> {ok, [hg_route:to_withdrawal_route(Chosen)]};
+        {Error, _} -> {error, Error}
+    end.
 
-choose_balanced(Routes) ->
-    Balanced = hg_route_balancer:fill(Routes),
-    {Chosen, _Ctx} = hg_routing:choose_route(Balanced),
-    {ok, [hg_route:to_withdrawal_route(Chosen)]}.
+-spec get_routes(routing_state()) -> [route()].
+get_routes(State) ->
+    [hg_route:to_withdrawal_route(Route) || Route <- routing_ctx:candidates(State)].
 
--spec sort_routes([routing_rule_route()]) -> [route()].
-sort_routes(RoutingRuleRoutes) ->
-    ProviderTerminalMap = lists:foldl(
-        fun(Route, Acc0) ->
-            ProviderRef = hg_route:provider_ref(Route),
-            TerminalRef = hg_route:terminal_ref(Route),
-            Priority = hg_route:priority(Route),
-            TerminalID = TerminalRef#domain_TerminalRef.id,
-            ProviderID = ProviderRef#domain_ProviderRef.id,
-            AccRoutes = maps:get(Priority, Acc0, []),
-            Acc1 = maps:put(Priority, [{ProviderID, TerminalID} | AccRoutes], Acc0),
-            Acc1
-        end,
-        #{},
-        RoutingRuleRoutes
-    ),
-    lists:foldl(
-        fun({_, Data}, Acc) ->
-            SortedRoutes = [make_route(P, T) || {P, T} <- lists:sort(Data)],
-            SortedRoutes ++ Acc
-        end,
-        [],
-        lists:keysort(1, maps:to_list(ProviderTerminalMap))
-    ).
+-spec rejected_routes(routing_state()) -> [rejected_route()].
+rejected_routes(State) ->
+    [
+        {hg_route:provider_ref(R), hg_route:terminal_ref(R), rejection_reason(R)}
+     || R <- routing_ctx:rejected_routes(State)
+    ].
 
--spec log_reject_context(routing_state()) ->
-    ok.
-log_reject_context(#{reject_context := RejectContext}) ->
-    _ = logger:log(
-        info,
-        "Routing reject context: rejected routes: ~p, accepted routes: ~p, varset: ~p",
-        [
-            maps:get(rejected_routes, RejectContext),
-            maps:get(accepted_routes, RejectContext),
-            maps:get(varset, RejectContext)
-        ],
-        logger:get_process_metadata()
-    ),
-    ok.
+rejection_reason(Route) ->
+    case hg_route:rejection_reason(Route) of
+        {prohibit, {true, Description}} -> Description;
+        {accepted, {false, Reason}} -> Reason;
+        Reason -> Reason
+    end.
+
+-spec log_reject_context(routing_state(), party_varset()) -> ok.
+log_reject_context(State, Varset) ->
+    logger:info("Routing reject context: rejected routes: ~p, accepted routes: ~p, varset: ~p", [
+        rejected_routes(State), routing_ctx:candidates(State), Varset
+    ]).
 
 %%
 
@@ -318,38 +273,22 @@ validate_candidate(#domain_RoutingCandidate{allowed = {constant, Allowed}}) when
 validate_candidate(Candidate) ->
     throw({misconfiguration, {routing_candidate, Candidate}}).
 
-new_reject_context(VS) ->
-    #{
-        varset => VS,
-        accepted_routes => [],
-        rejected_routes => []
-    }.
-
-split_prohibited(Routes) ->
-    #{routes := Accepted, rejections := Rejections} = hg_routing:filter(Routes, [{prohibit, true}]),
-    Rejected = [
-        {hg_route:provider_ref(Route), hg_route:terminal_ref(Route), prohibit_reason(Route)}
-     || Route <- maps:get(prohibit, Rejections, [])
-    ],
-    {Accepted, Rejected}.
-
-prohibit_reason(Route) ->
-    case hg_route:rejection_reason(Route) of
-        {prohibit, {true, Description}} ->
-            Description;
-        _Other ->
-            {'RoutingRule', undefined}
-    end.
-
--spec filter_valid_routes(routing_state(), party_varset(), routing_context()) ->
-    routing_state().
-filter_valid_routes(State, PartyVarset, RoutingContext) ->
-    validate_routes_with(
-        fun do_validate_terms/4,
-        State,
-        PartyVarset,
-        RoutingContext
-    ).
+fill_accepted(Varset, Context, Routes) ->
+    [
+        case
+            get_route_terms_and_process(
+                fun do_validate_terms/4,
+                hg_route:provider_ref(Route),
+                hg_route:terminal_ref(Route),
+                Varset,
+                Context
+            )
+        of
+            {ok, valid} -> Route;
+            {error, Reason} -> hg_route:set_accepted({false, Reason}, Route)
+        end
+     || Route <- Routes
+    ].
 
 -spec process_routes_with(process_route_fun(), [route()], party_varset(), routing_context()) ->
     ok.
@@ -375,30 +314,6 @@ process_routes_with(Func, Routes, PartyVarset, RoutingContext) ->
         Routes
     ).
 
--spec validate_routes_with(
-    process_route_fun(), routing_state(), party_varset(), routing_context()
-) ->
-    routing_state().
-validate_routes_with(Func, #{routes := Routes, reject_context := RejectContext}, PartyVarset, RoutingContext) ->
-    lists:foldl(
-        fun(Route, #{routes := ValidRoutes0, reject_context := RejectContext0} = State) ->
-            ProviderRef = maps:get(provider_ref, Route),
-            TerminalRef = maps:get(terminal_ref, Route),
-            case get_route_terms_and_process(Func, ProviderRef, TerminalRef, PartyVarset, RoutingContext) of
-                {ok, valid} ->
-                    ValidRoutes1 = [Route | ValidRoutes0],
-                    State#{routes => ValidRoutes1};
-                {error, RejectReason} ->
-                    RejectedRoutes0 = maps:get(rejected_routes, RejectContext0),
-                    RejectedRoutes1 = [{ProviderRef, TerminalRef, RejectReason} | RejectedRoutes0],
-                    RejectContext1 = maps:put(rejected_routes, RejectedRoutes1, RejectContext0),
-                    State#{reject_context => RejectContext1}
-            end
-        end,
-        #{routes => [], reject_context => RejectContext},
-        Routes
-    ).
-
 get_route_terms_and_process(
     Func, ProviderRef, TerminalRef, PartyVarset, #{domain_revision := DomainRevision} = RoutingContext
 ) ->
@@ -416,26 +331,14 @@ get_route_terms_and_process(
             {error, Error}
     end.
 
-exclude_routes(#{routes := Routes, reject_context := RejectContext}, ExcludeRoutes) ->
-    lists:foldl(
-        fun(Route, #{routes := ValidRoutes0, reject_context := RejectContext0} = State) ->
-            ProviderRef = maps:get(provider_ref, Route),
-            TerminalRef = maps:get(terminal_ref, Route),
-            TerminalID = TerminalRef#domain_TerminalRef.id,
-            case not lists:member(TerminalID, ExcludeRoutes) of
-                true ->
-                    ValidRoutes1 = [Route | ValidRoutes0],
-                    State#{routes => ValidRoutes1};
-                false ->
-                    RejectedRoutes0 = maps:get(rejected_routes, RejectContext0),
-                    RejectedRoutes1 = [{ProviderRef, TerminalRef, member_of_exclude_list} | RejectedRoutes0],
-                    RejectContext1 = maps:put(rejected_routes, RejectedRoutes1, RejectContext0),
-                    State#{reject_context => RejectContext1}
-            end
-        end,
-        #{routes => [], reject_context => RejectContext},
-        Routes
-    ).
+exclude_routes(State, Exclude) ->
+    routing:check(State, already_attempted, fun(Route) ->
+        #domain_TerminalRef{id = ID} = hg_route:terminal_ref(Route),
+        case lists:member(ID, Exclude) of
+            true -> {error, member_of_exclude_list};
+            false -> ok
+        end
+    end).
 
 -spec do_rollback_limits(withdrawal_provision_terms(), party_varset(), route(), routing_context()) ->
     ok.
@@ -570,29 +473,6 @@ validate_turnover_limits(NotReducedSelector, _VS, _Route, _RoutingContext) ->
 
 -spec test() -> _.
 
--spec convert_to_route_test() -> _.
-convert_to_route_test() ->
-    ?assertEqual(
-        [],
-        sort_routes([])
-    ),
-    ?assertEqual(
-        [
-            #{provider_id => 100, terminal_id => 2000, version => 1},
-            #{provider_id => 100, terminal_id => 2001, version => 1},
-            #{provider_id => 200, terminal_id => 2100, version => 1},
-            #{provider_id => 200, terminal_id => 2101, version => 1},
-            #{provider_id => 300, terminal_id => 2200, version => 1}
-        ],
-        sort_routes([
-            hg_route:new(1, #domain_ProviderRef{id = 100}, #domain_TerminalRef{id = 2000}, 0, 1000, 0),
-            hg_route:new(1, #domain_ProviderRef{id = 100}, #domain_TerminalRef{id = 2001}, 0, 1000, 0),
-            hg_route:new(1, #domain_ProviderRef{id = 200}, #domain_TerminalRef{id = 2100}, 0, 900, 0),
-            hg_route:new(1, #domain_ProviderRef{id = 200}, #domain_TerminalRef{id = 2101}, 0, 900, 0),
-            hg_route:new(1, #domain_ProviderRef{id = 300}, #domain_TerminalRef{id = 2200}, 0, 100, 0)
-        ])
-    ).
-
 -spec select_routes_test_() -> [_].
 select_routes_test_() ->
     A = hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 1}, 0, 1000, 0),
@@ -609,10 +489,7 @@ select_routes_test_() ->
             ?_assertEqual(
                 Expected,
                 select_routes(
-                    #{
-                        routes => Routes,
-                        reject_context => #{varset => #{}, accepted_routes => Routes, rejected_routes => []}
-                    }
+                    routing_ctx:new(Routes)
                 )
             )}
      || {Name, Routes, Expected} <- Cases

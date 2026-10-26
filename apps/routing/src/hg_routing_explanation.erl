@@ -11,11 +11,11 @@
 -type explanation() :: dmsl_payproc_thrift:'InvoicePaymentExplanation'().
 
 -type route() :: hg_route:payment_route().
--type scores() :: hg_routing:scores().
--type limits() :: hg_routing:limits().
+-type scores() :: p_routing:scores().
+-type limits() :: p_routing:limits().
 -type route_with_context() :: #{
     route := route(),
-    scores := hg_routing:route_scores() | undefined,
+    scores := p_routing:route_scores() | undefined,
     limits := [hg_limiter:turnover_limit_value()] | undefined
 }.
 
