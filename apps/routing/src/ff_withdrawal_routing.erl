@@ -20,7 +20,7 @@
 -export([get_provider/1]).
 -export([get_terminal/1]).
 -export([routes/1]).
--export([select_routes/2]).
+-export([select_routes/1]).
 -export([get_routes/1]).
 -export([accounted_candidates/1]).
 -export([log_reject_context/1]).
@@ -66,12 +66,7 @@
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 
--type routing_rule_route() :: #{
-    provider_ref := provider_ref(),
-    terminal_ref := terminal_ref(),
-    priority := integer(),
-    weight := integer()
-}.
+-type routing_rule_route() :: hg_route:t().
 
 -type reject_context() :: #{
     varset := party_varset(),
@@ -91,13 +86,6 @@
         | {error, Error :: term()}
 ).
 
--type select_opts() :: #{
-    has_quote => boolean(),
-    domain_revision => domain_revision()
-}.
-
--export_type([select_opts/0]).
-
 %%
 
 -spec prepare_routes(party_varset(), wallet(), domain_revision()) ->
@@ -110,7 +98,7 @@ prepare_routes(PartyVarset, Wallet, DomainRevision) ->
 prepare_routes(PartyVarset, Context) ->
     State = gather_routes(PartyVarset, Context),
     log_reject_context(State),
-    routes(State).
+    select_routes(State).
 
 -spec gather_routes(party_varset(), routing_context()) ->
     routing_state().
@@ -150,7 +138,7 @@ gather_routes(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision
 -spec filter_limit_overflow_routes(routing_state(), party_varset(), routing_context()) ->
     routing_state().
 filter_limit_overflow_routes(#{routes := Routes, reject_context := RejectContext}, PartyVarset, RoutingContext) ->
-    lists:foldl(
+    State = lists:foldl(
         fun(Route, #{routes := Valid, reject_context := RC, accounted := Acc} = St) ->
             ProviderRef = maps:get(provider_ref, Route),
             TerminalRef = maps:get(terminal_ref, Route),
@@ -184,7 +172,8 @@ filter_limit_overflow_routes(#{routes := Routes, reject_context := RejectContext
         end,
         #{routes => [], reject_context => RejectContext, accounted => []},
         Routes
-    ).
+    ),
+    State#{routes := lists:reverse(maps:get(routes, State))}.
 
 -spec accounted_candidates(routing_state()) -> [route()].
 accounted_candidates(#{accounted := Accounted}) ->
@@ -242,67 +231,29 @@ routes(#{
 }) ->
     {error, {route_not_found, Rejected}}.
 
--spec select_routes(routing_state(), select_opts()) ->
-    {ok, [route()]} | {error, route_not_found() | {misconfiguration, term()}}.
-select_routes(#{routes := []} = State, _Opts) ->
+-spec select_routes(routing_state()) -> {ok, [route()]} | {error, route_not_found()}.
+select_routes(#{routes := []} = State) ->
     routes(State);
-select_routes(#{routes := Routes} = State, Opts) ->
-    HasQuote = maps:get(has_quote, Opts, false),
-    case {HasQuote, has_negative_weight(Routes), all_zero_weights(Routes)} of
-        {true, _, _} ->
-            routes(State);
-        {false, true, _} ->
-            {error, {misconfiguration, {negative_weight, Routes}}};
-        {false, false, true} ->
-            routes(State);
-        {false, false, false} ->
-            choose_balanced(Routes, maps:get(domain_revision, Opts))
-    end.
+select_routes(#{routes := Routes}) ->
+    choose_balanced(Routes).
 
 -spec get_routes(routing_state()) ->
     [route()].
 get_routes(#{routes := Routes}) ->
-    [
-        make_route(P, T)
-     || #{
-            provider_ref := #domain_ProviderRef{id = P},
-            terminal_ref := #domain_TerminalRef{id = T}
-        } <- Routes
-    ].
+    [hg_route:to_withdrawal_route(Route) || Route <- Routes].
 
-has_negative_weight(Routes) ->
-    lists:any(
-        fun(#{weight := Weight}) -> is_integer(Weight) andalso Weight < 0 end,
-        Routes
-    ).
-
-all_zero_weights(Routes) ->
-    lists:all(
-        fun(#{weight := Weight}) -> Weight =:= 0 end,
-        Routes
-    ).
-
-choose_balanced(Routes, Revision) ->
-    HgRoutes = [to_hg_route(Route, Revision) || Route <- Routes],
-    Balanced = hg_route_balancer:fill(HgRoutes),
+choose_balanced(Routes) ->
+    Balanced = hg_route_balancer:fill(Routes),
     {Chosen, _Ctx} = hg_routing:choose_route(Balanced),
     {ok, [hg_route:to_withdrawal_route(Chosen)]}.
-
-to_hg_route(
-    #{
-        provider_ref := ProviderRef,
-        terminal_ref := TerminalRef,
-        weight := Weight,
-        priority := Priority
-    },
-    Revision
-) ->
-    hg_route:new(Revision, ProviderRef, TerminalRef, Weight, Priority, 0).
 
 -spec sort_routes([routing_rule_route()]) -> [route()].
 sort_routes(RoutingRuleRoutes) ->
     ProviderTerminalMap = lists:foldl(
-        fun(#{provider_ref := ProviderRef, terminal_ref := TerminalRef, priority := Priority}, Acc0) ->
+        fun(Route, Acc0) ->
+            ProviderRef = hg_route:provider_ref(Route),
+            TerminalRef = hg_route:terminal_ref(Route),
+            Priority = hg_route:priority(Route),
             TerminalID = TerminalRef#domain_TerminalRef.id,
             ProviderID = ProviderRef#domain_ProviderRef.id,
             AccRoutes = maps:get(Priority, Acc0, []),
@@ -376,7 +327,7 @@ split_prohibited(Routes) ->
         {hg_route:provider_ref(Route), hg_route:terminal_ref(Route), prohibit_reason(Route)}
      || Route <- maps:get(prohibit, Rejections, [])
     ],
-    {[from_collector_route(Route) || Route <- Accepted], Rejected}.
+    {Accepted, Rejected}.
 
 prohibit_reason(Route) ->
     case hg_route:rejection_reason(Route) of
@@ -385,14 +336,6 @@ prohibit_reason(Route) ->
         _Other ->
             {'RoutingRule', undefined}
     end.
-
-from_collector_route(Route) ->
-    #{
-        provider_ref => hg_route:provider_ref(Route),
-        terminal_ref => hg_route:terminal_ref(Route),
-        priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route)
-    }.
 
 -spec filter_valid_routes(routing_state(), party_varset(), routing_context()) ->
     routing_state().
@@ -638,63 +581,24 @@ convert_to_route_test() ->
             #{provider_id => 300, terminal_id => 2200, version => 1}
         ],
         sort_routes([
-            #{
-                provider_ref => #domain_ProviderRef{id = 100},
-                terminal_ref => #domain_TerminalRef{id = 2000},
-                priority => 1000,
-                weight => 0
-            },
-            #{
-                provider_ref => #domain_ProviderRef{id = 100},
-                terminal_ref => #domain_TerminalRef{id = 2001},
-                priority => 1000,
-                weight => 0
-            },
-            #{
-                provider_ref => #domain_ProviderRef{id = 200},
-                terminal_ref => #domain_TerminalRef{id = 2100},
-                priority => 900,
-                weight => 0
-            },
-            #{
-                provider_ref => #domain_ProviderRef{id = 200},
-                terminal_ref => #domain_TerminalRef{id = 2101},
-                priority => 900,
-                weight => 0
-            },
-            #{
-                provider_ref => #domain_ProviderRef{id = 300},
-                terminal_ref => #domain_TerminalRef{id = 2200},
-                priority => 100,
-                weight => 0
-            }
+            hg_route:new(1, #domain_ProviderRef{id = 100}, #domain_TerminalRef{id = 2000}, 0, 1000, 0),
+            hg_route:new(1, #domain_ProviderRef{id = 100}, #domain_TerminalRef{id = 2001}, 0, 1000, 0),
+            hg_route:new(1, #domain_ProviderRef{id = 200}, #domain_TerminalRef{id = 2100}, 0, 900, 0),
+            hg_route:new(1, #domain_ProviderRef{id = 200}, #domain_TerminalRef{id = 2101}, 0, 900, 0),
+            hg_route:new(1, #domain_ProviderRef{id = 300}, #domain_TerminalRef{id = 2200}, 0, 100, 0)
         ])
     ).
 
 -spec select_routes_test_() -> [_].
 select_routes_test_() ->
-    A = #{
-        provider_ref => #domain_ProviderRef{id = 1},
-        terminal_ref => #domain_TerminalRef{id = 1},
-        priority => 1000,
-        weight => 0
-    },
-    B = #{
-        provider_ref => #domain_ProviderRef{id = 2},
-        terminal_ref => #domain_TerminalRef{id = 2},
-        priority => 1000,
-        weight => 100
-    },
+    A = hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 1}, 0, 1000, 0),
+    B = hg_route:new(1, #domain_ProviderRef{id = 2}, #domain_TerminalRef{id = 2}, 100, 1000, 0),
     RA = make_route(1, 1),
     RB = make_route(2, 2),
-    Opts = #{has_quote => false, domain_revision => 1},
     Cases = [
-        {"weights within one priority", [A, B], Opts, {ok, [RB]}},
-        {"priority before weight", [A, B#{priority => 900}], Opts, {ok, [RA]}},
-        {"all zero weights keep legacy order", [B#{weight => 0}, A], Opts, {ok, [RA, RB]}},
-        {"quote keeps legacy order", [B, A], Opts#{has_quote => true}, {ok, [RA, RB]}},
-        {"negative weight is a configuration error", [A#{weight => -1}], Opts,
-            {error, {misconfiguration, {negative_weight, [A#{weight => -1}]}}}}
+        {"weights within one priority", [A, B], {ok, [RB]}},
+        {"priority before weight", [A, hg_route:set_priority(900, B)], {ok, [RA]}},
+        {"zero weights choose the first candidate", [hg_route:set_weight(0, B), A], {ok, [RB]}}
     ],
     [
         {Name,
@@ -704,11 +608,50 @@ select_routes_test_() ->
                     #{
                         routes => Routes,
                         reject_context => #{varset => #{}, accepted_routes => Routes, rejected_routes => []}
-                    },
-                    Options
+                    }
                 )
             )}
-     || {Name, Routes, Options, Expected} <- Cases
+     || {Name, Routes, Expected} <- Cases
     ].
+
+-spec prepare_routes_uses_weights_test() -> _.
+prepare_routes_uses_weights_test() ->
+    Modules = [ff_payment_institution, ff_party, hg_route_collector, ff_limiter],
+    ok = meck:new(Modules, [passthrough]),
+    try
+        Currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+        Cash = #domain_Cash{amount = 100, currency = Currency},
+        Wallet = #domain_WalletConfig{
+            name = <<"wallet">>,
+            block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
+            suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
+            payment_institution = #domain_PaymentInstitutionRef{id = 1},
+            terms = #domain_TermSetHierarchyRef{id = 1},
+            account = #domain_WalletAccount{currency = Currency, settlement = 1},
+            party_ref = #domain_PartyConfigRef{id = <<"party">>}
+        },
+        A = hg_route:new(1, #domain_ProviderRef{id = 1}, #domain_TerminalRef{id = 1}, 0, 1000, 0),
+        B = hg_route:new(1, #domain_ProviderRef{id = 2}, #domain_TerminalRef{id = 2}, 100, 1000, 0),
+        ok = meck:expect(ff_payment_institution, get, 3, {ok, #{withdrawal_routing_rules => undefined}}),
+        ok = meck:expect(hg_route_collector, get_routes, 4, #{routes => [A, B]}),
+        ok = meck:expect(
+            ff_party,
+            compute_provider_terminal_terms,
+            4,
+            {ok, #domain_ProvisionTermSet{
+                wallet = #domain_WalletProvisionTerms{
+                    withdrawals = #domain_WithdrawalProvisionTerms{
+                        currencies = {value, [Currency]},
+                        cash_limit = {value, #domain_CashRange{lower = {inclusive, Cash}, upper = {inclusive, Cash}}},
+                        cash_flow = {value, []}
+                    }
+                }
+            }}
+        ),
+        ?assertEqual({ok, [make_route(2, 2)]}, prepare_routes(#{currency => Currency, cost => Cash}, Wallet, 1)),
+        ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
+    after
+        ok = meck:unload(Modules)
+    end.
 
 -endif.

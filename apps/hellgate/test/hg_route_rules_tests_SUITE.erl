@@ -838,9 +838,10 @@ gather_pinned_route(_C) ->
         currency => Currency,
         payment_tool => PaymentTool
     },
+    FullPin = Pin#{email => undefined, card_token => undefined, client_ip => undefined},
     ?assert_set_equal(
         [
-            {?trm(1), hg_payment_route_pin:hash(Ctx), ?fd_overrides(undefined), #{
+            {?trm(1), hg_payment_route_pin:hash(FullPin), ?fd_overrides(undefined), #{
                 availability_condition => 0,
                 availability => fd_value(0.9),
                 conversion_condition => 0,

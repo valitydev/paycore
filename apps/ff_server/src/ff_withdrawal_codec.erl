@@ -130,10 +130,10 @@ marshal(change, {route_changed, #{route := Route} = Change}) ->
         route = marshal(route, Route),
         candidates = maybe_marshal({list, route}, maps:get(candidates, Change, undefined))
     }};
-marshal(change, {rollback_started, #{reason := Failure} = Change}) ->
+marshal(change, {rollback_started, #{reason := Failure, candidates := [_ | _] = Candidates}}) ->
     {rollback_started, #wthd_RollbackStartedChange{
         reason = ff_codec:marshal(failure, Failure),
-        candidates = maybe_marshal({list, route}, maps:get(candidates, Change, undefined))
+        candidates = marshal({list, route}, Candidates)
     }};
 marshal(change, {limit_check, Details}) ->
     {limit_check, #wthd_LimitCheckChange{details = ff_limit_check_codec:marshal(details, Details)}};
@@ -271,11 +271,12 @@ unmarshal(change, {route, #wthd_RouteChange{route = Route, candidates = Candidat
         genlib_map:compact(#{
             route => unmarshal(route, Route), candidates => maybe_unmarshal({list, route}, Candidates)
         })};
-unmarshal(change, {rollback_started, #wthd_RollbackStartedChange{reason = Failure, candidates = Candidates}}) ->
-    {rollback_started,
-        genlib_map:compact(#{
-            reason => ff_codec:unmarshal(failure, Failure), candidates => maybe_unmarshal({list, route}, Candidates)
-        })};
+unmarshal(change, {rollback_started, #wthd_RollbackStartedChange{reason = Failure, candidates = Candidates}}) when
+    is_list(Candidates), Candidates =/= []
+->
+    {rollback_started, #{
+        reason => ff_codec:unmarshal(failure, Failure), candidates => unmarshal({list, route}, Candidates)
+    }};
 unmarshal(change, {limit_check, #wthd_LimitCheckChange{details = Details}}) ->
     {limit_check, ff_limit_check_codec:unmarshal(details, Details)};
 unmarshal(change, {resource, {got, #wthd_ResourceGot{resource = Resource}}}) ->
@@ -607,17 +608,7 @@ rollback_started_roundtrip_test() ->
     Route = test_route(),
     Failure = #{code => <<"no_route_found">>, reason => <<"rejected">>},
     WithList = {rollback_started, #{reason => Failure, candidates => [Route]}},
-    WithEmpty = {rollback_started, #{reason => Failure, candidates => []}},
-    WithoutCandidates = {rollback_started, #{reason => Failure}},
-    WithUndefined = {rollback_started, #{reason => Failure, candidates => undefined}},
-    ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))),
-    ?assertEqual(WithEmpty, unmarshal(change, marshal(change, WithEmpty))),
-    ?assertEqual(WithoutCandidates, unmarshal(change, marshal(change, WithoutCandidates))),
-    ?assertEqual(WithoutCandidates, unmarshal(change, marshal(change, WithUndefined))),
-    ?assertEqual(
-        WithoutCandidates,
-        unmarshal(change, {rollback_started, #wthd_RollbackStartedChange{reason = ff_codec:marshal(failure, Failure)}})
-    ).
+    ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))).
 
 test_route() ->
     test_route(1, 7, <<"mocketbank">>).
