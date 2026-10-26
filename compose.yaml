@@ -33,7 +33,7 @@ services:
     command: /sbin/init
 
   dmt:
-    image: ghcr.io/valitydev/dominant-v2:sha-93f6e4a
+    image: ghcr.io/valitydev/dominant-v2:sha-e9cd2a8
     command: /opt/dmt/bin/dmt foreground
     environment:
       DMT_KAFKA_ENABLED: "0"
@@ -63,7 +63,7 @@ services:
       retries: 10
 
   limiter:
-    image: ghcr.io/valitydev/limiter:sha-67cf0b7
+    image: ghcr.io/valitydev/limiter:sha-d46b372
     command: /opt/limiter/bin/limiter foreground
     depends_on:
       liminator:

@@ -207,7 +207,8 @@ marshal_withdrawal(Withdrawal) ->
         auth_data = MarshaledAuthData,
         %% TODO: change proto
         sender = #domain_PartyConfigRef{id = ff_account:party_id(WalletAccount)},
-        receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)}
+        receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)},
+        client_identity = marshal_client_identity(ff_withdrawal:client_identity(Withdrawal))
     }.
 
 -spec get_batch(request(), context()) -> [limit()] | no_return().
@@ -278,3 +279,11 @@ call_w_request(Function, Request, Context) ->
         {ok, _} = Result ->
             Result
     end.
+
+marshal_client_identity(undefined) ->
+    undefined;
+marshal_client_identity(#{customer_id := CustomerID} = ClientIdentity) ->
+    #domain_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = maps:get(user_id, ClientIdentity, undefined)
+    }.
