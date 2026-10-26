@@ -12,7 +12,7 @@
 -type turnover_limit_upper_boundary() :: dmsl_domain_thrift:'Amount'().
 -type domain_withdrawal() :: dmsl_wthd_domain_thrift:'Withdrawal'().
 -type withdrawal() :: ff_withdrawal:withdrawal_state().
--type route() :: w_routing:route().
+-type route() :: withdrawal_routing:route().
 
 -type limit() :: limproto_limiter_thrift:'Limit'().
 -type limit_id() :: limproto_limiter_thrift:'LimitID'().

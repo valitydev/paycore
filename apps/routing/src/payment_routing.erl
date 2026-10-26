@@ -1,4 +1,4 @@
--module(p_routing).
+-module(payment_routing).
 
 -include_lib("damsel/include/dmsl_base_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
@@ -530,7 +530,7 @@ fill_blacklist_preserves_hg_context_in_workers() ->
         Route
     end),
     try
-        ?assertEqual(Routes, p_routing:fill_blacklist(BlCtx, Routes)),
+        ?assertEqual(Routes, payment_routing:fill_blacklist(BlCtx, Routes)),
         WorkerPids = collect_worker_pids(Ref, 3),
         ?assertEqual(3, length(WorkerPids)),
         ?assert(lists:all(fun(Pid) -> Pid =/= Parent end, WorkerPids))
@@ -557,7 +557,7 @@ fill_blacklist_timeout_raises_transient_error() ->
     try
         ?assertError(
             {woody_error, {system, resource_unavailable, blacklist_fill_timeout}},
-            p_routing:fill_blacklist(BlCtx, Routes)
+            payment_routing:fill_blacklist(BlCtx, Routes)
         )
     after
         ok = application:set_env(hellgate, inspect_timeout, PrevTimeout),

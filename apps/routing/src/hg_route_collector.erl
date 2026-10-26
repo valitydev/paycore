@@ -321,8 +321,8 @@ callbacks_with_compute(Compute) ->
     }.
 
 candidate_validator(payment) ->
-    fun p_routing:validate_candidate/1;
+    fun payment_routing:validate_candidate/1;
 candidate_validator(withdrawal_legacy) ->
-    fun w_routing:validate_candidate/1.
+    fun withdrawal_routing:validate_candidate/1.
 
 -endif.

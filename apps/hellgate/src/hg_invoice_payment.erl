@@ -811,7 +811,7 @@ get_routes_(PaymentInstitution, VS, Revision, St) ->
             inspector => Inspector
         }
     },
-    p_routing:get_routes(Params).
+    payment_routing:get_routes(Params).
 
 -spec check_risk_score(risk_score()) -> ok | {error, risk_score_is_too_high}.
 check_risk_score(fatal) ->
@@ -819,7 +819,7 @@ check_risk_score(fatal) ->
 check_risk_score(_RiskScore) ->
     ok.
 
--spec get_routing_predestination(payment()) -> p_routing:route_predestination().
+-spec get_routing_predestination(payment()) -> payment_routing:route_predestination().
 get_routing_predestination(#domain_InvoicePayment{make_recurrent = true}) ->
     recurrent_payment;
 get_routing_predestination(#domain_InvoicePayment{payer = ?payment_resource_payer()}) ->
@@ -830,11 +830,11 @@ get_routing_predestination(#domain_InvoicePayment{payer = ?recurrent_payer()}) -
     payment.
 
 log_route_choice_meta(#{choice_meta := ChoiceMeta}, Revision) ->
-    Metadata = p_routing:get_logger_metadata(ChoiceMeta, Revision),
+    Metadata = payment_routing:get_logger_metadata(ChoiceMeta, Revision),
     logger:log(notice, "Routing decision made", #{routing => Metadata}).
 
 log_misconfigurations({misconfiguration, _} = Error) ->
-    {Format, Details} = p_routing:prepare_log_message(Error),
+    {Format, Details} = payment_routing:prepare_log_message(Error),
     ?LOG_MD(warning, Format, Details).
 
 log_rejected_routes(_, [], _VS) ->
@@ -2093,7 +2093,7 @@ process_routing(Action, St) ->
                 {check_limits, fun(S) -> filter_routes_by_limit_overflow(S, VS, NewIter, St) end},
                 {critical_provider, fun filter_routes_by_critical_provider_status/1}
             ],
-            Result = p_routing:select(GetResult, Steps),
+            Result = payment_routing:select(GetResult, Steps),
             ok = log_rejected_route_groups(Result, VS),
             case routing_ctx:choosen_route(Result) of
                 undefined ->

@@ -164,5 +164,5 @@ gather_routes(Varset) ->
         party_ref = #domain_PartyConfigRef{id = <<"party">>}
     },
     Context = #{wallet => Wallet, domain_revision => Revision, iteration => 1},
-    State = w_routing:gather_routes(Varset, Context),
-    {routing_ctx:candidates(State), #{rejected_routes => w_routing:rejected_routes(State)}}.
+    State = withdrawal_routing:gather_routes(Varset, Context),
+    {routing_ctx:candidates(State), #{rejected_routes => withdrawal_routing:rejected_routes(State)}}.

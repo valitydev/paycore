@@ -33,8 +33,8 @@
     failure :: undefined | hg_invoice_payment:failure(),
     timings :: undefined | hg_timings:t(),
     allocation :: undefined | hg_allocation:allocation(),
-    route_limits = #{} :: p_routing:limits(),
-    route_scores = #{} :: p_routing:scores(),
+    route_limits = #{} :: payment_routing:limits(),
+    route_scores = #{} :: payment_routing:scores(),
     shop_limit_status = undefined :: undefined | initialized | finalized,
     exchange_context :: undefined | hg_invoice_payment:exchange_context()
 }).

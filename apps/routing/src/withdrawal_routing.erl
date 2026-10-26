@@ -1,4 +1,4 @@
--module(w_routing).
+-module(withdrawal_routing).
 
 -behaviour(routing_domain).
 

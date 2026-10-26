@@ -124,7 +124,7 @@
     | {destination_resource, {bin_data, ff_bin_data:bin_data_error()}}
     | {customer, notfound}.
 
--type route() :: w_routing:route().
+-type route() :: withdrawal_routing:route().
 -type routing_candidates() :: [route()].
 -type routing_rollback_data() :: #{reason := failure(), candidates := nonempty_list(route())}.
 -type realm() :: ff_payment_institution:realm().
@@ -360,7 +360,7 @@
 
 -type fail_type() ::
     limit_check
-    | w_routing:route_not_found()
+    | withdrawal_routing:route_not_found()
     | {inconsistent_quote_route, route()}
     | {validation_personal_data, sender | receiver}
     | session.
@@ -923,7 +923,7 @@ process_compensate_routing_failure(Withdrawal) ->
     {ok, {[route()], routing_candidates()}} | {error, {Reason, routing_candidates()}}
 when
     Reason ::
-        w_routing:route_not_found()
+        withdrawal_routing:route_not_found()
         | attempt_limit_exceeded
         | InconsistentQuote,
     InconsistentQuote :: {inconsistent_quote_route, route()}.
@@ -931,10 +931,10 @@ do_process_routing(Withdrawal) ->
     do(fun() ->
         {Varset, Context} = make_routing_varset_and_context(Withdrawal),
         ExcludeRoutes = ff_withdrawal_route_attempt_utils:get_terminals(attempts(Withdrawal)),
-        Result = w_routing:route(Varset, Context, ExcludeRoutes, quote(Withdrawal)),
-        w_routing:log_reject_context(Result, Varset),
-        Accounted = w_routing:accounted_candidates(Result),
-        ValidatedRoutes = unwrap_routing_result(w_routing:result(Result), Accounted),
+        Result = withdrawal_routing:route(Varset, Context, ExcludeRoutes, quote(Withdrawal)),
+        withdrawal_routing:log_reject_context(Result, Varset),
+        Accounted = withdrawal_routing:accounted_candidates(Result),
+        ValidatedRoutes = unwrap_routing_result(withdrawal_routing:result(Result), Accounted),
         {ValidatedRoutes, Accounted}
     end).
 
@@ -956,8 +956,8 @@ do_rollback_routing(ExcludeRoutes0, Withdrawal) ->
                 lists:filter(fun(R) -> CurrentRoute =/= R end, ExcludeUsedRoutes0)
         end,
     ExcludeRoutes1 =
-        ExcludeUsedRoutes1 ++ lists:map(fun(R) -> w_routing:get_terminal(R) end, ExcludeRoutes0),
-    Routes = w_routing:get_routes(w_routing:gather_routes(Varset, Context, ExcludeRoutes1)),
+        ExcludeUsedRoutes1 ++ lists:map(fun(R) -> withdrawal_routing:get_terminal(R) end, ExcludeRoutes0),
+    Routes = withdrawal_routing:get_routes(withdrawal_routing:gather_routes(Varset, Context, ExcludeRoutes1)),
     rollback_routes_limits(Routes, Varset, Context).
 
 rollback_unused_candidates(Withdrawal) ->
@@ -987,7 +987,7 @@ rollback_routes_limits(Routes, Withdrawal) ->
     rollback_routes_limits(Routes, Varset, Context).
 
 rollback_routes_limits(Routes, Varset, Context) ->
-    w_routing:rollback_routes_limits(Routes, Varset, Context).
+    withdrawal_routing:rollback_routes_limits(Routes, Varset, Context).
 
 commit_routes_limits(Routes, Withdrawal) ->
     {Varset, Context0} = make_routing_varset_and_context(Withdrawal),
@@ -999,7 +999,7 @@ commit_routes_limits(Routes, Withdrawal) ->
             false ->
                 Context0
         end,
-    w_routing:commit_routes_limits(Routes, Varset, Context).
+    withdrawal_routing:commit_routes_limits(Routes, Varset, Context).
 
 make_routing_varset_and_context(Withdrawal) ->
     DomainRevision = final_domain_revision(Withdrawal),
@@ -1348,7 +1348,7 @@ construct_payment_tool(
 %% Quote helpers
 
 -spec get_quote(quote_params()) ->
-    {ok, quote()} | {error, create_error() | {route, w_routing:route_not_found()}}.
+    {ok, quote()} | {error, create_error() | {route, withdrawal_routing:route_not_found()}}.
 get_quote(#{destination_id := DestinationID, body := Body, wallet_id := WalletID, party_id := PartyID} = Params) ->
     do(fun() ->
         Destination = unwrap(destination, get_destination(DestinationID)),
@@ -1424,7 +1424,7 @@ get_quote_(Params) ->
         Wallet = unwrap(wallet, fetch_wallet(WalletID, PartyID, DomainRevision)),
 
         %% TODO: don't apply turnover limits here
-        [Route | _] = unwrap(route, w_routing:prepare_routes(Varset, Wallet, DomainRevision)),
+        [Route | _] = unwrap(route, withdrawal_routing:prepare_routes(Varset, Wallet, DomainRevision)),
         {Adapter, AdapterOpts} = ff_withdrawal_session:get_adapter_with_opts(Route),
         GetQuoteParams = #{
             external_id => maps:get(external_id, Params, undefined),
@@ -2037,7 +2037,7 @@ build_failure(session, Withdrawal) ->
 build_route_not_found_sub_failure([]) ->
     undefined;
 %% NOTE If limit overflow reason present in any rejected route See reason-tuple
-%% construction in `w_routing:validate_turnover_limits/4` and
+%% construction in `withdrawal_routing:validate_turnover_limits/4` and
 %% `ff_limiter:check_limits/4`.
 build_route_not_found_sub_failure([
     ?rejected_route({terms_violation, {overflow, OverflowedLimits}}) | _

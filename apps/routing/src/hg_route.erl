@@ -44,7 +44,7 @@
 -type provider_ref() :: dmsl_domain_thrift:'ProviderRef'().
 -type terminal_ref() :: dmsl_domain_thrift:'TerminalRef'().
 -type payment_route() :: dmsl_domain_thrift:'PaymentRoute'().
--type withdrawal_route() :: w_routing:route().
+-type withdrawal_route() :: withdrawal_routing:route().
 -type exchange_context() :: dmsl_domain_thrift:'ExchangeContext'().
 
 -type fd_overrides() :: dmsl_domain_thrift:'RouteFaultDetectorOverrides'().
