@@ -200,7 +200,6 @@ marshal_withdrawal(Withdrawal) ->
     MarshaledResource = ff_adapter_withdrawal_codec:marshal(resource, Resource),
     AuthData = ff_destination:auth_data(Destination),
     MarshaledAuthData = ff_adapter_withdrawal_codec:maybe_marshal(auth_data, AuthData),
-    #{customer_id := CustomerID} = ClientIdentity = ff_withdrawal:client_identity(Withdrawal),
     #wthd_domain_Withdrawal{
         created_at = ff_codec:marshal(timestamp_ms, ff_withdrawal:created_at(Withdrawal)),
         body = ff_dmsl_codec:marshal(cash, ff_withdrawal:body(Withdrawal)),
@@ -209,10 +208,7 @@ marshal_withdrawal(Withdrawal) ->
         %% TODO: change proto
         sender = #domain_PartyConfigRef{id = ff_account:party_id(WalletAccount)},
         receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)},
-        client_identity = #domain_ClientIdentity{
-            customer_id = CustomerID,
-            user_id = maps:get(user_id, ClientIdentity, undefined)
-        }
+        client_identity = marshal_client_identity(ff_withdrawal:client_identity(Withdrawal))
     }.
 
 -spec get_batch(request(), context()) -> [limit()] | no_return().
@@ -283,3 +279,11 @@ call_w_request(Function, Request, Context) ->
         {ok, _} = Result ->
             Result
     end.
+
+marshal_client_identity(undefined) ->
+    undefined;
+marshal_client_identity(#{customer_id := CustomerID} = ClientIdentity) ->
+    #domain_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = maps:get(user_id, ClientIdentity, undefined)
+    }.
