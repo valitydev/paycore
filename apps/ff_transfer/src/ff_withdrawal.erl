@@ -901,6 +901,9 @@ process_routing_failure(Reason, Accounted, Withdrawal) ->
     {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}.
 
 -spec process_rollback_routing(withdrawal_state()) -> process_result().
+%% TODO Remove this legacy cleanup and do_rollback_routing/2 once histories
+%% without recorded routing candidates no longer need to be processed.
+%% New routing failures roll back their recorded holds before setting failed.
 process_rollback_routing(Withdrawal) ->
     case maps:get(routing_candidates, Withdrawal, undefined) of
         undefined ->
@@ -2363,27 +2366,6 @@ routing_hold_retry_test() ->
         ?assertEqual(2, meck:num_calls(ff_limiter, hold_withdrawal_limits, [[], State, Route, 1]))
     end).
 
--spec quote_mismatch_rollback_test() -> _.
-quote_mismatch_rollback_test() ->
-    Route = test_route(1, 7),
-    with_routing_mocks([Route], fun() ->
-        State0 = test_withdrawal_state(),
-        Params = maps:get(params, State0),
-        Quote = #{
-            cash_from => {100, <<"RUB">>},
-            cash_to => {100, <<"USD">>},
-            created_at => <<"t">>,
-            expires_on => <<"t">>,
-            quote_data => #{},
-            route => test_route(2, 8)
-        },
-        State = State0#{params => Params#{quote => Quote}},
-        {timeout, [Event]} = process_transfer(State),
-        {rollback_started, #{reason := #{code := <<"unknown">>} = Failure, candidates := [Route]}} = Event,
-        ?assertEqual({timeout, [{status_changed, {failed, Failure}}]}, process_transfer(apply_event(Event, State))),
-        ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Route, 1]))
-    end).
-
 -spec quote_route_selection_test() -> _.
 quote_route_selection_test() ->
     Preferred = test_route(1, 7),
@@ -2420,10 +2402,10 @@ quote_route_selection_test() ->
             (_, _, Route, _) when Route =:= Quoted -> {error, {overflow, []}};
             (_, _, _, _) -> {ok, []}
         end),
-        ?assertMatch(
-            {timeout, [{rollback_started, #{candidates := [_, _]}}]},
-            process_transfer(State)
-        )
+        {timeout, [Failed = {rollback_started, #{reason := Failure, candidates := [_, _]}}]} = process_transfer(State),
+        ?assertMatch(#{code := <<"unknown">>}, Failure),
+        ?assertEqual({timeout, [{status_changed, {failed, Failure}}]}, process_transfer(apply_event(Failed, State))),
+        ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Quoted, 1]))
     end).
 
 -spec legacy_routing_cleanup_test() -> _.

@@ -111,12 +111,20 @@ gather_routes(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision
     #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
     {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
     RoutingRules = maps:get(withdrawal_routing_rules, PaymentInstitution),
-    CollectorResult = hg_route_collector:get_routes(
-        DomainRevision,
-        PartyVarset,
-        RoutingRules,
-        ?MODULE
-    ),
+    CollectorResult =
+        try hg_route_collector:get_routes(DomainRevision, PartyVarset, RoutingRules, ?MODULE) of
+            #{error := _} = ErrorResult ->
+                ErrorResult;
+            #{routes := Routes} ->
+                #{
+                    routes => hg_route_collector:fill_prohibition(
+                        DomainRevision, PartyVarset, RoutingRules, ?MODULE, Routes
+                    )
+                }
+        catch
+            throw:{misconfiguration, _} = Error ->
+                #{routes => [], error => Error}
+        end,
     case maps:get(error, CollectorResult, undefined) of
         {misconfiguration, Reason} ->
             logger:warning("Routing rule misconfiguration. Reason:~n~p~nVarset:~n~p", [Reason, PartyVarset]),
@@ -299,14 +307,10 @@ compute_ruleset(RulesetRef, VS, Revision) ->
             throw({misconfiguration, {ruleset, RulesetRef, not_found}})
     end.
 
--spec resolve_terminal(terminal_ref(), domain_revision()) -> {ok, provider_ref()} | {error, notfound}.
+-spec resolve_terminal(terminal_ref(), domain_revision()) -> {ok, provider_ref()}.
 resolve_terminal(TerminalRef, Revision) ->
-    case ff_domain_config:object(Revision, {terminal, TerminalRef}) of
-        {ok, #domain_Terminal{provider_ref = ProviderRef}} ->
-            {ok, ProviderRef};
-        {error, notfound} ->
-            {error, notfound}
-    end.
+    {ok, #domain_Terminal{provider_ref = ProviderRef}} = ff_domain_config:object(Revision, {terminal, TerminalRef}),
+    {ok, ProviderRef}.
 
 -spec validate_candidate(dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return().
 validate_candidate(#domain_RoutingCandidate{allowed = {constant, Allowed}}) when is_boolean(Allowed) ->

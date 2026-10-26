@@ -3,6 +3,7 @@
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -export([get_routes/4]).
+-export([fill_prohibition/5]).
 
 -callback fill(_Params, [hg_route:t()]) -> [hg_route:t()].
 -callback fill([hg_route:t()]) -> [hg_route:t()].
@@ -14,9 +15,7 @@
 -type compute_ruleset() :: fun(
     (dmsl_domain_thrift:'RoutingRulesetRef'(), varset(), revision()) -> {ok, dmsl_domain_thrift:'RoutingRuleset'()}
 ).
--type resolve_terminal() :: fun(
-    (hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound}
-).
+-type resolve_terminal() :: fun((hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()}).
 -type validate_candidate() :: fun((dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return()).
 -type callbacks() :: #{
     compute_ruleset := compute_ruleset(),
@@ -40,28 +39,33 @@
 
 -spec get_routes(revision(), varset(), routing_rules(), module() | callbacks()) ->
     get_routes_result().
-get_routes(Revision, VS, RoutingRules, Domain) when is_atom(Domain) ->
-    get_routes(Revision, VS, RoutingRules, #{
-        compute_ruleset => fun Domain:compute_ruleset/3,
-        resolve_terminal => fun Domain:resolve_terminal/2,
-        validate_candidate => fun Domain:validate_candidate/1
-    });
 get_routes(_, _, undefined, _) ->
     #{routes => [], error => {misconfiguration, {payment_routing_rules, empty}}};
-get_routes(Revision, VS, #domain_RoutingRules{} = RoutingRules, Callbacks) ->
-    #domain_RoutingRules{
-        policies = Policies,
-        prohibitions = Prohibitions
-    } = RoutingRules,
+get_routes(Revision, VS, #domain_RoutingRules{policies = Policies}, Domain) ->
+    Callbacks = domain_callbacks(Domain),
     try
         Candidates = get_candidates(Policies, VS, Revision, Callbacks),
-        Table = get_table_prohibitions(Prohibitions, VS, Revision, Callbacks),
-        Routes0 = collect_routes(Candidates, Revision, Callbacks),
-        #{routes => apply_prohibition(Table, Routes0)}
+        #{routes => collect_routes(Candidates, Revision, Callbacks)}
     catch
         throw:{misconfiguration, _Reason} = Error ->
             #{routes => [], error => Error}
     end.
+
+-spec fill_prohibition(revision(), varset(), routing_rules(), module() | callbacks(), [hg_route:t()]) -> [hg_route:t()].
+fill_prohibition(_Revision, _VS, undefined, _Domain, Routes) ->
+    Routes;
+fill_prohibition(Revision, VS, #domain_RoutingRules{prohibitions = Prohibitions}, Domain, Routes) ->
+    Table = get_table_prohibitions(Prohibitions, VS, Revision, domain_callbacks(Domain)),
+    apply_prohibition(Table, Routes).
+
+domain_callbacks(Domain) when is_atom(Domain) ->
+    #{
+        compute_ruleset => fun Domain:compute_ruleset/3,
+        resolve_terminal => fun Domain:resolve_terminal/2,
+        validate_candidate => fun Domain:validate_candidate/1
+    };
+domain_callbacks(Callbacks) when is_map(Callbacks) ->
+    Callbacks.
 
 get_candidates(RoutingRule, VS, Revision, Callbacks) ->
     get_decisions_candidates(
@@ -110,7 +114,7 @@ add_or_merge_candidate(Candidate, Revision, Resolve, {Routes, Index}) ->
         pin = Pin,
         affinity = Affinity
     } = Candidate,
-    ProviderRef = resolve_provider(Resolve, TerminalRef, Revision),
+    {ok, ProviderRef} = Resolve(TerminalRef, Revision),
     Key = {ProviderRef, TerminalRef},
     CmpPriority = stored_priority(Priority),
     CmpWeight = stored_weight(Weight),
@@ -126,14 +130,6 @@ add_or_merge_candidate(Candidate, Revision, Resolve, {Routes, Index}) ->
                 false ->
                     {Routes, Index}
             end
-    end.
-
-resolve_provider(Resolve, TerminalRef, Revision) ->
-    case Resolve(TerminalRef, Revision) of
-        {ok, ProviderRef} ->
-            ProviderRef;
-        {error, notfound} ->
-            throw({misconfiguration, {terminal, TerminalRef, notfound}})
     end.
 
 make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity) ->
@@ -218,9 +214,10 @@ collector_misconfiguration_policies_and_prohibitions_test() ->
         #{routes := [], error := {misconfiguration, {routing_decisions, _}}},
         hg_route_collector:get_routes(1, #{}, routing_rules(), PolicyFail)
     ),
-    ?assertMatch(
-        #{routes := [], error := {misconfiguration, {routing_decisions, _}}},
-        hg_route_collector:get_routes(1, #{}, routing_rules(), ProhibitFail)
+    ?assertEqual(#{routes => []}, hg_route_collector:get_routes(1, #{}, routing_rules(), ProhibitFail)),
+    ?assertThrow(
+        {misconfiguration, {routing_decisions, {delegates, []}}},
+        fill_prohibition(1, #{}, routing_rules(), ProhibitFail, [])
     ).
 
 -spec domain_candidate_validation_test() -> _.
@@ -259,14 +256,12 @@ collector_merge_duplicate_provider_terminal_test() ->
     #{routes := [UndefWinner]} = hg_route_collector:get_routes(1, #{}, routing_rules(), UndefCallbacks),
     ?assertEqual(2, hg_route:weight(UndefWinner)).
 
--spec collector_missing_terminal_misconfiguration_test() -> _.
-collector_missing_terminal_misconfiguration_test() ->
+-spec collector_missing_terminal_error_test() -> _.
+collector_missing_terminal_error_test() ->
     Candidate = candidate(?trm(99), {constant, true}, 1000, 0),
-    Callbacks = callbacks([Candidate], [], payment, fun(_Ref, _) -> {error, notfound} end),
-    #{routes := [], error := Error} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-    ?assertEqual({misconfiguration, {terminal, ?trm(99), notfound}}, Error),
-    {Format, Args} = hg_routing:prepare_log_message(Error),
-    ?assert(is_list(io_lib:format(Format, Args))).
+    Error = {object_not_found, {1, {terminal, ?trm(99)}}},
+    Callbacks = callbacks([Candidate], [], payment, fun(_Ref, _) -> erlang:error(Error) end),
+    ?assertError(Error, hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks)).
 
 -spec collector_merge_duplicate_default_priority_test() -> _.
 collector_merge_duplicate_default_priority_test() ->

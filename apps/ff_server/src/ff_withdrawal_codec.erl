@@ -606,7 +606,7 @@ route_change_candidates_roundtrip_test() ->
 -spec rollback_started_roundtrip_test() -> _.
 rollback_started_roundtrip_test() ->
     Route = test_route(),
-    Failure = #{code => <<"no_route_found">>, reason => <<"rejected">>},
+    Failure = #{code => <<"unknown">>, reason => genlib:format({inconsistent_quote_route, Route})},
     WithList = {rollback_started, #{reason => Failure, candidates => [Route]}},
     ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))).
 

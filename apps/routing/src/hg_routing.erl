@@ -48,8 +48,7 @@
     {misconfiguration,
         {routing_decisions, _}
         | {routing_candidate, _}
-        | {payment_routing_rules, empty}
-        | {terminal, hg_route:terminal_ref(), notfound}}.
+        | {payment_routing_rules, empty}}.
 
 -export_type([get_route_params/0]).
 -export_type([get_routes_result/0]).
@@ -69,9 +68,7 @@ prepare_log_message({misconfiguration, {routing_decisions, Details}}) ->
 prepare_log_message({misconfiguration, {routing_candidate, Candidate}}) ->
     {"PaymentRoutingCandidate couldn't be reduced, ~p", [Candidate]};
 prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
-    {"PaymentRoutingRules are empty", []};
-prepare_log_message({misconfiguration, {terminal, TerminalRef, notfound}}) ->
-    {"Routing terminal not found: ~p", [TerminalRef]}.
+    {"PaymentRoutingRules are empty", []}.
 
 -spec get_logger_metadata(hg_routing:route_choice_context(), hg_route:revision()) -> LoggerFormattedMetadata :: map().
 get_logger_metadata(RouteChoiceContext, Revision) ->
@@ -119,19 +116,20 @@ get_routes(
         ),
     Routes1 = hg_payment_route_pin:fill(Routes0, PinCtx),
     Routes2 = hg_payment_routing:fill_accepted(Predestination, Revision, VS, Routes1),
-    Routes3 = hg_payment_routing:fill_fd_overrides(Revision, Routes2),
-    Routes4 =
+    Routes3 = hg_route_collector:fill_prohibition(Revision, VS, RoutingRules, hg_payment_routing, Routes2),
+    Routes4 = hg_payment_routing:fill_fd_overrides(Revision, Routes3),
+    Routes5 =
         case maps:get(blacklist_context, Params, undefined) of
             undefined ->
-                Routes3;
+                Routes4;
             BlCtx ->
-                hg_payment_routing:fill_blacklist(BlCtx, Routes3)
+                hg_payment_routing:fill_blacklist(BlCtx, Routes4)
         end,
-    Routes5 = hg_route_fd:fill(Routes4),
+    Routes6 = hg_route_fd:fill(Routes5),
     genlib_map:compact(
         maps:merge(
             #{error => maps:get(error, Result, undefined)},
-            hg_routing:filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
+            filter(Routes6, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
         )
     ).
 

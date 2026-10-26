@@ -39,15 +39,10 @@ compute_ruleset(RuleSetRef, VS, Revision) ->
         Context
     ).
 
--spec resolve_terminal(hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()} | {error, notfound}.
+-spec resolve_terminal(hg_route:terminal_ref(), revision()) -> {ok, hg_route:provider_ref()}.
 resolve_terminal(TerminalRef, Revision) ->
-    try
-        #domain_Terminal{provider_ref = ProviderRef} = hg_domain:get(Revision, {terminal, TerminalRef}),
-        {ok, ProviderRef}
-    catch
-        error:{object_not_found, _} ->
-            {error, notfound}
-    end.
+    #domain_Terminal{provider_ref = ProviderRef} = hg_domain:get(Revision, {terminal, TerminalRef}),
+    {ok, ProviderRef}.
 
 -spec validate_candidate(dmsl_domain_thrift:'RoutingCandidate'()) -> ok | no_return().
 validate_candidate(#domain_RoutingCandidate{allowed = {constant, true}}) ->
