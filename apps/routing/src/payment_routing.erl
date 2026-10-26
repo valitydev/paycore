@@ -7,6 +7,7 @@
 
 -behaviour(routing_domain).
 
+-export([callbacks/0]).
 -export([compute_ruleset/3]).
 -export([resolve_terminal/2]).
 -export([validate_candidate/1]).
@@ -91,12 +92,13 @@ steps(
     } = Params
 ) ->
     Rules = PI#domain_PaymentInstitution.payment_routing_rules,
+    Callbacks = callbacks(),
     [
-        {collect, fun(_) -> routing:collect(Revision, VS, Rules, ?MODULE) end},
+        {collect, fun(_) -> routing:collect(Revision, VS, Rules, Callbacks) end},
         {pin, fun(S) -> routing:fill(S, fun(Rs) -> hg_payment_route_pin:fill(Rs, PinCtx) end) end},
         {accepted, fun(S) -> routing:fill(S, fun(Rs) -> fill_accepted(Predestination, Revision, VS, Rs) end) end},
         {prohibition, fun(S) ->
-            routing:fill(S, fun(Rs) -> hg_route_collector:fill_prohibition(Revision, VS, Rules, ?MODULE, Rs) end)
+            routing:fill(S, fun(Rs) -> hg_route_collector:fill_prohibition(Revision, VS, Rules, Callbacks, Rs) end)
         end},
         {fd_overrides, fun(S) -> routing:fill(S, fun(Rs) -> fill_fd_overrides(Revision, Rs) end) end},
         {blacklist, fun(S) -> maybe_fill_blacklist(S, maps:get(blacklist_context, Params, undefined)) end},
@@ -140,6 +142,14 @@ build_route_scores(Routes) ->
 
 -define(fd_overrides(Enabled), #domain_RouteFaultDetectorOverrides{enabled = Enabled}).
 -define(rejected(Reason), {rejected, Reason}).
+
+-spec callbacks() -> hg_route_collector:callbacks().
+callbacks() ->
+    #{
+        compute_ruleset => fun compute_ruleset/3,
+        resolve_terminal => fun resolve_terminal/2,
+        validate_candidate => fun validate_candidate/1
+    }.
 
 -spec compute_ruleset(dmsl_domain_thrift:'RoutingRulesetRef'(), varset(), revision()) ->
     {ok, dmsl_domain_thrift:'RoutingRuleset'()}.

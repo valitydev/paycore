@@ -37,12 +37,11 @@
 -export_type([get_routes_error/0]).
 -export_type([get_routes_result/0]).
 
--spec get_routes(revision(), varset(), routing_rules(), module() | callbacks()) ->
+-spec get_routes(revision(), varset(), routing_rules(), callbacks()) ->
     get_routes_result().
 get_routes(_, _, undefined, _) ->
     #{routes => [], error => {misconfiguration, {payment_routing_rules, empty}}};
-get_routes(Revision, VS, #domain_RoutingRules{policies = Policies}, Domain) ->
-    Callbacks = domain_callbacks(Domain),
+get_routes(Revision, VS, #domain_RoutingRules{policies = Policies}, Callbacks) ->
     try
         Candidates = get_candidates(Policies, VS, Revision, Callbacks),
         #{routes => collect_routes(Candidates, Revision, Callbacks)}
@@ -51,21 +50,12 @@ get_routes(Revision, VS, #domain_RoutingRules{policies = Policies}, Domain) ->
             #{routes => [], error => Error}
     end.
 
--spec fill_prohibition(revision(), varset(), routing_rules(), module() | callbacks(), [hg_route:t()]) -> [hg_route:t()].
-fill_prohibition(_Revision, _VS, undefined, _Domain, Routes) ->
+-spec fill_prohibition(revision(), varset(), routing_rules(), callbacks(), [hg_route:t()]) -> [hg_route:t()].
+fill_prohibition(_Revision, _VS, undefined, _Callbacks, Routes) ->
     Routes;
-fill_prohibition(Revision, VS, #domain_RoutingRules{prohibitions = Prohibitions}, Domain, Routes) ->
-    Table = get_table_prohibitions(Prohibitions, VS, Revision, domain_callbacks(Domain)),
+fill_prohibition(Revision, VS, #domain_RoutingRules{prohibitions = Prohibitions}, Callbacks, Routes) ->
+    Table = get_table_prohibitions(Prohibitions, VS, Revision, Callbacks),
     apply_prohibition(Table, Routes).
-
-domain_callbacks(Domain) when is_atom(Domain) ->
-    #{
-        compute_ruleset => fun Domain:compute_ruleset/3,
-        resolve_terminal => fun Domain:resolve_terminal/2,
-        validate_candidate => fun Domain:validate_candidate/1
-    };
-domain_callbacks(Callbacks) when is_map(Callbacks) ->
-    Callbacks.
 
 get_candidates(RoutingRule, VS, Revision, Callbacks) ->
     get_decisions_candidates(

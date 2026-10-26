@@ -26,9 +26,10 @@ run(#{error := Error} = State, _) when Error =/= undefined ->
 run(State, [{_Name, Step} | Rest]) ->
     run(Step(State), Rest).
 
--spec collect(hg_route:revision(), map(), hg_route_collector:routing_rules(), module()) -> routing_ctx:t().
-collect(Revision, Varset, Rules, Domain) ->
-    routing_ctx:from_result(hg_route_collector:get_routes(Revision, Varset, Rules, Domain)).
+-spec collect(hg_route:revision(), map(), hg_route_collector:routing_rules(), hg_route_collector:callbacks()) ->
+    routing_ctx:t().
+collect(Revision, Varset, Rules, Callbacks) ->
+    routing_ctx:from_result(hg_route_collector:get_routes(Revision, Varset, Rules, Callbacks)).
 
 -spec fill(routing_ctx:t(), fun(([hg_route:t()]) -> [hg_route:t()])) -> routing_ctx:t().
 fill(State, Fill) ->

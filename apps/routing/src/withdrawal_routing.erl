@@ -2,6 +2,7 @@
 
 -behaviour(routing_domain).
 
+-export([callbacks/0]).
 -export([compute_ruleset/3]).
 -export([resolve_terminal/2]).
 -export([validate_candidate/1]).
@@ -111,11 +112,12 @@ steps(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision} = Cont
     #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
     {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
     RoutingRules = maps:get(withdrawal_routing_rules, PaymentInstitution),
+    Callbacks = callbacks(),
     [
-        {collect, fun(_) -> routing:collect(DomainRevision, PartyVarset, RoutingRules, ?MODULE) end},
+        {collect, fun(_) -> routing:collect(DomainRevision, PartyVarset, RoutingRules, Callbacks) end},
         {prohibition, fun(S) ->
             routing:fill(S, fun(Rs) ->
-                hg_route_collector:fill_prohibition(DomainRevision, PartyVarset, RoutingRules, ?MODULE, Rs)
+                hg_route_collector:fill_prohibition(DomainRevision, PartyVarset, RoutingRules, Callbacks, Rs)
             end)
         end},
         {filter_prohibited, fun(S) -> routing:filter(S, [{prohibit, true}]) end},
@@ -251,6 +253,14 @@ log_reject_context(State, Varset) ->
     ]).
 
 %%
+
+-spec callbacks() -> hg_route_collector:callbacks().
+callbacks() ->
+    #{
+        compute_ruleset => fun compute_ruleset/3,
+        resolve_terminal => fun resolve_terminal/2,
+        validate_candidate => fun validate_candidate/1
+    }.
 
 -spec compute_ruleset(dmsl_domain_thrift:'RoutingRulesetRef'(), party_varset(), domain_revision()) ->
     {ok, dmsl_domain_thrift:'RoutingRuleset'()}.

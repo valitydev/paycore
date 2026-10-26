@@ -279,7 +279,7 @@ collector_affinity(_C) ->
         hg_domain:head(),
         #{},
         PI#domain_PaymentInstitution.payment_routing_rules,
-        payment_routing
+        payment_routing:callbacks()
     ),
     ?assert(hg_route_affinity:enabled(Routes)),
     ?assertEqual([Affinity], [hg_route:affinity(R) || R <- Routes]).
