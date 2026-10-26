@@ -931,7 +931,7 @@ do_process_routing(Withdrawal) ->
     do(fun() ->
         {Varset, Context} = make_routing_varset_and_context(Withdrawal),
         ExcludeRoutes = ff_withdrawal_route_attempt_utils:get_terminals(attempts(Withdrawal)),
-        Result = withdrawal_routing:route(Varset, Context, ExcludeRoutes, quote(Withdrawal)),
+        Result = withdrawal_routing:compute(Varset, Context, ExcludeRoutes, quote(Withdrawal)),
         withdrawal_routing:log_reject_context(Result, Varset),
         Accounted = withdrawal_routing:accounted_candidates(Result),
         ValidatedRoutes = unwrap_routing_result(withdrawal_routing:result(Result), Accounted),

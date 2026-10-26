@@ -20,7 +20,7 @@
 -export([make_route/2]).
 -export([get_provider/1]).
 -export([get_terminal/1]).
--export([route/4, result/1, rejected_routes/1]).
+-export([compute/4, result/1, rejected_routes/1]).
 -export([select_routes/1]).
 -export([get_routes/1]).
 -export([accounted_candidates/1]).
@@ -131,8 +131,8 @@ misconfigured_routes(Reason, PartyVarset) ->
     routing_ctx:new([]).
 
 %% Quote and normal routing share all eligibility and hold steps.
--spec route(party_varset(), routing_context(), [terminal_id()], map() | undefined) -> routing_state().
-route(Varset, Context, Exclude, Quote) ->
+-spec compute(party_varset(), routing_context(), [terminal_id()], map() | undefined) -> routing_state().
+compute(Varset, Context, Exclude, Quote) ->
     State = gather_routes(Varset, Context, Exclude),
     Selection =
         case Quote of
