@@ -521,7 +521,7 @@ no_route_found_for_payment(_C) ->
         [
             {?prv(1), ?trm(1), {accepted, {false, {rejected, {'PaymentsProvisionTerms', cost}}}}},
             {?prv(2), ?trm(2), {accepted, {false, {rejected, {'PaymentsProvisionTerms', category}}}}},
-            {?prv(3), ?trm(3), {accepted, {false, {rejected, {'PaymentsProvisionTerms', payment_tool}}}}},
+            {?prv(3), ?trm(3), {prohibit, {true, {'RoutingRule', undefined}}}},
             {?prv(4), ?trm(4), {accepted, {false, {rejected, {'PaymentsProvisionTerms', allow}}}}},
             {?prv(7), ?trm(7), {accepted, {false, {rejected, {'PaymentsProvisionTerms', global_allow}}}}}
         ],
@@ -543,7 +543,7 @@ no_route_found_for_payment(_C) ->
         [
             {?prv(1), ?trm(1), {accepted, {false, {rejected, {'PaymentsProvisionTerms', currency}}}}},
             {?prv(2), ?trm(2), {accepted, {false, {rejected, {'PaymentsProvisionTerms', category}}}}},
-            {?prv(3), ?trm(3), {accepted, {false, {rejected, {'PaymentsProvisionTerms', payment_tool}}}}},
+            {?prv(3), ?trm(3), {prohibit, {true, {'RoutingRule', undefined}}}},
             {?prv(4), ?trm(4), {accepted, {false, {rejected, {'PaymentsProvisionTerms', allow}}}}},
             {?prv(7), ?trm(7), {accepted, {false, {rejected, {'PaymentsProvisionTerms', global_allow}}}}}
         ],
@@ -577,7 +577,7 @@ gather_route_success(_C) ->
     ?assert_set_equal(
         [
             {?prv(2), ?trm(2), {accepted, {false, {rejected, {'PaymentsProvisionTerms', category}}}}},
-            {?prv(3), ?trm(3), {accepted, {false, {rejected, {'PaymentsProvisionTerms', payment_tool}}}}},
+            {?prv(3), ?trm(3), {prohibit, {true, {'RoutingRule', undefined}}}},
             {?prv(4), ?trm(4), {accepted, {false, {rejected, {'PaymentsProvisionTerms', allow}}}}},
             {?prv(7), ?trm(7), {accepted, {false, {rejected, {'PaymentsProvisionTerms', global_allow}}}}}
         ],
