@@ -143,6 +143,13 @@ start_app(hg_proto = AppName) ->
                         max_connections => 300
                     }
                 },
+                progressor_trace => #{
+                    url => <<"http://hellgate:8022/v1/trace">>,
+                    transport_opts => #{
+                        pool => progressor_trace,
+                        max_connections => 50
+                    }
+                },
                 party_management => #{
                     url => <<"http://party-management:8022/v1/processing/partymgmt">>,
                     transport_opts => #{

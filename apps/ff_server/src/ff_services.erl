@@ -37,7 +37,9 @@ get_service(deposit_management) ->
 get_service(party_config) ->
     {dmsl_payproc_thrift, 'PartyManagement'};
 get_service(ff_claim_committer) ->
-    {dmsl_claimmgmt_thrift, 'ClaimCommitter'}.
+    {dmsl_claimmgmt_thrift, 'ClaimCommitter'};
+get_service(progressor_trace) ->
+    {fistful_progressor_trace_thrift, 'Trace'}.
 
 -spec get_service_spec(service_name()) -> service_spec().
 get_service_spec(Name) ->
@@ -61,4 +63,6 @@ get_service_path(withdrawal_management) ->
 get_service_path(withdrawal_session_management) ->
     "/v1/withdrawal_session";
 get_service_path(deposit_management) ->
-    "/v1/deposit".
+    "/v1/deposit";
+get_service_path(progressor_trace) ->
+    "/v1/trace".
