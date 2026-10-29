@@ -103,7 +103,7 @@
     {created, withdrawal()}
     | {resource_got, destination_resource()}
     | {route_changed, #{route := route(), candidates => routing_candidates()}}
-    | {rollback_started, routing_rollback_data()}
+    | {rollback, routing_rollback_data()}
     | {p_transfer, ff_postings_transfer:event()}
     | {limit_check, limit_check_details()}
     | {validation, {sender | receiver, validation_result()}}
@@ -899,7 +899,7 @@ process_routing_failure(Reason, [], Withdrawal) ->
     {idle, process_transfer_fail(Reason, Withdrawal)};
 process_routing_failure(Reason, Accounted, Withdrawal) ->
     Failure = build_failure(Reason, Withdrawal),
-    {timeout, [{rollback_started, #{reason => Failure, candidates => Accounted}}]}.
+    {timeout, [{rollback, #{reason => Failure, candidates => Accounted}}]}.
 
 -spec process_rollback_routing(withdrawal_state()) -> process_result().
 %% TODO Remove this legacy cleanup and do_rollback_routing/2 once histories
@@ -2115,7 +2115,7 @@ apply_event_({route_changed, #{route := Route} = Change}, T0) ->
             routing_candidates => maps:get(candidates, Change, undefined)
         })
     );
-apply_event_({rollback_started, #{reason := _, candidates := Candidates = [_ | _]} = Data}, T) ->
+apply_event_({rollback, #{reason := _, candidates := Candidates = [_ | _]} = Data}, T) ->
     T#{routing_candidates => Candidates, routing_rollback_data => Data};
 apply_event_({validation, {Part, ValidationResult}}, T) ->
     Validates = maps:get(validation, T, #{}),
@@ -2287,7 +2287,7 @@ routing_failure_compensation_test() ->
     Route = test_route(1, 7),
     with_routing_mocks([Route], fun() ->
         ok = meck:expect(ff_limiter, check_limits, 4, {error, {overflow, [{<<"limit">>, 101, 100}]}}),
-        {timeout, [{rollback_started, #{reason := Failure, candidates := [Route]}} = Event]} =
+        {timeout, [{rollback, #{reason := Failure, candidates := [Route]}} = Event]} =
             process_transfer(test_withdrawal_state()),
         State = apply_event(Event, test_withdrawal_state()),
         ?assertEqual(#{reason => Failure, candidates => [Route]}, maps:get(routing_rollback_data, State)),
@@ -2417,7 +2417,7 @@ quote_route_selection_test() ->
             (_, _, Route, _) when Route =:= Quoted -> {error, {overflow, []}};
             (_, _, _, _) -> {ok, []}
         end),
-        {timeout, [Failed = {rollback_started, #{reason := Failure, candidates := [_, _]}}]} = process_transfer(State),
+        {timeout, [Failed = {rollback, #{reason := Failure, candidates := [_, _]}}]} = process_transfer(State),
         ?assertMatch(#{code := <<"unknown">>}, Failure),
         ?assertEqual({timeout, [{status_changed, {failed, Failure}}]}, process_transfer(apply_event(Failed, State))),
         ?assert(meck:called(ff_limiter, rollback_withdrawal_limits, [[], '_', Quoted, 1]))
@@ -2463,7 +2463,7 @@ legacy_resource_routing_context_test() ->
             {RoutingVarset, _} = make_routing_varset_and_context(Legacy),
             Events = [
                 {route_changed, #{route => Route, candidates => [Route]}},
-                {rollback_started, #{reason => #{code => <<"no_route_found">>}, candidates => [Route]}}
+                {rollback, #{reason => #{code => <<"no_route_found">>}, candidates => [Route]}}
             ],
             lists:foreach(
                 fun(Event) ->

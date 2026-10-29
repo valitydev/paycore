@@ -130,8 +130,8 @@ marshal(change, {route_changed, #{route := Route} = Change}) ->
         route = marshal(route, Route),
         candidates = maybe_marshal({list, route}, maps:get(candidates, Change, undefined))
     }};
-marshal(change, {rollback_started, #{reason := Failure, candidates := [_ | _] = Candidates}}) ->
-    {rollback_started, #wthd_RollbackStartedChange{
+marshal(change, {rollback, #{reason := Failure, candidates := [_ | _] = Candidates}}) ->
+    {rollback, #wthd_RollbackChange{
         reason = ff_codec:marshal(failure, Failure),
         candidates = marshal({list, route}, Candidates)
     }};
@@ -271,10 +271,10 @@ unmarshal(change, {route, #wthd_RouteChange{route = Route, candidates = Candidat
         genlib_map:compact(#{
             route => unmarshal(route, Route), candidates => maybe_unmarshal({list, route}, Candidates)
         })};
-unmarshal(change, {rollback_started, #wthd_RollbackStartedChange{reason = Failure, candidates = Candidates}}) when
+unmarshal(change, {rollback, #wthd_RollbackChange{reason = Failure, candidates = Candidates}}) when
     is_list(Candidates), Candidates =/= []
 ->
-    {rollback_started, #{
+    {rollback, #{
         reason => ff_codec:unmarshal(failure, Failure), candidates => unmarshal({list, route}, Candidates)
     }};
 unmarshal(change, {limit_check, #wthd_LimitCheckChange{details = Details}}) ->
@@ -603,11 +603,11 @@ route_change_candidates_roundtrip_test() ->
     WithEmpty = {route_changed, #{route => Route, candidates => []}},
     ?assertEqual(WithEmpty, unmarshal(change, marshal(change, WithEmpty))).
 
--spec rollback_started_roundtrip_test() -> _.
-rollback_started_roundtrip_test() ->
+-spec rollback_roundtrip_test() -> _.
+rollback_roundtrip_test() ->
     Route = test_route(),
     Failure = #{code => <<"unknown">>, reason => genlib:format({inconsistent_quote_route, Route})},
-    WithList = {rollback_started, #{reason => Failure, candidates => [Route]}},
+    WithList = {rollback, #{reason => Failure, candidates => [Route]}},
     ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))).
 
 test_route() ->
