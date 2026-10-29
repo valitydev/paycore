@@ -75,7 +75,8 @@ init([]) ->
             {deposit_management, ff_deposit_handler},
             {withdrawal_session_repairer, ff_withdrawal_session_repair},
             {withdrawal_repairer, ff_withdrawal_repair},
-            {deposit_repairer, ff_deposit_repair}
+            {deposit_repairer, ff_deposit_repair},
+            {progressor_trace, ff_progressor_trace_handler}
         ],
     WoodyHandlers = [get_handler(Service, Handler, WrapperOpts) || {Service, Handler} <- Services],
 
@@ -89,7 +90,7 @@ init([]) ->
                 handlers => WoodyHandlers,
                 event_handler => ff_woody_event_handler,
                 additional_routes =>
-                    get_prometheus_routes() ++ ff_machine_handler:get_routes() ++
+                    get_prometheus_routes() ++
                     [
                         erl_health_handle:get_readiness_route(enable_health_logging(HealthCheckReadiness)),
                         erl_health_handle:get_liveness_route(enable_health_logging(HealthCheckLiveness))

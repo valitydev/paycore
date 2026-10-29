@@ -36,7 +36,7 @@ sequenceDiagram
 
 **Убрано из prod:** `hg_machine`, `ff_machine`, `hg_progressor_handler`, `machinery_prg_backend` в `config/sys.config`, `progressor_action`, legacy map в intent, отдельные модули `prg_machine_client` / `prg_machine_processor` / `prg_machine_events` / `prg_machine_env` / `prg_machine_codec` (логика сведена в `prg_machine.erl`).
 
-**Trace (FF only):** HTTP JSON через `ff_machine_handler` → `ff_machine_trace` (не client API `prg_machine`). Thrift — `docs/trace-api-thrift.md`.
+**Trace:** `prg_machine_trace` + Woody `GetTrace` (`/v1/trace`) — HG: `hg_progressor_trace`, FF: `ff_progressor_trace`. IDL: damsel / fistful-proto `progressor_trace.thrift`.
 
 **Вне scope:** `{machinery, …}` в `rebar.config` — только docker-sidecar тесты (`test/bender`, `test/party-management`).
 
@@ -214,7 +214,7 @@ meck:expect(prg_machine, process, fun process/3).
 
 - Registry без ETS `heir` — краткое окно при рестарте owner-процесса
 - Фиктивная обёртка `{ev, Ts, Body}` в event payload
-- Trace: сейчас HTTP JSON (`ff_machine_trace`); Thrift — `docs/trace-api-thrift.md`
+- Trace: Woody `GetTrace` (`prg_machine_trace`)
 - Единый конверт HG+FF (format 2)
 
 ---
@@ -256,8 +256,9 @@ rg 'prg_machine_client|prg_machine_processor|prg_machine_env' apps/  # 0
 | `apps/hellgate/src/hg_invoice.erl` | HG behaviour, repair, `to_prg_result` |
 | `apps/ff_transfer/src/ff_deposit_machine.erl` | FF thin handler (образец) |
 | `apps/hellgate/src/hg_invoicing_machine_client.erl` | Thrift → prg_machine |
-| `apps/ff_server/src/ff_machine_handler.erl` | HTTP trace routes |
-| `apps/ff_transfer/src/ff_machine_trace.erl` | progressor trace → JSON |
+| `apps/prg_machine/src/prg_machine_trace.erl` | progressor:trace → decoded units |
+| `apps/hellgate/src/hg_progressor_trace.erl` | HG Woody GetTrace |
+| `apps/ff_server/src/ff_progressor_trace.erl` | FF Woody GetTrace |
 | `apps/fistful/src/ff_repair.erl` | repair scenarios |
 | `apps/ff_server/src/ff_codec.erl` | repair thrift unmarshal |
 | `apps/ff_transfer/test/ff_ct_machine.erl` | meck hooks |

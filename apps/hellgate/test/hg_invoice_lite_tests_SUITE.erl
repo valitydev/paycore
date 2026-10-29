@@ -3,6 +3,7 @@
 -include("hg_ct_invoice.hrl").
 -include("hg_ct_domain.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("damsel/include/dmsl_progressor_trace_thrift.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -280,13 +281,27 @@ payment_success_trace(C) ->
     PaymentParams = make_payment_params(?pmt_sys(<<"visa-ref">>)),
     PaymentID = process_payment(InvoiceID, PaymentParams, Client),
     PaymentID = await_payment_capture(InvoiceID, PaymentID, Client),
-    {ok, Trace} = progressor:trace(#{ns => invoice, id => InvoiceID}),
-    TaskTypes = [maps:get(task_type, Unit) || Unit <- Trace],
-    ?assert(lists:member(<<"init">>, TaskTypes)),
+    ApiClient = hg_ct_helper:create_client(hg_ct_helper:cfg(root_url, C)),
+    {{ok, Trace}, _} = hg_client_api:call(progressor_trace, 'GetTrace', [<<"invoice">>, InvoiceID], ApiClient),
+    TaskTypes = [task_type(Unit) || Unit <- Trace],
+    ?assertEqual(<<"init">>, hd(TaskTypes)),
     ?assert(lists:member(<<"call">>, TaskTypes)),
     ?assert(lists:member(<<"timeout">>, TaskTypes)),
-    [#{task_type := <<"init">>, task_status := <<"finished">>, events := [_ | _]} | _] =
-        [Unit || Unit <- Trace, maps:get(task_type, Unit) =:= <<"init">>],
+    [
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{
+                task_type = <<"init">>,
+                task_status = <<"finished">>
+            },
+            body =
+                {thrift_call, #progressor_trace_ThriftCall{
+                    service_name = <<"Invoicing">>, function_name = <<"Create">>
+                }},
+            events = [#progressor_trace_TraceEvent{payload = {invoice_changes, [_ | _]}} | _]
+        }
+        | Rest
+    ] = Trace,
+    ?assert(lists:all(fun is_trace_unit/1, Rest)),
     ok.
 
 -spec payment_w_first_blacklisted_success(config()) -> test_return().
@@ -542,6 +557,14 @@ payment_last_trx_correct(C) ->
 
 cfg(Key, Config) ->
     hg_ct_helper:cfg(Key, Config).
+
+task_type(#progressor_trace_TraceUnit{header = #progressor_trace_TraceTaskHeader{task_type = TaskType}}) ->
+    TaskType.
+
+is_trace_unit(#progressor_trace_TraceUnit{header = #progressor_trace_TraceTaskHeader{}}) ->
+    true;
+is_trace_unit(_) ->
+    false.
 
 make_due_date(LifetimeSeconds) ->
     hg_invoice_helper:make_due_date(LifetimeSeconds).
