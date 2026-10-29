@@ -97,14 +97,14 @@ gather_routes(PartyVarset, Context) ->
 -spec gather_routes(party_varset(), routing_context(), [terminal_id()]) ->
     routing_state().
 gather_routes(PartyVarset, Context, ExcludeRoutes) ->
-    try
-        State = routing:run(routing_ctx:new([]), steps(PartyVarset, Context, ExcludeRoutes)),
-        case routing_ctx:error(State) of
-            undefined -> State;
-            {misconfiguration, Reason} -> misconfigured_routes(Reason, PartyVarset)
-        end
+    try routing:run(routing_ctx:new([]), steps(PartyVarset, Context, ExcludeRoutes)) of
+        State ->
+            ok = log_misconfiguration(routing_ctx:error(State), PartyVarset),
+            State
     catch
-        throw:{misconfiguration, CatchReason} -> misconfigured_routes(CatchReason, PartyVarset)
+        throw:{misconfiguration, _Reason} = Error ->
+            ok = log_misconfiguration(Error, PartyVarset),
+            routing_ctx:set_error(Error, routing_ctx:new([]))
     end.
 
 -spec steps(party_varset(), routing_context(), [terminal_id()]) -> [routing:step()].
@@ -126,9 +126,10 @@ steps(PartyVarset, #{wallet := Wallet, domain_revision := DomainRevision} = Cont
         {filter_accepted, fun(S) -> routing:filter(S, [{accepted, false}]) end}
     ].
 
-misconfigured_routes(Reason, PartyVarset) ->
-    logger:warning("Routing rule misconfiguration. Reason:~n~p~nVarset:~n~p", [Reason, PartyVarset]),
-    routing_ctx:new([]).
+log_misconfiguration(undefined, _PartyVarset) ->
+    ok;
+log_misconfiguration({misconfiguration, Reason}, PartyVarset) ->
+    logger:warning("Routing rule misconfiguration. Reason:~n~p~nVarset:~n~p", [Reason, PartyVarset]).
 
 %% Quote and normal routing share all eligibility and hold steps.
 -spec compute(party_varset(), routing_context(), [terminal_id()], map() | undefined) -> routing_state().
@@ -218,9 +219,17 @@ get_terminal(#{terminal_id := TerminalID}) ->
 
 -spec select_routes(routing_state()) -> {ok, [route()]} | {error, route_not_found()}.
 select_routes(State) ->
-    result(routing:run(State, [{balance, fun routing:balance/1}, {choose, fun routing:select/1}])).
+    %% Callers of prepare_routes still receive route_not_found, as before the cascade.
+    %% The withdrawal machine reads result/1 and keeps the misconfiguration on the failure.
+    case result(routing:run(State, [{balance, fun routing:balance/1}, {choose, fun routing:select/1}])) of
+        {error, {misconfiguration, _}} ->
+            {error, {route_not_found, []}};
+        Routed ->
+            Routed
+    end.
 
--spec result(routing_state()) -> {ok, [route()]} | {error, route_not_found() | {inconsistent_quote_route, route()}}.
+-spec result(routing_state()) ->
+    {ok, [route()]} | {error, route_not_found() | {misconfiguration, term()} | {inconsistent_quote_route, route()}}.
 result(State) ->
     case {routing_ctx:error(State), routing_ctx:choosen_route(State)} of
         {undefined, undefined} -> {error, {route_not_found, rejected_routes(State)}};
@@ -541,6 +550,33 @@ prepare_routes_uses_weights_test() ->
         ),
         ?assertEqual({ok, [make_route(2, 2)]}, prepare_routes(#{currency => Currency, cost => Cash}, Wallet, 1)),
         ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_'))
+    after
+        ok = meck:unload(Modules)
+    end.
+
+-spec misconfiguration_reaches_machine_result_test() -> _.
+misconfiguration_reaches_machine_result_test() ->
+    Modules = [ff_payment_institution, hg_route_collector],
+    ok = meck:new(Modules, [passthrough]),
+    try
+        Currency = #domain_CurrencyRef{symbolic_code = <<"RUB">>},
+        Wallet = #domain_WalletConfig{
+            name = <<"wallet">>,
+            block = {unblocked, #domain_Unblocked{reason = <<>>, since = <<"1970-01-01T00:00:00Z">>}},
+            suspension = {active, #domain_Active{since = <<"1970-01-01T00:00:00Z">>}},
+            payment_institution = #domain_PaymentInstitutionRef{id = 1},
+            terms = #domain_TermSetHierarchyRef{id = 1},
+            account = #domain_WalletAccount{currency = Currency, settlement = 1},
+            party_ref = #domain_PartyConfigRef{id = <<"party">>}
+        },
+        Error = {misconfiguration, {routing_decisions, {delegates, []}}},
+        ok = meck:expect(ff_payment_institution, get, 3, {ok, #{withdrawal_routing_rules => undefined}}),
+        ok = meck:expect(hg_route_collector, get_routes, 4, #{routes => [], error => Error}),
+        Varset = #{},
+        State = gather_routes(Varset, #{wallet => Wallet, domain_revision => 1, iteration => 1}),
+        ?assertEqual(Error, routing_ctx:error(State)),
+        ?assertEqual({error, Error}, result(State)),
+        ?assertEqual({error, {route_not_found, []}}, prepare_routes(Varset, Wallet, 1))
     after
         ok = meck:unload(Modules)
     end.

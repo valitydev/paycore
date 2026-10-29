@@ -361,6 +361,7 @@
 -type fail_type() ::
     limit_check
     | withdrawal_routing:route_not_found()
+    | {misconfiguration, term()}
     | {inconsistent_quote_route, route()}
     | {validation_personal_data, sender | receiver}
     | session.
@@ -924,6 +925,7 @@ process_compensate_routing_failure(Withdrawal) ->
 when
     Reason ::
         withdrawal_routing:route_not_found()
+        | {misconfiguration, term()}
         | attempt_limit_exceeded
         | InconsistentQuote,
     InconsistentQuote :: {inconsistent_quote_route, route()}.
@@ -2016,6 +2018,12 @@ build_failure({route_not_found, []}, _Withdrawal) ->
     #{
         code => <<"no_route_found">>
     };
+%% Same code and retry token as a historical empty route set. The reason is what support reads.
+build_failure({misconfiguration, Details}, _Withdrawal) ->
+    #{
+        code => <<"no_route_found">>,
+        reason => genlib:format({misconfiguration, Details})
+    };
 build_failure({route_not_found, RejectedRoutes}, _Withdrawal) ->
     genlib_map:compact(#{
         code => <<"no_route_found">>,
@@ -2235,6 +2243,19 @@ match_error_whitelist_test() ->
         )
     ).
 
+-spec misconfiguration_failure_keeps_no_route_found_test() -> _.
+misconfiguration_failure_keeps_no_route_found_test() ->
+    Details = {routing_decisions, {delegates, []}},
+    Failure = build_failure({misconfiguration, Details}, test_withdrawal_state()),
+    ?assertEqual(
+        #{
+            code => <<"no_route_found">>,
+            reason => genlib:format({misconfiguration, Details})
+        },
+        Failure
+    ),
+    ?assertEqual([<<"no_route_found">>], failure_to_error_token_list(Failure)).
+
 -spec routing_journal_test() -> _.
 routing_journal_test() ->
     Chosen = test_route(1, 7),
@@ -2304,6 +2325,21 @@ empty_routing_failure_test() ->
         ),
         ?assertEqual(0, meck:num_calls(ff_limiter, hold_withdrawal_limits, '_')),
         ?assertEqual(0, meck:num_calls(ff_limiter, rollback_withdrawal_limits, '_'))
+    end).
+
+-spec misconfiguration_is_business_failure_test() -> _.
+misconfiguration_is_business_failure_test() ->
+    Details = {routing_decisions, {delegates, []}},
+    with_routing_mocks([], fun() ->
+        ok = meck:expect(
+            hg_route_collector,
+            get_routes,
+            4,
+            #{routes => [], error => {misconfiguration, Details}}
+        ),
+        {idle, [{status_changed, {failed, Failure}}]} = process_transfer(test_withdrawal_state()),
+        ?assertEqual(<<"no_route_found">>, maps:get(code, Failure)),
+        ?assertEqual(genlib:format({misconfiguration, Details}), maps:get(reason, Failure))
     end).
 
 -spec chosen_rollback_iteration_test() -> _.

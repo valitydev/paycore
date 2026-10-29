@@ -87,40 +87,20 @@ get_table_prohibitions(Prohibitions, VS, Revision, Callbacks) ->
     ).
 
 collect_routes(Candidates, Revision, #{resolve_terminal := Resolve}) ->
-    {Routes, _Index} = lists:foldl(
-        fun(Candidate, Acc) ->
-            add_or_merge_candidate(Candidate, Revision, Resolve, Acc)
+    lists:map(
+        fun(Candidate) ->
+            #domain_RoutingCandidate{
+                terminal = TerminalRef,
+                priority = Priority,
+                weight = Weight,
+                pin = Pin,
+                affinity = Affinity
+            } = Candidate,
+            {ok, ProviderRef} = Resolve(TerminalRef, Revision),
+            make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity)
         end,
-        {[], #{}},
         Candidates
-    ),
-    Routes.
-
-add_or_merge_candidate(Candidate, Revision, Resolve, {Routes, Index}) ->
-    #domain_RoutingCandidate{
-        terminal = TerminalRef,
-        priority = Priority,
-        weight = Weight,
-        pin = Pin,
-        affinity = Affinity
-    } = Candidate,
-    {ok, ProviderRef} = Resolve(TerminalRef, Revision),
-    Key = {ProviderRef, TerminalRef},
-    CmpPriority = stored_priority(Priority),
-    CmpWeight = stored_weight(Weight),
-    Route = make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity),
-    case maps:find(Key, Index) of
-        error ->
-            Pos = length(Routes) + 1,
-            {Routes ++ [Route], Index#{Key => {Pos, CmpPriority, CmpWeight}}};
-        {ok, {Pos, PrevPriority, PrevWeight}} ->
-            case is_better({CmpPriority, CmpWeight}, {PrevPriority, PrevWeight}) of
-                true ->
-                    {replace_nth(Pos, Route, Routes), Index#{Key => {Pos, CmpPriority, CmpWeight}}};
-                false ->
-                    {Routes, Index}
-            end
-    end.
+    ).
 
 make_route(Revision, ProviderRef, TerminalRef, Weight, Priority, Pin, Affinity) ->
     Route = hg_route:new(
@@ -142,13 +122,6 @@ stored_priority(undefined) ->
     ?DOMAIN_CANDIDATE_PRIORITY;
 stored_priority(Priority) ->
     Priority.
-
-is_better({Priority, Weight}, {PrevPriority, PrevWeight}) ->
-    (Priority > PrevPriority) orelse (Priority =:= PrevPriority andalso Weight > PrevWeight).
-
-replace_nth(Pos, Value, List) ->
-    {Head, [_ | Tail]} = lists:split(Pos - 1, List),
-    Head ++ [Value | Tail].
 
 apply_prohibition(Table, Routes) ->
     lists:foldr(
@@ -222,9 +195,9 @@ domain_candidate_validation_test() ->
     #{routes := [Route]} = hg_route_collector:get_routes(1, #{}, routing_rules(), Withdrawal),
     ?assertEqual(?trm(1), hg_route:terminal_ref(Route)).
 
--spec collector_merge_duplicate_provider_terminal_test() -> _.
-collector_merge_duplicate_provider_terminal_test() ->
-    %% Higher priority wins; equal priority then higher weight; then first original.
+-spec collector_keeps_duplicate_terminal_priorities_test() -> _.
+collector_keeps_duplicate_terminal_priorities_test() ->
+    %% The same terminal at two priorities is two cascade slots.
     CLowPrio = candidate(?trm(1), {constant, true}, 1, 100),
     CHighPrioLowWeight = candidate(?trm(1), {constant, true}, 5, 1),
     CHighPrioHighWeight = candidate(?trm(1), {constant, true}, 5, 20),
@@ -236,15 +209,18 @@ collector_merge_duplicate_provider_terminal_test() ->
         fun default_resolve/2
     ),
     #{routes := Routes} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-    ?assertEqual([?trm(1), ?trm(2)], [hg_route:terminal_ref(R) || R <- Routes]),
-    [Winner, _] = Routes,
-    ?assertEqual(5, hg_route:priority(Winner)),
-    ?assertEqual(20, hg_route:weight(Winner)),
+    ?assertEqual(
+        [{?trm(1), 1, 100}, {?trm(2), 1, 0}, {?trm(1), 5, 1}, {?trm(1), 5, 20}],
+        [{hg_route:terminal_ref(R), hg_route:priority(R), hg_route:weight(R)} || R <- Routes]
+    ),
     UndefinedWeight = (candidate(?trm(4), {constant, true}, 1, 0))#domain_RoutingCandidate{weight = undefined},
     DefinedWeight = candidate(?trm(4), {constant, true}, 1, 2),
     UndefCallbacks = callbacks([UndefinedWeight, DefinedWeight], [], payment, fun default_resolve/2),
-    #{routes := [UndefWinner]} = hg_route_collector:get_routes(1, #{}, routing_rules(), UndefCallbacks),
-    ?assertEqual(2, hg_route:weight(UndefWinner)).
+    #{routes := [UndefinedRoute, DefinedRoute]} = hg_route_collector:get_routes(
+        1, #{}, routing_rules(), UndefCallbacks
+    ),
+    ?assertEqual(?DOMAIN_CANDIDATE_WEIGHT, hg_route:weight(UndefinedRoute)),
+    ?assertEqual(2, hg_route:weight(DefinedRoute)).
 
 -spec collector_missing_terminal_error_test() -> _.
 collector_missing_terminal_error_test() ->
@@ -258,19 +234,24 @@ collector_missing_terminal_error_test() ->
     end),
     ?assertError(Error, hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks)).
 
--spec collector_merge_duplicate_default_priority_test() -> _.
-collector_merge_duplicate_default_priority_test() ->
+-spec collector_keeps_undefined_priority_candidate_test() -> _.
+collector_keeps_undefined_priority_candidate_test() ->
     Default = (candidate(?trm(1), {constant, true}, 0, 1))#domain_RoutingCandidate{priority = undefined},
     Lower = candidate(?trm(1), {constant, true}, ?DOMAIN_CANDIDATE_PRIORITY - 1, 100),
     lists:foreach(
         fun(Candidates) ->
             Callbacks = callbacks(Candidates, [], payment, fun default_resolve/2),
-            #{routes := [Route]} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
-            ?assertEqual(?DOMAIN_CANDIDATE_PRIORITY, hg_route:priority(Route)),
-            ?assertEqual(1, hg_route:weight(Route))
+            #{routes := Routes} = hg_route_collector:get_routes(1, #{}, routing_rules(), Callbacks),
+            ?assertEqual(length(Candidates), length(Routes))
         end,
         [[Default, Lower], [Lower, Default]]
-    ).
+    ),
+    DefaultFirst = callbacks([Default, Lower], [], payment, fun default_resolve/2),
+    #{routes := [First, Second]} = hg_route_collector:get_routes(1, #{}, routing_rules(), DefaultFirst),
+    ?assertEqual(?DOMAIN_CANDIDATE_PRIORITY, hg_route:priority(First)),
+    ?assertEqual(1, hg_route:weight(First)),
+    ?assertEqual(?DOMAIN_CANDIDATE_PRIORITY - 1, hg_route:priority(Second)),
+    ?assertEqual(100, hg_route:weight(Second)).
 
 routing_rules() ->
     #domain_RoutingRules{
