@@ -21,6 +21,7 @@
     attempts => attempts(),
     resource => destination_resource(),
     adjustments => adjustments_index(),
+    risk_score => risk_score(),
     status => status(),
     metadata => metadata(),
     external_id => id(),
@@ -99,6 +100,7 @@
 
 -type event() ::
     {created, withdrawal()}
+    | {risk_score_changed, risk_score()}
     | {resource_got, destination_resource()}
     | {route_changed, route()}
     | {p_transfer, ff_postings_transfer:event()}
@@ -299,6 +301,8 @@
 -type external_id() :: id() | undefined.
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type session_id() :: id().
+%% TODO Move type to dedicated module
+-type risk_score() :: trusted | low | high | fatal.
 -type destination_resource() :: ff_destination:resource().
 -type bin_data() :: ff_bin_data:bin_data().
 -type cash() :: ff_cash:cash().
@@ -340,7 +344,8 @@
 }.
 
 -type activity() ::
-    routing
+    risk_scoring
+    | routing
     | p_transfer_start
     | p_transfer_recreate
     | p_transfer_prepare
@@ -717,6 +722,10 @@ p_transfer_status(Withdrawal) ->
             ff_postings_transfer:status(Transfer)
     end.
 
+-spec risk_score(withdrawal_state()) -> undefined | risk_score().
+risk_score(Withdrawal) ->
+    maps:get(risk_score, Withdrawal, undefined).
+
 -spec route_selection_status(withdrawal_state()) -> unknown | found.
 route_selection_status(Withdrawal) ->
     case route(Withdrawal) of
@@ -758,6 +767,7 @@ operation_domain_revision(Withdrawal) ->
 -spec deduce_activity(withdrawal_state()) -> activity().
 deduce_activity(Withdrawal) ->
     Params = #{
+        risk_score => risk_score(Withdrawal),
         route => route_selection_status(Withdrawal),
         p_transfer => p_transfer_status(Withdrawal),
         validation => withdrawal_validation_status(Withdrawal),
@@ -777,6 +787,10 @@ do_deduce_activity(#{status := succeeded} = Params) ->
 do_deduce_activity(#{status := {failed, _}} = Params) ->
     do_finished_activity(Params).
 
+do_pending_activity(#{risk_score := undefined, route := unknown, p_transfer := undefined}) ->
+    %% NOTE Mind the clause conditions. Already started and routed transfer must
+    %% not be subject of this activity.
+    risk_scoring;
 do_pending_activity(#{route := unknown, p_transfer := undefined}) ->
     routing;
 do_pending_activity(#{route := found, p_transfer := undefined}) ->
@@ -816,6 +830,8 @@ do_finished_activity(#{status := {failed, _}}) ->
     rollback_routing.
 
 -spec do_process_transfer(activity(), withdrawal_state()) -> process_result().
+do_process_transfer(risk_scoring, Withdrawal) ->
+    process_risk_scoring(Withdrawal);
 do_process_transfer(routing, Withdrawal) ->
     process_routing(Withdrawal);
 do_process_transfer(p_transfer_start, Withdrawal) ->
@@ -873,6 +889,12 @@ do_process_transfer(adjustment, Withdrawal) ->
     process_adjustment(Withdrawal);
 do_process_transfer(rollback_routing, Withdrawal) ->
     process_rollback_routing(Withdrawal).
+
+-spec process_risk_scoring(withdrawal_state()) -> process_result().
+process_risk_scoring(_Withdrawal) ->
+    RiskScore = trusted,
+    Events = [{risk_score_changed, RiskScore}],
+    {timeout, Events}.
 
 -spec process_routing(withdrawal_state()) -> process_result().
 process_routing(Withdrawal) ->
@@ -2043,6 +2065,8 @@ apply_event(Ev, T0) ->
 -spec apply_event_(event(), ff_maybe:'maybe'(withdrawal_state())) -> withdrawal_state().
 apply_event_({created, T}, undefined) ->
     make_state(T);
+apply_event_({risk_score_changed, RiskScore}, T) ->
+    maps:put(risk_score, RiskScore, T);
 apply_event_({status_changed, Status}, T) ->
     maps:put(status, Status, T);
 apply_event_({resource_got, Resource}, T) ->

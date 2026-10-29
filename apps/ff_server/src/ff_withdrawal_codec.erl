@@ -115,6 +115,8 @@ marshal(timestamped_change, {ev, Timestamp, Change}) ->
     };
 marshal(change, {created, Withdrawal}) ->
     {created, #wthd_CreatedChange{withdrawal = marshal(withdrawal, Withdrawal)}};
+marshal(change, {risk_score_changed, RiskScore}) ->
+    {risk_score_changed, #wthd_RiskScoreChange{risk_score = marshal(risk_score, RiskScore)}};
 marshal(change, {status_changed, Status}) ->
     {status_changed, #wthd_StatusChange{status = ff_withdrawal_status_codec:marshal(status, Status)}};
 marshal(change, {p_transfer, TransferChange}) ->
@@ -179,6 +181,9 @@ marshal(route, Route) ->
         terminal_id = maybe_marshal(terminal_id, genlib_map:get(terminal_id, Route)),
         provider_id_legacy = marshal(string, get_legacy_provider_id(Route))
     };
+marshal(risk_score, RiskScore) ->
+    %% TODO check if types match (atoms?)
+    RiskScore;
 marshal(status, Status) ->
     ff_withdrawal_status_codec:marshal(status, Status);
 marshal(session_event, started) ->
@@ -250,6 +255,8 @@ unmarshal(repair_scenario, {add_events, #wthd_AddEventsRepair{events = Events, a
         })};
 unmarshal(change, {created, #wthd_CreatedChange{withdrawal = Withdrawal}}) ->
     {created, unmarshal(withdrawal, Withdrawal)};
+unmarshal(change, {risk_score_changed, #wthd_RiskScoreChange{risk_score = RiskScore}}) ->
+    {risk_score_changed, unmarshal(risk_score, RiskScore)};
 unmarshal(change, {status_changed, #wthd_StatusChange{status = Status}}) ->
     {status_changed, unmarshal(status, Status)};
 unmarshal(change, {transfer, #wthd_TransferChange{payload = TransferChange}}) ->
@@ -312,6 +319,9 @@ unmarshal(route, Route) ->
         terminal_id => maybe_unmarshal(terminal_id, Route#wthd_Route.terminal_id),
         provider_id_legacy => maybe_unmarshal(string, Route#wthd_Route.provider_id_legacy)
     });
+unmarshal(risk_score, RiskScore) ->
+    %% TODO check if types match (atoms?)
+    RiskScore;
 unmarshal(status, Status) ->
     ff_withdrawal_status_codec:unmarshal(status, Status);
 unmarshal(session_event, #wthd_SessionChange{id = ID, payload = {started, #wthd_SessionStarted{}}}) ->
