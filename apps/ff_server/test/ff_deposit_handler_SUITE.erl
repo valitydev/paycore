@@ -7,6 +7,7 @@
 -include_lib("fistful_proto/include/fistful_deposit_status_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_progressor_trace_thrift.hrl").
 
 %% Common test API
 
@@ -247,46 +248,37 @@ trace_deposit_ok_test(_C) ->
         description = Description
     },
     {ok, _DepositState} = call_deposit('Create', {Params, ff_entity_context_codec:marshal(Context)}),
-    TraceUrl = <<"http://localhost:8022/traces/internal/deposit_v1/", DepositID/binary>>,
-    CheckerFun = fun(TraceBody) ->
-        try
-            [
-                #{
-                    <<"args">> := [
-                        [
-                            #{<<"created">> := _},
-                            #{<<"status_changed">> := <<"pending">>}
-                        ],
-                        #{<<"NS">> := _}
-                    ],
-                    <<"events">> := [
-                        #{
-                            <<"event_id">> := 1,
-                            <<"event_payload">> := #{<<"created">> := _},
-                            <<"event_timestamp">> := _
-                        },
-                        #{
-                            <<"event_id">> := 2,
-                            <<"event_payload">> := #{<<"status_changed">> := _},
-                            <<"event_timestamp">> := _
-                        }
-                    ],
-                    <<"task_status">> := <<"finished">>,
-                    <<"task_type">> := <<"init">>
+    [
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{task_type = <<"init">>, task_status = <<"finished">>},
+            body = InitBody,
+            events = [
+                #progressor_trace_TraceEvent{
+                    event_id = 1,
+                    event_timestamp = _,
+                    payload = {deposit, #deposit_TimestampedChange{change = {created, _}}}
                 },
-                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>},
-                #{<<"task_status">> := <<"finished">>, <<"task_type">> := <<"timeout">>}
-            ] = json:decode(TraceBody),
-            true
-        catch
-            _:_ ->
-                false
-        end
-    end,
-    await_http_body(TraceUrl, CheckerFun).
+                #progressor_trace_TraceEvent{
+                    event_id = 2,
+                    event_timestamp = _,
+                    payload = {deposit, #deposit_TimestampedChange{change = {status_changed, _}}}
+                }
+            ]
+        },
+        Timeout1,
+        Timeout2,
+        Timeout3,
+        Timeout4,
+        Timeout5
+    ] = ff_trace_ct:await_trace(<<"ff/deposit_v1">>, DepositID, fun match_deposit_trace/1),
+    [
+        [
+            #{<<"created">> := _},
+            #{<<"status_changed">> := <<"pending">>}
+        ],
+        #{<<"NS">> := _}
+    ] = ff_trace_ct:body_json(InitBody),
+    true = lists:all(fun ff_trace_ct:is_finished_timeout/1, [Timeout1, Timeout2, Timeout3, Timeout4, Timeout5]).
 
 -spec create_negative_ok_test(config()) -> test_return().
 create_negative_ok_test(_C) ->
@@ -359,6 +351,21 @@ get_events_test(_C) ->
 
 %% Utils
 
+match_deposit_trace([
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"init">>, task_status = <<"finished">>},
+        events = [_, _]
+    },
+    T1,
+    T2,
+    T3,
+    T4,
+    T5
+]) ->
+    lists:all(fun ff_trace_ct:is_finished_timeout/1, [T1, T2, T3, T4, T5]);
+match_deposit_trace(_) ->
+    false.
+
 get_deposit(DepositID) ->
     {ok, Machine} = ff_deposit_machine:get(DepositID),
     ff_deposit_machine:deposit(Machine).
@@ -371,32 +378,6 @@ call_deposit(Fun, Args) ->
         url => "http://localhost:8022" ++ ff_services:get_service_path(ServiceName)
     }),
     ff_woody_client:call(Client, Request).
-
-await_http_body(Url, CheckerFun) ->
-    await_http_body(Url, CheckerFun, genlib_retry:linear(10, 500)).
-
-await_http_body(Url, CheckerFun, Retry0) ->
-    case hackney:get(Url) of
-        {ok, 200, _Headers, Ref} ->
-            {ok, Body} = hackney:body(Ref),
-            case CheckerFun(Body) of
-                true ->
-                    ok;
-                false ->
-                    retry_await_http_body(Url, CheckerFun, Retry0)
-            end;
-        _ ->
-            retry_await_http_body(Url, CheckerFun, Retry0)
-    end.
-
-retry_await_http_body(Url, CheckerFun, Retry0) ->
-    case genlib_retry:next_step(Retry0) of
-        {wait, To, Retry1} ->
-            timer:sleep(To),
-            await_http_body(Url, CheckerFun, Retry1);
-        finish ->
-            error({await_http_body_failed, Url})
-    end.
 
 make_cash({Amount, Currency}) ->
     #'fistful_base_Cash'{
