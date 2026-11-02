@@ -4,6 +4,8 @@
 
 -module(ff_withdrawal).
 
+%% -typing([eqwalizer]).
+
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -type id() :: binary().
@@ -892,6 +894,7 @@ do_process_transfer(rollback_routing, Withdrawal) ->
 
 -spec process_risk_scoring(withdrawal_state()) -> process_result().
 process_risk_scoring(_Withdrawal) ->
+    %% TODO Implement inspector's inspection call
     RiskScore = trusted,
     Events = [{risk_score_changed, RiskScore}],
     {timeout, Events}.
@@ -985,7 +988,8 @@ make_routing_varset_and_context(Withdrawal) ->
         wallet => Wallet,
         party_id => PartyID,
         destination => Destination,
-        resource => Resource
+        resource => Resource,
+        risk_score => risk_score(Withdrawal)
     }),
     Context = #{
         domain_revision => DomainRevision,
@@ -1291,6 +1295,7 @@ build_party_varset(#{body := Body, wallet_id := WalletID, party_id := PartyID} =
             {_, Resource} ->
                 construct_payment_tool(Resource)
         end,
+    RiskScore = maps:get(risk_score, Params, undefined),
     genlib_map:compact(#{
         currency => ff_dmsl_codec:marshal(currency_ref, CurrencyID),
         cost => ff_dmsl_codec:marshal(cash, Body),
@@ -1298,7 +1303,8 @@ build_party_varset(#{body := Body, wallet_id := WalletID, party_id := PartyID} =
         wallet_id => WalletID,
         % TODO it's not fair, because it's PAYOUT not PAYMENT tool.
         payment_tool => PaymentTool,
-        bin_data => ff_dmsl_codec:marshal(bin_data, BinData)
+        bin_data => ff_dmsl_codec:marshal(bin_data, BinData),
+        risk_score => RiskScore
     }).
 
 -spec construct_payment_tool(ff_destination:resource() | ff_destination:resource_params()) ->

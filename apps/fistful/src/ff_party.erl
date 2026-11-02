@@ -299,8 +299,8 @@ compute_provider_terminal_terms(ProviderRef, TerminalRef, Varset, DomainRevision
         Context
     ),
     case Result of
-        {ok, RoutingRuleset} ->
-            {ok, RoutingRuleset};
+        {ok, ProvisionTermSet} ->
+            {ok, ProvisionTermSet};
         {error, #payproc_ProviderNotFound{}} ->
             {error, provider_not_found};
         {error, #payproc_TerminalNotFound{}} ->
