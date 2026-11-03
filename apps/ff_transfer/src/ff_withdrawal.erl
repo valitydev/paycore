@@ -1709,21 +1709,24 @@ validate_current_status(Status) ->
     | {error, invalid_body_change_error()}.
 validate_body_change(#{change := {change_body, NewBody}}, Withdrawal) ->
     do(fun() ->
-        valid = unwrap(invalid_body_change, validate_new_body(NewBody, final_body(Withdrawal)))
+        valid = unwrap(
+            invalid_body_change,
+            validate_new_body(NewBody, final_body(Withdrawal), body(Withdrawal))
+        )
     end);
 validate_body_change(_Params, _Withdrawal) ->
     {ok, valid}.
 
--spec validate_new_body(body(), body()) ->
+-spec validate_new_body(body(), body(), body()) ->
     {ok, valid}
     | {error, {already_has_body, body()} | {invalid_operation_amount, body()}}.
-validate_new_body({Amount, Currency}, {Amount, Currency}) ->
+validate_new_body({Amount, Currency}, {Amount, Currency}, _InitialBody) ->
     {error, {already_has_body, {Amount, Currency}}};
-validate_new_body({NewAmount, Currency}, {OldAmount, Currency}) when
-    is_integer(NewAmount), NewAmount > 0, NewAmount < OldAmount
+validate_new_body({NewAmount, Currency}, _CurrentBody, {InitialAmount, Currency}) when
+    is_integer(NewAmount), NewAmount > 0, NewAmount =< InitialAmount
 ->
     {ok, valid};
-validate_new_body(NewBody, _OldBody) ->
+validate_new_body(NewBody, _CurrentBody, _InitialBody) ->
     {error, {invalid_operation_amount, NewBody}}.
 
 %% Adjustment helpers
@@ -2159,7 +2162,6 @@ final_body(#{body := Body}) ->
 -spec test() -> _.
 
 -spec match_error_whitelist_test() -> _.
-
 match_error_whitelist_test() ->
     ErrorWhitelist = binaries_to_error_tokens([
         <<"some:test:error">>,
