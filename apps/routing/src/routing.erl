@@ -1,132 +1,106 @@
--module(hg_routing).
+-module(routing).
 
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
-%%
--export([prepare_log_message/1]).
--export([get_logger_metadata/2]).
--export([get_routes/1]).
--export([filter_routes/2]).
--export([choose_route/1]).
+-export([run/2, collect/4, fill/2, filter/2, check/3, hold/3, balance/1, select/1, choose_route/1]).
+-export_type([step/0, route_choice_context/0]).
 
-%%
-
--type get_route_params() :: #{
-    predestination := hg_route_collector:route_predestination(),
-    revision := hg_route_collector:revision(),
-    varset := hg_route_collector:varset(),
-    payment_institution := hg_route_collector:payment_institution(),
-    pin_context := hg_route_collector:gather_route_context(),
-    blacklist_context => hg_route_collector:blacklist_context()
-}.
-
+-type step() :: {atom(), fun((routing_ctx:t()) -> routing_ctx:t())}.
 -type route_choice_context() :: #{
     chosen_route => hg_route:t(),
     preferable_route => hg_route:t(),
-    % Contains one of the field names defined in #domain_PaymentRouteScores{}
     reject_reason => atom()
 }.
-
--type initial_rejection_group() :: accepted | prohibit | blacklisted.
-
--type get_routes_result() :: #{
-    routes := [hg_route:t()],
-    rejections => #{initial_rejection_group() => [hg_route:t()]},
-    error => hg_route_collector:get_routes_error()
-}.
-
--type filter_routes_result() :: hg_routing_ctx:t().
--type filter_routes_fun() :: fun((filter_routes_result()) -> filter_routes_result()).
-
--type route_scores() :: #domain_PaymentRouteScores{}.
--type limits() :: #{hg_route:payment_route() => [hg_limiter:turnover_limit_value()]}.
--type scores() :: #{hg_route:payment_route() => hg_routing:route_scores()}.
--type route_predestination() :: payment | recurrent_payment.
-
--type misconfiguration_error() :: {misconfiguration, {routing_decisions, _} | {routing_candidate, _}}.
-
--export_type([get_route_params/0]).
--export_type([get_routes_result/0]).
--export_type([filter_routes_result/0]).
--export_type([route_choice_context/0]).
--export_type([route_scores/0]).
--export_type([limits/0]).
--export_type([scores/0]).
--export_type([route_predestination/0]).
+-type initial_rejection_group() :: atom().
+-type check_result() :: ok | {error, term()}.
+-type hold_result() :: check_result() | {held, term()}.
 
 -define(ZERO, 0).
 
--spec prepare_log_message(misconfiguration_error()) -> {io:format(), [term()]}.
-prepare_log_message({misconfiguration, {routing_decisions, Details}}) ->
-    {"PaymentRoutingDecisions couldn't be reduced to candidates, ~p", [Details]};
-prepare_log_message({misconfiguration, {routing_candidate, Candidate}}) ->
-    {"PaymentRoutingCandidate couldn't be reduced, ~p", [Candidate]};
-prepare_log_message({misconfiguration, {payment_routing_rules, empty}}) ->
-    {"PaymentRoutingRules are empty", []}.
+%% Domain errors stop the plan; exceptions propagate to the caller's retry mechanism.
+-spec run(routing_ctx:t(), [step()]) -> routing_ctx:t().
+run(State, []) ->
+    State;
+run(#{error := Error} = State, _) when Error =/= undefined ->
+    State;
+run(State, [{_Name, Step} | Rest]) ->
+    run(Step(State), Rest).
 
--spec get_logger_metadata(route_choice_context(), hg_route_collector:revision()) -> LoggerFormattedMetadata :: map().
-get_logger_metadata(RouteChoiceContext, Revision) ->
-    maps:fold(
-        fun(K, V, Acc) ->
-            Acc#{K => format_logger_metadata(K, V, Revision)}
+-spec collect(hg_route:revision(), map(), hg_route_collector:routing_rules(), hg_route_collector:callbacks()) ->
+    routing_ctx:t().
+collect(Revision, Varset, Rules, Callbacks) ->
+    routing_ctx:from_result(hg_route_collector:get_routes(Revision, Varset, Rules, Callbacks)).
+
+-spec fill(routing_ctx:t(), fun(([hg_route:t()]) -> [hg_route:t()])) -> routing_ctx:t().
+fill(State, Fill) ->
+    State#{candidates := Fill(routing_ctx:candidates(State))}.
+
+-spec filter(routing_ctx:t(), [{atom(), term()}]) -> routing_ctx:t().
+filter(State, Keys) ->
+    #{routes := Accepted, rejections := Rejections} = filter_routes(routing_ctx:candidates(State), Keys),
+    %% First key wins on a single route. Groups are applied in reverse, so that same key
+    %% becomes latest_rejection when several routes were rejected for different reasons.
+    lists:foldl(
+        fun({Group, _}, Acc) ->
+            routing_ctx:append_rejected_routes(Group, Accepted, maps:get(Group, Rejections, []), Acc)
         end,
-        #{},
-        RouteChoiceContext
+        State,
+        lists:reverse(Keys)
     ).
 
-format_logger_metadata(reject_reason, Reason, _) ->
-    Reason;
-format_logger_metadata(Meta, Route, Revision) when
-    Meta =:= chosen_route;
-    Meta =:= preferable_route
-->
-    ProviderRef = #domain_ProviderRef{id = ProviderID} = hg_route:provider_ref(Route),
-    TerminalRef = #domain_TerminalRef{id = TerminalID} = hg_route:terminal_ref(Route),
-    #domain_Provider{name = ProviderName} = hg_domain:get(Revision, {provider, ProviderRef}),
-    #domain_Terminal{name = TerminalName} = hg_domain:get(Revision, {terminal, TerminalRef}),
-    genlib_map:compact(#{
-        provider => #{id => ProviderID, name => ProviderName},
-        terminal => #{id => TerminalID, name => TerminalName},
-        priority => hg_route:priority(Route),
-        weight => hg_route:weight(Route),
-        terminal_affinity => hg_route:affinity_rank(Route),
-        affinity_enabled => hg_route:affinity(Route) =/= undefined
-    }).
+-spec check(routing_ctx:t(), atom(), fun((hg_route:t()) -> check_result())) -> routing_ctx:t().
+check(State, Group, Check) ->
+    lists:foldl(
+        fun(Route, Acc) ->
+            case Check(Route) of
+                ok -> Acc;
+                {error, Reason} -> routing_ctx:reject(Group, hg_route:set_rejection_reason(Reason, Route), Acc)
+            end
+        end,
+        State,
+        routing_ctx:candidates(State)
+    ).
 
--spec get_routes(get_route_params()) -> get_routes_result().
-get_routes(
+%% A rejected candidate may still have a hold and must remain available for compensation.
+-spec hold(routing_ctx:t(), atom(), fun((hg_route:t()) -> hold_result())) -> routing_ctx:t().
+hold(State, Group, Hold) ->
+    lists:foldl(
+        fun(Route, Acc) ->
+            case Hold(Route) of
+                ok ->
+                    routing_ctx:account(Route, Acc);
+                {held, Reason} ->
+                    routing_ctx:reject(
+                        Group, hg_route:set_rejection_reason(Reason, Route), routing_ctx:account(Route, Acc)
+                    );
+                {error, Reason} ->
+                    routing_ctx:reject(Group, hg_route:set_rejection_reason(Reason, Route), Acc)
+            end
+        end,
+        State,
+        routing_ctx:candidates(State)
+    ).
+
+-spec balance(routing_ctx:t()) -> routing_ctx:t().
+balance(State) ->
+    fill(State, fun hg_route_balancer:fill/1).
+
+-spec select(routing_ctx:t()) -> routing_ctx:t().
+select(State) ->
+    case routing_ctx:candidates(State) of
+        [] ->
+            State;
+        Routes ->
+            {Chosen, Meta} = choose_route(Routes),
+            routing_ctx:set_choosen(Chosen, Meta, State)
+    end.
+
+-spec filter_routes([hg_route:t()], [{atom(), term()}]) ->
     #{
-        predestination := Predestination,
-        revision := Revision,
-        varset := VS,
-        payment_institution := PI,
-        pin_context := PinCtx
-    } = Params
-) ->
-    Result = #{routes := Routes0} = hg_route_collector:get_routes(Revision, VS, PI, PinCtx),
-    Routes1 = hg_route_collector:fill_accepted(Predestination, Revision, VS, Routes0),
-    Routes2 = hg_route_collector:fill_prohibition(Revision, VS, PI, Routes1),
-    Routes3 = hg_route_collector:fill_fd_overrides(Revision, Routes2),
-    Routes4 =
-        case maps:get(blacklist_context, Params, undefined) of
-            undefined ->
-                Routes3;
-            BlCtx ->
-                hg_route_collector:fill_blacklist(BlCtx, Routes3)
-        end,
-    Routes5 = hg_route_fd:fill(Routes4),
-    genlib_map:compact(
-        maps:merge(
-            #{error => maps:get(error, Result, undefined)},
-            filter(Routes5, [{accepted, false}, {prohibit, true}, {blacklisted, 1}])
-        )
-    ).
-
--spec filter_routes(filter_routes_result(), [filter_routes_fun()]) -> filter_routes_result().
-filter_routes(Result0, WithFilterFuns) ->
-    lists:foldl(fun(Fun, Result) -> Fun(Result) end, Result0, WithFilterFuns).
-
-filter(Routes, Keys) ->
+        routes := [hg_route:t()],
+        rejections => #{initial_rejection_group() => [hg_route:t()]}
+    }.
+filter_routes(Routes, Keys) ->
     {Accepted, Rejections} = lists:foldr(
         fun(Route, {AcceptedAcc, RejectionsAcc}) ->
             case route_rejection_reason(Route, Keys) of
@@ -187,7 +161,7 @@ select_better_route_ideal(Left, Right) ->
     IdealLeft = set_ideal_score(Left),
     IdealRight = set_ideal_score(Right),
     Winner = select_better_route(IdealLeft, IdealRight),
-    case hg_route:to_payment_route(Winner) =:= hg_route:to_payment_route(IdealLeft) of
+    case hg_route:equal(Winner, IdealLeft) of
         true -> Left;
         false -> Right
     end.
@@ -286,10 +260,52 @@ find_idx_of_difference(_, I) ->
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -spec test() -> _.
+
 -type testcase() :: {_, fun(() -> _)}.
 
 -define(prv(ID), #domain_ProviderRef{id = ID}).
 -define(trm(ID), #domain_TerminalRef{id = ID}).
+
+-spec pipeline_compensation_and_extension_test() -> _.
+pipeline_compensation_and_extension_test() ->
+    A = new_route(1, 1, 0, {1, 1.0}, {1, 1.0}),
+    B = new_route(1, 2, 0, {1, 1.0}, {1, 1.0}),
+    C = new_route(1, 3, 0, {1, 1.0}, {1, 1.0}),
+    State = routing_ctx:new([A, B, C]),
+    ?assertEqual([], routing_ctx:accounted_candidates(State)),
+    Result = run(State, [
+        {hold, fun(S) ->
+            hold(S, limits, fun
+                (R) when R =:= A -> ok;
+                (R) when R =:= B -> {held, overflow};
+                (_) -> {error, invalid_limit}
+            end)
+        end},
+        {external_selection, fun(S) ->
+            ?assertEqual([A], routing_ctx:candidates(S)),
+            ?assertEqual([A, B], routing_ctx:accounted_candidates(S)),
+            routing_ctx:set_error({quote, missing}, S)
+        end},
+        {after_failure, fun(S) -> routing_ctx:set_error({unexpected_step, ran}, S) end}
+    ]),
+    ?assertEqual({quote, missing}, routing_ctx:error(Result)),
+    ?assertEqual([A, B], routing_ctx:accounted_candidates(Result)),
+    ?assertEqual([overflow, invalid_limit], [hg_route:rejection_reason(R) || R <- routing_ctx:rejected_routes(Result)]).
+
+-spec pipeline_infrastructure_error_test() -> _.
+pipeline_infrastructure_error_test() ->
+    Error = {woody_error, {system, result_unknown, <<"timeout">>}},
+    ?assertError(
+        Error,
+        run(routing_ctx:new([]), [
+            {hold, fun(S) ->
+                case routing_ctx:candidates(S) of
+                    [] -> error(Error);
+                    _ -> S
+                end
+            end}
+        ])
+    ).
 
 -spec record_comparsion_test() -> _.
 record_comparsion_test() ->
@@ -418,7 +434,9 @@ new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}) ->
     new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}, #{}).
 
 new_route(PNum, TNum, Weight, {ACond, AValue}, {CCond, CValue}, Pin) ->
-    Route0 = hg_route:new(1, ?prv(PNum), ?trm(TNum), Weight, ?DOMAIN_CANDIDATE_PRIORITY, Pin),
+    Route0 = hg_route:new(
+        1, ?prv(PNum), ?trm(TNum), Weight, ?DOMAIN_CANDIDATE_PRIORITY, hg_payment_route_pin:hash(Pin)
+    ),
     Route1 = hg_route:set_availability(ACond, AValue, Route0),
     hg_route:set_conversion(CCond, CValue, Route1).
 
@@ -460,15 +478,41 @@ filter_routes_splits_accepted_and_rejected_test() ->
     },
     ?assertMatch(
         Result,
-        filter(
+        filter_routes(
             [AcceptedRoute, RejectedByTerms, RejectedByProhibition, RejectedByBlacklist],
             [{accepted, false}, {prohibit, true}, {blacklisted, 1}]
         )
     ).
 
+-spec filter_keeps_prohibition_when_terms_also_fail_test() -> _.
+filter_keeps_prohibition_when_terms_also_fail_test() ->
+    Banned = hg_route:set_prohibit(
+        {true, <<"blocked">>},
+        hg_route:set_accepted(
+            {false, {rejected, {'ProvisionTermSet', undefined}}},
+            new_route(1, 1, 0, {1, 1.0}, {1, 1.0})
+        )
+    ),
+    TermsOnly = hg_route:set_accepted(
+        {false, {rejected, {'ProvisionTermSet', undefined}}},
+        new_route(1, 2, 0, {1, 1.0}, {1, 1.0})
+    ),
+    Result = filter(routing_ctx:new([Banned, TermsOnly]), [
+        {prohibit, true}, {blacklisted, 1}, {accepted, false}
+    ]),
+    ?assertEqual([], routing_ctx:candidates(Result)),
+    ?assertEqual(prohibit, maps:get(latest_rejection, Result)),
+    ?assertMatch(
+        #{
+            prohibit := [#{terminal_ref := ?trm(1), rejection_reason := {prohibit, {true, <<"blocked">>}}}],
+            accepted := [#{terminal_ref := ?trm(2), rejection_reason := {accepted, {false, {rejected, _}}}}]
+        },
+        maps:get(rejections, Result)
+    ).
+
 -spec preferable_route_scoring_test_() -> [testcase()].
 preferable_route_scoring_test_() ->
-    RouteFallback0 = hg_route:new(1, ?prv(2), ?trm(99), 0, 0, #{}),
+    RouteFallback0 = hg_route:new(1, ?prv(2), ?trm(99), 0, 0, 0),
     RouteFallback1 = hg_route:set_availability(1, 1.0, RouteFallback0),
     RouteFallback2 = hg_route:set_conversion(1, 1.0, RouteFallback1),
     [
@@ -562,13 +606,13 @@ prefer_priority_over_conversion_test() ->
 
 -spec balance_surviving_routes_test() -> _.
 balance_surviving_routes_test() ->
-    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
-    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
-    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
+    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, 0)),
+    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, 0),
+    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, 0),
     _ = rand:seed(exsss, {31, 41, 59}),
     Chosen = lists:map(
         fun(_) ->
-            #{routes := Survivors} = filter([A, B, C], [{prohibit, true}]),
+            #{routes := Survivors} = filter_routes([A, B, C], [{prohibit, true}]),
             {Route, _} = choose_route(hg_route_balancer:fill(Survivors)),
             hg_route:terminal_ref(Route)
         end,
@@ -576,40 +620,5 @@ balance_surviving_routes_test() ->
     ),
     ?assertNot(lists:member(?trm(1), Chosen)),
     ?assert(abs(length([T || T <- Chosen, T =:= ?trm(2)]) - 500) < 80).
-
--spec get_routes_preserves_weights_test() -> _.
-get_routes_preserves_weights_test() ->
-    A = hg_route:set_prohibit(true, hg_route:new(1, ?prv(1), ?trm(1), 50, 0, #{})),
-    B = hg_route:new(1, ?prv(2), ?trm(2), 25, 0, #{}),
-    C = hg_route:new(1, ?prv(3), ?trm(3), 25, 0, #{}),
-    ok = meck:new([hg_route_collector, hg_route_fd], [passthrough]),
-    try
-        ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) -> #{routes => [A, B, C]} end),
-        ok = meck:expect(hg_route_collector, fill_accepted, fun(_, _, _, Routes) -> Routes end),
-        ok = meck:expect(hg_route_collector, fill_prohibition, fun(_, _, _, Routes) -> Routes end),
-        ok = meck:expect(hg_route_collector, fill_fd_overrides, fun(_, Routes) -> Routes end),
-        ok = meck:expect(hg_route_fd, fill, fun(Routes) -> Routes end),
-        #{routes := Survivors} = get_routes(#{
-            predestination => payment,
-            revision => 1,
-            varset => #{},
-            payment_institution => #domain_PaymentInstitution{
-                name = <<"test">>,
-                realm = test,
-                residences = [],
-                system_account_set = {value, #domain_SystemAccountSetRef{id = 1}},
-                inspector = {value, #domain_InspectorRef{id = 1}}
-            },
-            pin_context => #{
-                currency => #domain_CurrencyRef{symbolic_code = <<"RUB">>},
-                payment_tool =>
-                    {generic, #domain_GenericPaymentTool{payment_service = #domain_PaymentServiceRef{id = <<"test">>}}},
-                client_ip => undefined
-            }
-        }),
-        ?assertEqual([25, 25], [hg_route:weight(R) || R <- Survivors])
-    after
-        ok = meck:unload([hg_route_collector, hg_route_fd])
-    end.
 
 -endif.
