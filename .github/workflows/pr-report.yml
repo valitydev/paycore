@@ -2,7 +2,7 @@ name: PR report
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, edited, ready_for_review]
+    types: [opened, ready_for_review, labeled]
 
 # The script is checked out from the trusted BASE branch. PR code is never run.
 permissions:
@@ -10,12 +10,14 @@ permissions:
   pull-requests: read
   issues: write
 
-concurrency:
-  group: pr-report-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   report:
+    if: >-
+      !github.event.pull_request.draft &&
+      (github.event.action != 'labeled' || github.event.label.name == 'refresh-pr-report')
+    concurrency:
+      group: pr-report-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,7 +26,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.base.sha }}
+      - name: Check report generation
+        run: python3 -B -m unittest discover -s .github/scripts/tests
       - name: Create or update PR report
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR_REPORT_MODEL: ${{ vars.PR_REPORT_MODEL }}
         run: python3 .github/scripts/pr_report.py
