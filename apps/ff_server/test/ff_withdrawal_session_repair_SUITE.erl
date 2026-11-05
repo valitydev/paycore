@@ -4,6 +4,7 @@
 -include_lib("fistful_proto/include/fistful_wthd_session_thrift.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("fistful_proto/include/fistful_fistful_base_thrift.hrl").
+-include_lib("fistful_proto/include/fistful_progressor_trace_thrift.hrl").
 
 -export([all/0]).
 -export([groups/0]).
@@ -125,66 +126,57 @@ repair_failed_session_with_failure(C) ->
             code => SessionID
         }},
     ?assertMatch({finished, Expected}, get_session_status(SessionID)),
-    TraceUrl = <<"http://localhost:8022/traces/internal/withdrawal_session_v2/", SessionID/binary>>,
-    CheckerFun = fun(TraceBody) ->
-        try
-            [
-                #{
-                    <<"args">> := [#{<<"created">> := _}],
-                    <<"error">> := null,
-                    <<"events">> := [
-                        #{
-                            <<"event_id">> := 1,
-                            <<"event_payload">> := #{<<"created">> := _},
-                            <<"event_timestamp">> := _
-                        }
-                    ],
-                    <<"finished">> := _,
-                    <<"otel_trace_id">> := null,
-                    <<"retry_attempts">> := 0,
-                    <<"retry_interval">> := 0,
-                    <<"running">> := _,
-                    <<"scheduled">> := _,
-                    <<"task_id">> := _,
-                    <<"task_metadata">> := #{<<"range">> := #{}},
-                    <<"task_status">> := <<"finished">>,
-                    <<"task_type">> := <<"init">>
-                },
-                #{
-                    <<"error">> := <<"{exception,error,{badmatch,{error,notfound}}}">>,
-                    <<"task_status">> := <<"error">>,
-                    <<"task_type">> := <<"timeout">>
-                },
-                #{
-                    <<"args">> := #{
-                        <<"set_session_result">> := #{<<"failed">> := #{<<"code">> := _}}
-                    },
-                    <<"error">> := null,
-                    <<"events">> := [
-                        #{
-                            <<"event_id">> := 2,
-                            <<"event_payload">> := #{
-                                <<"finished">> := #{<<"failed">> := #{<<"code">> := _}}
-                            },
-                            <<"event_timestamp">> := _
-                        }
-                    ],
-                    <<"task_status">> := <<"finished">>,
-                    <<"task_type">> := <<"repair">>
-                },
-                #{
-                    <<"error">> := null,
-                    <<"task_status">> := <<"finished">>,
-                    <<"task_type">> := <<"timeout">>
+    [
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{
+                task_type = <<"init">>,
+                task_status = <<"finished">>,
+                error = undefined,
+                otel_trace_id = undefined,
+                retry_attempts = 0,
+                retry_interval = 0,
+                scheduled = _,
+                running = _,
+                finished = _,
+                task_id = _,
+                task_metadata = _
+            },
+            body = InitBody,
+            events = [
+                #progressor_trace_TraceEvent{
+                    event_id = 1,
+                    event_timestamp = _,
+                    payload = {session, #wthd_session_TimestampedChange{change = {created, _}}}
                 }
-            ] = json:decode(TraceBody),
-            true
-        catch
-            _:_ ->
-                false
-        end
-    end,
-    await_http_body(TraceUrl, CheckerFun).
+            ]
+        },
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{
+                task_type = <<"timeout">>,
+                task_status = <<"error">>,
+                error = <<"{exception,error,{badmatch,{error,notfound}}}">>
+            }
+        },
+        #progressor_trace_TraceUnit{
+            header = #progressor_trace_TraceTaskHeader{
+                task_type = <<"repair">>,
+                task_status = <<"finished">>,
+                error = undefined
+            },
+            body = RepairBody,
+            events = [
+                #progressor_trace_TraceEvent{
+                    event_id = 2,
+                    event_timestamp = _,
+                    payload = {session, #wthd_session_TimestampedChange{change = {finished, _}}}
+                }
+            ]
+        },
+        Timeout
+    ] = ff_trace_ct:await_trace(<<"ff/withdrawal/session_v2">>, SessionID, fun match_session_repair_trace/1),
+    [#{<<"created">> := _}] = ff_trace_ct:body_json(InitBody),
+    #{<<"set_session_result">> := #{<<"failed">> := #{<<"code">> := _}}} = ff_trace_ct:body_json(RepairBody),
+    true = ff_trace_ct:is_finished_timeout(Timeout).
 
 %%  Internals
 
@@ -215,6 +207,24 @@ create_failed_session(PartyID, DestinationID, _C) ->
     ok = ff_withdrawal_session_machine:create(ID, TransferData, SessionParams),
     ID.
 
+match_session_repair_trace([
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"init">>, task_status = <<"finished">>},
+        events = [_]
+    },
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"timeout">>, task_status = <<"error">>}
+    },
+    #progressor_trace_TraceUnit{
+        header = #progressor_trace_TraceTaskHeader{task_type = <<"repair">>, task_status = <<"finished">>},
+        events = [_]
+    },
+    Timeout
+]) ->
+    ff_trace_ct:is_finished_timeout(Timeout);
+match_session_repair_trace(_) ->
+    false.
+
 -spec get_session_status(prg_machine:id()) -> ff_withdrawal_session:status().
 get_session_status(ID) ->
     {ok, SessionMachine} = ff_withdrawal_session_machine:get(ID),
@@ -229,29 +239,3 @@ call_repair(Args) ->
         event_handler => ff_woody_event_handler
     }),
     ff_woody_client:call(Client, Request).
-
-await_http_body(Url, CheckerFun) ->
-    await_http_body(Url, CheckerFun, genlib_retry:linear(10, 500)).
-
-await_http_body(Url, CheckerFun, Retry0) ->
-    case hackney:get(Url) of
-        {ok, 200, _Headers, Ref} ->
-            {ok, Body} = hackney:body(Ref),
-            case CheckerFun(Body) of
-                true ->
-                    ok;
-                false ->
-                    retry_await_http_body(Url, CheckerFun, Retry0)
-            end;
-        _ ->
-            retry_await_http_body(Url, CheckerFun, Retry0)
-    end.
-
-retry_await_http_body(Url, CheckerFun, Retry0) ->
-    case genlib_retry:next_step(Retry0) of
-        {wait, To, Retry1} ->
-            timer:sleep(To),
-            await_http_body(Url, CheckerFun, Retry1);
-        finish ->
-            error({await_http_body_failed, Url})
-    end.

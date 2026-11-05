@@ -237,7 +237,7 @@ session_fail_test(_C) ->
             cash_to => {2120, <<"USD">>},
             created_at => <<"2016-03-22T06:12:27Z">>,
             expires_on => <<"2016-03-22T06:12:27Z">>,
-            route => ff_withdrawal_routing:make_route(3, 301),
+            route => withdrawal_routing:make_route(3, 301),
             quote_data => #{<<"test">> => <<"error">>},
             operation_timestamp => ff_time:now()
         }
@@ -261,7 +261,7 @@ quote_fail_test(_C) ->
             cash_to => {2120, <<"USD">>},
             created_at => <<"2016-03-22T06:12:27Z">>,
             expires_on => <<"2016-03-22T06:12:27Z">>,
-            route => ff_withdrawal_routing:make_route(10, 10),
+            route => withdrawal_routing:make_route(10, 10),
             quote_data => #{<<"test">> => <<"test">>},
             operation_timestamp => ff_time:now()
         }
@@ -619,7 +619,7 @@ quote_ok_test(C) ->
             cash_to => {2120, <<"USD">>},
             created_at => <<"2016-03-22T06:12:27Z">>,
             expires_on => <<"2016-03-22T06:12:27Z">>,
-            route => ff_withdrawal_routing:make_route(1, 1),
+            route => withdrawal_routing:make_route(1, 1),
             quote_data => #{<<"test">> => <<"test">>},
             operation_timestamp => ff_time:now()
         }
@@ -713,7 +713,7 @@ use_quote_revisions_test(C) ->
             expires_on => <<"2016-03-22T06:12:27Z">>,
             domain_revision => DomainRevision,
             operation_timestamp => Time,
-            route => ff_withdrawal_routing:make_route(1, 1),
+            route => withdrawal_routing:make_route(1, 1),
             quote_data => #{<<"test">> => <<"test">>}
         }
     },
@@ -926,7 +926,7 @@ session_repair_test(C) ->
             cash_to => {700700, <<"RUB">>},
             created_at => <<"2016-03-22T06:12:27Z">>,
             expires_on => <<"2016-03-22T06:12:27Z">>,
-            route => ff_withdrawal_routing:make_route(11, 1101),
+            route => withdrawal_routing:make_route(11, 1101),
             quote_data => #{<<"test">> => <<"fatal">>},
             operation_timestamp => ff_time:now()
         }

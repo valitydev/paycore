@@ -71,7 +71,8 @@ get_api_child_spec(Opts) ->
             handlers => [
                 construct_service_handler(invoicing, hg_invoice_handler, Opts),
                 construct_service_handler(invoice_templating, hg_invoice_template, Opts),
-                construct_service_handler(proxy_host_provider, hg_proxy_host_provider, Opts)
+                construct_service_handler(proxy_host_provider, hg_proxy_host_provider, Opts),
+                construct_service_handler(progressor_trace, hg_progressor_trace_handler, Opts)
             ],
             additional_routes => [PrometeusRoute | HealthRoutes],
             shutdown_timeout => genlib_app:env(?MODULE, shutdown_timeout, 0)
