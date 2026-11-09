@@ -81,6 +81,8 @@ handle_function_('Create', {MarshaledParams, MarshaledContext}, Opts) ->
             woody_error:raise(business, #fistful_WalletNotFound{});
         {error, {destination, notfound}} ->
             woody_error:raise(business, #fistful_DestinationNotFound{});
+        {error, {customer, notfound}} ->
+            woody_error:raise(business, #fistful_CustomerNotFound{});
         {error, {wallet, {inaccessible, _}}} ->
             woody_error:raise(business, #fistful_WalletInaccessible{
                 id = MarshaledParams#wthd_WithdrawalParams.wallet_id

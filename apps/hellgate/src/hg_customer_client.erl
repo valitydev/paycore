@@ -12,17 +12,19 @@
 
 %% Customer operations
 -export([create_customer/1]).
--export([get_by_parent_payment/2]).
--export([get_recurrent_tokens/2]).
--export([add_payment/3]).
+-export([check_customer/2]).
+-export([get_by_parent_payment/3]).
+-export([get_recurrent_tokens/3]).
+-export([add_payment/4]).
 -export([link_bank_card/2]).
 -export([find_or_create_customer_by_email/2]).
 -export([get_terminal_affinities/1]).
--export([bind_terminal_affinity/4]).
+-export([bind_terminal_affinity/5]).
 
 -export_type([cascade_tokens/0]).
 -export_type([payment_ref/0]).
 
+-type party_ref() :: dmsl_domain_thrift:'PartyConfigRef'().
 -type invoice_id() :: dmsl_domain_thrift:'InvoiceID'().
 -type payment_id() :: dmsl_domain_thrift:'InvoicePaymentID'().
 -type payment_ref() :: {invoice_id(), payment_id()}.
@@ -93,14 +95,14 @@ create_customer(PartyConfigRef) ->
     {ok, Customer} = call(customer_management, 'Create', {#customer_CustomerParams{party_ref = PartyConfigRef}}),
     Customer.
 
--spec get_by_parent_payment(invoice_id(), payment_id()) ->
+-spec get_by_parent_payment(invoice_id(), payment_id(), party_ref()) ->
     {ok, dmsl_customer_thrift:'CustomerState'()} | {exception, term()}.
-get_by_parent_payment(InvoiceID, PaymentID) ->
-    call(customer_management, 'GetByParentPayment', {InvoiceID, PaymentID}).
+get_by_parent_payment(InvoiceID, PaymentID, PartyRef) ->
+    call(customer_management, 'GetByParentPayment', {InvoiceID, PaymentID, PartyRef}).
 
--spec get_recurrent_tokens(invoice_id(), payment_id()) -> [recurrent_token()].
-get_recurrent_tokens(InvoiceID, PaymentID) ->
-    case call(customer_management, 'GetByParentPayment', {InvoiceID, PaymentID}) of
+-spec get_recurrent_tokens(invoice_id(), payment_id(), party_ref()) -> [recurrent_token()].
+get_recurrent_tokens(InvoiceID, PaymentID, PartyRef) ->
+    case call(customer_management, 'GetByParentPayment', {InvoiceID, PaymentID, PartyRef}) of
         {ok, #customer_CustomerState{bank_card_refs = BankCardRefs}} ->
             lists:flatmap(fun collect_bank_card_tokens/1, BankCardRefs);
         {exception, #customer_CustomerNotFound{}} ->
@@ -139,20 +141,23 @@ get_terminal_affinities(CustomerID) ->
     dmsl_customer_thrift:'CustomerID'(),
     dmsl_domain_thrift:'PaymentRoute'(),
     dmsl_domain_thrift:'RoutingAffinityTtl'() | undefined,
-    payment_ref()
+    payment_ref(),
+    party_ref()
 ) -> ok | {error, customer_not_found | invalid_request}.
 bind_terminal_affinity(
     CustomerID,
     #domain_PaymentRoute{provider = Provider, terminal = Terminal},
     Ttl,
-    {InvoiceID, PaymentID}
+    {InvoiceID, PaymentID},
+    #domain_PartyConfigRef{} = PartyRef
 ) when is_binary(InvoiceID), is_binary(PaymentID) ->
     Params = #customer_TerminalAffinityParams{
         customer_id = CustomerID,
         provider_ref = Provider,
         terminal_ref = Terminal,
         ttl = Ttl,
-        payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID}
+        payment = #customer_PaymentRef{invoice_id = InvoiceID, payment_id = PaymentID},
+        party_ref = PartyRef
     },
     case call(customer_management, 'BindTerminalAffinity', {Params}) of
         {ok, _} ->
@@ -167,11 +172,19 @@ bind_terminal_affinity(
             {error, invalid_request}
     end.
 
+%% A Customer that is unknown, or linked to other parties only, is not found in the party
+-spec check_customer(dmsl_customer_thrift:'CustomerID'(), party_ref()) -> ok | {error, not_found}.
+check_customer(CustomerID, PartyRef) ->
+    case call(customer_management, 'Get', {CustomerID, PartyRef}) of
+        {ok, #customer_CustomerState{}} -> ok;
+        {exception, #customer_CustomerNotFound{}} -> {error, not_found}
+    end.
+
 %% A Customer deleted mid-payment has no history left to record the payment or the card in,
 %% and a retry would get the same answer
--spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id()) -> ok.
-add_payment(CustomerID, InvoiceID, PaymentID) ->
-    case call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID}) of
+-spec add_payment(dmsl_customer_thrift:'CustomerID'(), invoice_id(), payment_id(), party_ref()) -> ok.
+add_payment(CustomerID, InvoiceID, PaymentID, PartyRef) ->
+    case call(customer_management, 'AddPayment', {CustomerID, InvoiceID, PaymentID, PartyRef}) of
         {ok, ok} -> ok;
         {exception, #customer_CustomerNotFound{}} -> ok
     end.
@@ -268,7 +281,8 @@ bind_affinity(Ttl) ->
             provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}
         },
         Ttl,
-        {<<"invoice">>, <<"payment">>}
+        {<<"invoice">>, <<"payment">>},
+        #domain_PartyConfigRef{id = <<"party">>}
     ).
 
 %% The payment reference is the idempotency key on the cubasty side: if it does not
@@ -296,7 +310,8 @@ bind_terminal_affinity_payment_ref() ->
                     provider_ref = #domain_ProviderRef{id = 1},
                     terminal_ref = #domain_TerminalRef{id = 1},
                     ttl = {since_bound, 3600},
-                    payment = #customer_PaymentRef{invoice_id = <<"invoice">>, payment_id = <<"payment">>}
+                    payment = #customer_PaymentRef{invoice_id = <<"invoice">>, payment_id = <<"payment">>},
+                    party_ref = #domain_PartyConfigRef{id = <<"party">>}
                 },
                 Params
             )
@@ -309,7 +324,8 @@ bind_terminal_affinity_payment_ref() ->
             <<"customer">>,
             #domain_PaymentRoute{provider = #domain_ProviderRef{id = 1}, terminal = #domain_TerminalRef{id = 1}},
             undefined,
-            {<<"invoice">>, undefined}
+            {<<"invoice">>, undefined},
+            #domain_PartyConfigRef{id = <<"party">>}
         )
     ).
 
@@ -320,7 +336,9 @@ customer_calls_fail() ->
         fun() -> find_or_create_customer_by_email(#domain_PartyConfigRef{id = <<"party">>}, <<"a@b.c">>) end,
         fun() -> get_terminal_affinities(<<"customer">>) end,
         fun() -> bind_affinity(undefined) end,
-        fun() -> add_payment(<<"customer">>, <<"invoice">>, <<"payment">>) end,
+        fun() ->
+            add_payment(<<"customer">>, <<"invoice">>, <<"payment">>, #domain_PartyConfigRef{id = <<"party">>})
+        end,
         fun() -> link_bank_card(<<"customer">>, <<"card">>) end
     ],
     lists:foreach(
@@ -350,7 +368,9 @@ customer_calls_answers() ->
     ok = meck:expect(woody_client, call, fun(_, _, _) -> {exception, #customer_CustomerNotFound{}} end),
     ?assertEqual([], get_terminal_affinities(<<"customer">>)),
     ?assertEqual({error, customer_not_found}, bind_affinity(undefined)),
-    ?assertEqual(ok, add_payment(<<"customer">>, <<"invoice">>, <<"payment">>)),
+    ?assertEqual(
+        ok, add_payment(<<"customer">>, <<"invoice">>, <<"payment">>, #domain_PartyConfigRef{id = <<"party">>})
+    ),
     ?assertEqual(ok, link_bank_card(<<"customer">>, <<"card">>)).
 
 -endif.

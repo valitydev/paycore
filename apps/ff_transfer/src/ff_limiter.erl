@@ -12,7 +12,7 @@
 -type turnover_limit_upper_boundary() :: dmsl_domain_thrift:'Amount'().
 -type domain_withdrawal() :: dmsl_wthd_domain_thrift:'Withdrawal'().
 -type withdrawal() :: ff_withdrawal:withdrawal_state().
--type route() :: ff_withdrawal_routing:route().
+-type route() :: withdrawal_routing:route().
 
 -type limit() :: limproto_limiter_thrift:'Limit'().
 -type limit_id() :: limproto_limiter_thrift:'LimitID'().
@@ -207,7 +207,8 @@ marshal_withdrawal(Withdrawal) ->
         auth_data = MarshaledAuthData,
         %% TODO: change proto
         sender = #domain_PartyConfigRef{id = ff_account:party_id(WalletAccount)},
-        receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)}
+        receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)},
+        client_identity = marshal_client_identity(ff_withdrawal:client_identity(Withdrawal))
     }.
 
 -spec get_batch(request(), context()) -> [limit()] | no_return().
@@ -271,3 +272,11 @@ handle_result(ok) ->
     ok;
 handle_result({ok, Result}) ->
     Result.
+
+marshal_client_identity(undefined) ->
+    undefined;
+marshal_client_identity(#{customer_id := CustomerID} = ClientIdentity) ->
+    #domain_ClientIdentity{
+        customer_id = CustomerID,
+        user_id = maps:get(user_id, ClientIdentity, undefined)
+    }.

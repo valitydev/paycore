@@ -33,7 +33,7 @@ services:
     command: /sbin/init
 
   dmt:
-    image: ghcr.io/valitydev/dominant-v2:sha-93f6e4a
+    image: ghcr.io/valitydev/dominant-v2:sha-e9cd2a8
     command: /opt/dmt/bin/dmt foreground
     environment:
       DMT_KAFKA_ENABLED: "0"
@@ -121,7 +121,7 @@ services:
       retries: 10
 
   cubasty:
-    image: ghcr.io/valitydev/cubasty:sha-da8cddf
+    image: ghcr.io/valitydev/cubasty:sha-8091152
     volumes:
       - ./test/cubasty/sys.config:/opt/cs/releases/0.1/sys.config
     hostname: cubasty

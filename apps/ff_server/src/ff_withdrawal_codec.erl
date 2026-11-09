@@ -45,7 +45,8 @@ marshal_withdrawal_params(Params) ->
         external_id = maybe_marshal(id, maps:get(external_id, Params, undefined)),
         metadata = maybe_marshal(ctx, maps:get(metadata, Params, undefined)),
         contact_info = maybe_marshal(contact_info, maps:get(contact_info, Params, undefined)),
-        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined))
+        client_info = maybe_marshal(client_info, maps:get(client_info, Params, undefined)),
+        client_identity = maybe_marshal(client_identity, maps:get(client_identity, Params, undefined))
     }.
 
 -spec unmarshal_withdrawal_params(fistful_wthd_thrift:'WithdrawalParams'()) -> ff_withdrawal:params().
@@ -60,7 +61,8 @@ unmarshal_withdrawal_params(Params) ->
         external_id => maybe_unmarshal(id, Params#wthd_WithdrawalParams.external_id),
         metadata => maybe_unmarshal(ctx, Params#wthd_WithdrawalParams.metadata),
         contact_info => maybe_unmarshal(contact_info, Params#wthd_WithdrawalParams.contact_info),
-        client_info => maybe_unmarshal(client_info, Params#wthd_WithdrawalParams.client_info)
+        client_info => maybe_unmarshal(client_info, Params#wthd_WithdrawalParams.client_info),
+        client_identity => maybe_unmarshal(client_identity, Params#wthd_WithdrawalParams.client_identity)
     }).
 
 -spec marshal_withdrawal_state(ff_withdrawal:withdrawal_state(), ff_entity_context:context()) ->
@@ -91,7 +93,8 @@ marshal_withdrawal_state(WithdrawalState, Context) ->
         withdrawal_validation = maybe_marshal(withdrawal_validation, ff_withdrawal:validation(WithdrawalState)),
         contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(WithdrawalState)),
         new_body = maybe_marshal(cash, ff_withdrawal:new_body(WithdrawalState)),
-        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(WithdrawalState))
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(WithdrawalState)),
+        client_identity = maybe_marshal(client_identity, ff_withdrawal:client_identity(WithdrawalState))
     }.
 
 -spec marshal_event(ff_withdrawal_machine:event()) -> fistful_wthd_thrift:'Event'().
@@ -120,8 +123,18 @@ marshal(change, {session_started, SessionID}) ->
     {session, #wthd_SessionChange{id = SessionID, payload = marshal(session_event, started)}};
 marshal(change, {session_finished, {SessionID, SessionResult}}) ->
     {session, #wthd_SessionChange{id = SessionID, payload = marshal(session_event, {finished, SessionResult})}};
-marshal(change, {route_changed, Route}) ->
-    {route, #wthd_RouteChange{route = marshal(route, Route)}};
+marshal(change, {route_changed, #{provider_id := _} = Route}) ->
+    marshal(change, {route_changed, #{route => Route}});
+marshal(change, {route_changed, #{route := Route} = Change}) ->
+    {route, #wthd_RouteChange{
+        route = marshal(route, Route),
+        candidates = maybe_marshal({list, route}, maps:get(candidates, Change, undefined))
+    }};
+marshal(change, {rollback, #{reason := Failure, candidates := [_ | _] = Candidates}}) ->
+    {rollback, #wthd_RollbackChange{
+        reason = ff_codec:marshal(failure, Failure),
+        candidates = marshal({list, route}, Candidates)
+    }};
 marshal(change, {limit_check, Details}) ->
     {limit_check, #wthd_LimitCheckChange{details = ff_limit_check_codec:marshal(details, Details)}};
 marshal(change, {resource_got, Resource}) ->
@@ -163,7 +176,8 @@ marshal(withdrawal, Withdrawal) ->
         metadata = maybe_marshal(ctx, ff_withdrawal:metadata(Withdrawal)),
         quote = maybe_marshal(quote_state, ff_withdrawal:quote(Withdrawal)),
         contact_info = maybe_marshal(contact_info, ff_withdrawal:contact_info(Withdrawal)),
-        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(Withdrawal))
+        client_info = maybe_marshal(client_info, ff_withdrawal:client_info(Withdrawal)),
+        client_identity = maybe_marshal(client_identity, ff_withdrawal:client_identity(Withdrawal))
     };
 marshal(route, Route) ->
     #{
@@ -252,8 +266,17 @@ unmarshal(change, {transfer, #wthd_TransferChange{payload = TransferChange}}) ->
     {p_transfer, ff_p_transfer_codec:unmarshal(change, TransferChange)};
 unmarshal(change, {session, SessionChange}) ->
     unmarshal(session_event, SessionChange);
-unmarshal(change, {route, #wthd_RouteChange{route = Route}}) ->
-    {route_changed, unmarshal(route, Route)};
+unmarshal(change, {route, #wthd_RouteChange{route = Route, candidates = Candidates}}) ->
+    {route_changed,
+        genlib_map:compact(#{
+            route => unmarshal(route, Route), candidates => maybe_unmarshal({list, route}, Candidates)
+        })};
+unmarshal(change, {rollback, #wthd_RollbackChange{reason = Failure, candidates = Candidates}}) when
+    is_list(Candidates), Candidates =/= []
+->
+    {rollback, #{
+        reason => ff_codec:unmarshal(failure, Failure), candidates => unmarshal({list, route}, Candidates)
+    }};
 unmarshal(change, {limit_check, #wthd_LimitCheckChange{details = Details}}) ->
     {limit_check, ff_limit_check_codec:unmarshal(details, Details)};
 unmarshal(change, {resource, {got, #wthd_ResourceGot{resource = Resource}}}) ->
@@ -298,7 +321,8 @@ unmarshal(withdrawal, #wthd_Withdrawal{} = Withdrawal) ->
         created_at => maybe_unmarshal(timestamp_ms, Withdrawal#wthd_Withdrawal.created_at),
         metadata => maybe_unmarshal(ctx, Withdrawal#wthd_Withdrawal.metadata),
         contact_info => maybe_unmarshal(contact_info, Withdrawal#wthd_Withdrawal.contact_info),
-        client_info => maybe_unmarshal(client_info, Withdrawal#wthd_Withdrawal.client_info)
+        client_info => maybe_unmarshal(client_info, Withdrawal#wthd_Withdrawal.client_info),
+        client_identity => maybe_unmarshal(client_identity, Withdrawal#wthd_Withdrawal.client_identity)
     });
 unmarshal(route, Route) ->
     genlib_map:compact(#{
@@ -403,6 +427,10 @@ withdrawal_symmetry_test() ->
         contact_info = #fistful_base_ContactInfo{
             phone_number = <<"1234567890">>,
             email = <<"test@mail.com">>
+        },
+        client_identity = #fistful_base_ClientIdentity{
+            customer_id = genlib:unique(),
+            user_id = <<"user">>
         }
     },
     ?assertEqual(In, marshal(withdrawal, unmarshal(withdrawal, In))).
@@ -422,6 +450,9 @@ withdrawal_params_symmetry_test() ->
         contact_info = #fistful_base_ContactInfo{
             phone_number = <<"1234567890">>,
             email = <<"test@mail.com">>
+        },
+        client_identity = #fistful_base_ClientIdentity{
+            customer_id = genlib:unique()
         }
     },
     ?assertEqual(In, marshal_withdrawal_params(unmarshal_withdrawal_params(In))).
@@ -548,5 +579,46 @@ unmarshal_repair_scenario_deadline_timer_test() ->
     ),
     %% Machinery {datetime, micro} from ff_codec must map to the same wire timestamp.
     ?assertEqual(ExpectedAt, prg_action:marshal_timer({deadline, ParsedDeadline})).
+
+-spec route_change_candidates_roundtrip_test() -> _.
+route_change_candidates_roundtrip_test() ->
+    Route = test_route(),
+    Other = test_route(2, 8, <<"legacy-2">>),
+    Event = {route_changed, #{route => Route, candidates => [Route, Other]}},
+    ?assertEqual(Event, unmarshal(change, marshal(change, Event))),
+    WithoutCandidates = {route_changed, #{route => Route}},
+    ?assertEqual(WithoutCandidates, unmarshal(change, marshal(change, WithoutCandidates))),
+    ?assertEqual(
+        WithoutCandidates,
+        unmarshal(change, marshal(change, {route_changed, Route}))
+    ),
+    ?assertEqual(
+        WithoutCandidates,
+        unmarshal(change, {route, #wthd_RouteChange{route = marshal(route, Route)}})
+    ),
+    ?assertEqual(
+        WithoutCandidates,
+        unmarshal(change, marshal(change, {route_changed, #{route => Route, candidates => undefined}}))
+    ),
+    WithEmpty = {route_changed, #{route => Route, candidates => []}},
+    ?assertEqual(WithEmpty, unmarshal(change, marshal(change, WithEmpty))).
+
+-spec rollback_roundtrip_test() -> _.
+rollback_roundtrip_test() ->
+    Route = test_route(),
+    Failure = #{code => <<"unknown">>, reason => genlib:format({inconsistent_quote_route, Route})},
+    WithList = {rollback, #{reason => Failure, candidates => [Route]}},
+    ?assertEqual(WithList, unmarshal(change, marshal(change, WithList))).
+
+test_route() ->
+    test_route(1, 7, <<"mocketbank">>).
+
+test_route(ProviderID, TerminalID, Legacy) ->
+    #{
+        version => 1,
+        provider_id => ProviderID,
+        terminal_id => TerminalID,
+        provider_id_legacy => Legacy
+    }.
 
 -endif.

@@ -2,6 +2,7 @@
 
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
+-include_lib("damsel/include/dmsl_customer_thrift.hrl").
 -include_lib("ff_cth/include/ct_domain.hrl").
 
 %% Common test API
@@ -20,6 +21,7 @@
 -export([adjustment_can_change_status_to_failed_test/1]).
 -export([adjustment_can_change_failure_test/1]).
 -export([adjustment_can_change_status_to_succeeded_test/1]).
+-export([adjustment_to_succeeded_records_customer_test/1]).
 -export([adjustment_can_not_change_status_to_pending_test/1]).
 -export([adjustment_can_not_change_status_to_same/1]).
 -export([adjustment_sequence_test/1]).
@@ -36,7 +38,8 @@
 -export([adjustment_change_cash_flow_then_change_body_test/1]).
 -export([adjustment_change_body_then_change_cash_flow_test/1]).
 -export([adjustment_can_not_change_body_to_same/1]).
--export([adjustment_can_not_increase_body/1]).
+-export([adjustment_can_not_exceed_initial_body/1]).
+-export([adjustment_can_increase_body_up_to_initial/1]).
 -export([adjustment_can_not_change_body_on_pending/1]).
 
 %% Internal types
@@ -66,6 +69,7 @@ groups() ->
             adjustment_can_change_status_to_failed_test,
             adjustment_can_change_failure_test,
             adjustment_can_change_status_to_succeeded_test,
+            adjustment_to_succeeded_records_customer_test,
             adjustment_can_not_change_status_to_pending_test,
             adjustment_can_not_change_status_to_same,
             adjustment_sequence_test,
@@ -78,7 +82,8 @@ groups() ->
             adjustment_fail_change_body_succeed_test,
             adjustment_can_change_body_on_succeeded_test,
             adjustment_can_not_change_body_to_same,
-            adjustment_can_not_increase_body,
+            adjustment_can_not_exceed_initial_body,
+            adjustment_can_increase_body_up_to_initial,
             adjustment_can_not_change_body_on_pending
         ]},
         %% These cases assert deltas on the shared provider account.
@@ -203,6 +208,36 @@ adjustment_can_change_status_to_succeeded_test(C) ->
     assert_adjustment_same_revisions(WithdrawalID, AdjustmentID),
     ?assertEqual(?FINAL_BALANCE(-1000, <<"RUB">>), get_wallet_balance(WalletID)),
     ?assertEqual(?FINAL_BALANCE(880, <<"RUB">>), get_destination_balance(DestinationID)).
+
+%% A withdrawal made succeeded by an adjustment is recorded for its Customer
+-spec adjustment_to_succeeded_records_customer_test(config()) -> test_return().
+adjustment_to_succeeded_records_customer_test(C) ->
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    PartyRef = #domain_PartyConfigRef{id = PartyID},
+    {ok, #customer_Customer{id = CustomerID}} =
+        call_customer('Create', {#customer_CustomerParams{party_ref = PartyRef}}),
+    WithdrawalID = genlib:bsuuid(),
+    Params = #{
+        id => WithdrawalID,
+        wallet_id => WalletID,
+        destination_id => DestinationID,
+        party_id => PartyID,
+        body => {1000, <<"RUB">>},
+        client_identity => #{customer_id => CustomerID}
+    },
+    ok = ff_withdrawal_machine:create(Params, ff_entity_context:new()),
+    ?assertMatch({failed, _}, await_final_withdrawal_status(WithdrawalID)),
+    {exception, #customer_CustomerNotFound{}} = call_customer('GetByWithdrawal', {WithdrawalID, PartyRef}),
+    _AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_status, succeeded}
+    }),
+    ?assertMatch(succeeded, get_withdrawal_status(WithdrawalID)),
+    {ok, #customer_CustomerState{customer = #customer_Customer{id = CustomerID}}} =
+        call_customer('GetByWithdrawal', {WithdrawalID, PartyRef}).
 
 -spec adjustment_can_not_change_status_to_pending_test(config()) -> test_return().
 adjustment_can_not_change_status_to_pending_test(C) ->
@@ -550,8 +585,8 @@ adjustment_can_not_change_body_to_same(C) ->
     }),
     ?assertMatch({error, {invalid_body_change, {already_has_body, {100, <<"RUB">>}}}}, Result).
 
--spec adjustment_can_not_increase_body(config()) -> test_return().
-adjustment_can_not_increase_body(C) ->
+-spec adjustment_can_not_exceed_initial_body(config()) -> test_return().
+adjustment_can_not_exceed_initial_body(C) ->
     #{
         withdrawal_id := WithdrawalID
     } = prepare_standard_environment({100, <<"RUB">>}, C),
@@ -560,6 +595,40 @@ adjustment_can_not_increase_body(C) ->
         change => {change_body, {150, <<"RUB">>}}
     }),
     ?assertMatch({error, {invalid_body_change, {invalid_operation_amount, {150, <<"RUB">>}}}}, Result).
+
+-spec adjustment_can_increase_body_up_to_initial(config()) -> test_return().
+adjustment_can_increase_body_up_to_initial(C) ->
+    #{
+        withdrawal_id := WithdrawalID,
+        wallet_id := WalletID,
+        destination_id := DestinationID
+    } = prepare_standard_environment({100, <<"RUB">>}, C),
+    _ = process_adjustment(WithdrawalID, #{
+        change => {change_body, {50, <<"RUB">>}}
+    }),
+    ?assertEqual({50, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(?FINAL_BALANCE(50, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(40, <<"RUB">>), get_destination_balance(DestinationID)),
+    AdjustmentID = process_adjustment(WithdrawalID, #{
+        change => {change_body, {80, <<"RUB">>}}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID)),
+    ?assertEqual({80, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    %% deposit 100, payout 100 → wallet 0; body 50 refunds 50; body 80 takes 30 back
+    ?assertEqual(?FINAL_BALANCE(20, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(64, <<"RUB">>), get_destination_balance(DestinationID)),
+    AdjustmentID2 = process_adjustment(WithdrawalID, #{
+        change => {change_body, {100, <<"RUB">>}}
+    }),
+    ?assertMatch(succeeded, get_adjustment_status(WithdrawalID, AdjustmentID2)),
+    ?assertEqual({100, <<"RUB">>}, ff_withdrawal:new_body(get_withdrawal(WithdrawalID))),
+    ?assertEqual(?FINAL_BALANCE(0, <<"RUB">>), get_wallet_balance(WalletID)),
+    ?assertEqual(?FINAL_BALANCE(80, <<"RUB">>), get_destination_balance(DestinationID)),
+    Result = ff_withdrawal_machine:start_adjustment(WithdrawalID, #{
+        id => genlib:bsuuid(),
+        change => {change_body, {101, <<"RUB">>}}
+    }),
+    ?assertMatch({error, {invalid_body_change, {invalid_operation_amount, {101, <<"RUB">>}}}}, Result).
 
 -spec adjustment_can_not_change_body_on_pending(config()) -> test_return().
 adjustment_can_not_change_body_on_pending(C) ->
@@ -609,6 +678,9 @@ prepare_standard_environment({_Amount, Currency} = WithdrawalCash, _C) ->
         destination_id => DestinationID,
         withdrawal_id => WithdrawalID
     }.
+
+call_customer(Function, Args) ->
+    ff_woody_client:call(customer_management, {{dmsl_customer_thrift, 'CustomerManagement'}, Function, Args}).
 
 get_withdrawal(WithdrawalID) ->
     {ok, Machine} = ff_withdrawal_machine:get(WithdrawalID),

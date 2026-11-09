@@ -1,10 +1,11 @@
 {application, routing, [
-    {description, "Processing protocol definitions"},
+    {description, "Payment and withdrawal routing"},
     {vsn, "0"},
     {registered, []},
     {applications, [
         kernel,
         stdlib,
+        genlib,
         thrift,
         damsel
     ]}
