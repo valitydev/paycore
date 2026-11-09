@@ -18,6 +18,7 @@
         damsel,
         dmt_client,
         party_client,
+        limiter,
         binbase_proto,
         bender_client,
         opentelemetry_api,

@@ -10,9 +10,6 @@ services:
   bender:
     environment: *otlp_enabled
 
-  limiter:
-    environment: *otlp_enabled
-
   party-management:
     environment: *otlp_enabled
 

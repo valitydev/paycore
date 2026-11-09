@@ -1,5 +1,7 @@
 -module(ct_limiter_client).
 
+%% TODO Clean up and update with librarized limiter
+
 -include_lib("limiter_proto/include/limproto_limiter_thrift.hrl").
 
 -export([get/4]).
@@ -20,25 +22,11 @@ get(LimitID, Version, Context, Client) ->
         operation_id = ?PLACEHOLDER_OPERATION_GET_LIMIT_VALUES,
         limit_changes = [#limiter_LimitChange{id = LimitID, version = Version}]
     },
-    case call('GetValues', {LimitRequest, Context}, Client) of
+    case limiter:get_values(LimitRequest, Context, Client) of
         {ok, [L]} ->
             {ok, L};
         {ok, []} ->
-            {exception, #limiter_LimitNotFound{}};
-        {exception, _} = Exception ->
+            {error, #limiter_LimitNotFound{}};
+        {error, _} = Exception ->
             Exception
     end.
-
-%%% Internal functions
-
--spec call(atom(), tuple(), client()) -> woody:result() | no_return().
-call(Function, Args, Client) ->
-    Call = {{limproto_limiter_thrift, 'Limiter'}, Function, Args},
-    Opts = #{
-        url => <<"http://limiter:8022/v1/limiter">>,
-        event_handler => ff_woody_event_handler,
-        transport_opts => #{
-            max_connections => 10000
-        }
-    },
-    woody_client:call(Call, Opts, Client).

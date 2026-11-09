@@ -53,10 +53,10 @@ get_limit(LimitID, Version, Withdrawal, Config) ->
         ct_limiter_client:get(LimitID, Version, Context, ct_helper:get_woody_ctx(Config))
     ).
 
--spec maybe_uninitialized_limit(limproto_limiter_thrift:'LimitID'(), {ok, _} | {exception, _}) -> _Limit.
+-spec maybe_uninitialized_limit(limproto_limiter_thrift:'LimitID'(), {ok, _} | {error, _}) -> _Limit.
 maybe_uninitialized_limit(_LimitID, {ok, Limit}) ->
     Limit;
-maybe_uninitialized_limit(LimitID, {exception, _}) ->
+maybe_uninitialized_limit(LimitID, {error, _}) ->
     #limiter_Limit{
         id = LimitID,
         amount = 0,
