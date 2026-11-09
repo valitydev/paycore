@@ -90,6 +90,8 @@ get_value(sender, Operation, Context) ->
     get_destination_sender(Operation, Context);
 get_value(receiver, Operation, Context) ->
     get_destination_receiver(Operation, Context);
+get_value(user, Operation, Context) ->
+    get_user(Operation, Context);
 get_value(ValueName, _Operation, _Context) ->
     {error, {unsupported, ValueName}}.
 
@@ -98,6 +100,12 @@ get_value(ValueName, _Operation, _Context) ->
 -define(INVOICE(V), #context_payproc_Context{
     invoice = #context_payproc_Invoice{
         invoice = V = #domain_Invoice{}
+    }
+}).
+
+-define(INVOICE_CLIENT_IDENTITY(V), #context_payproc_Context{
+    invoice = #context_payproc_Invoice{
+        invoice = #domain_Invoice{client_identity = V}
     }
 }).
 
@@ -232,6 +240,17 @@ get_payer_contact_email(Operation, ?INVOICE_PAYMENT(Payment)) when
     CI = get_payer_contact_info(Payer),
     {ok, string:lowercase(CI#domain_ContactInfo.email)};
 get_payer_contact_email(_, _CtxInvoice) ->
+    {error, notfound}.
+
+get_user(Operation, ?INVOICE_CLIENT_IDENTITY(#domain_ClientIdentity{user_id = UserID})) when
+    UserID =/= undefined andalso
+        (Operation == invoice_payment orelse
+            Operation == invoice_payment_adjustment orelse
+            Operation == invoice_payment_refund orelse
+            Operation == invoice_payment_chargeback)
+->
+    {ok, UserID};
+get_user(_, _CtxInvoice) ->
     {error, notfound}.
 
 get_payer_contact_info(#domain_PaymentResourcePayer{contact_info = CI}) ->

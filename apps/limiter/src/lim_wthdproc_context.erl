@@ -81,12 +81,20 @@ get_value(sender, Operation, Context) ->
     get_destination_sender(Operation, Context);
 get_value(receiver, Operation, Context) ->
     get_destination_receiver(Operation, Context);
+get_value(user, Operation, Context) ->
+    get_user(Operation, Context);
 get_value(ValueName, _Operation, _Context) ->
     {error, {unsupported, ValueName}}.
 
 -define(WITHDRAWAL(V), #context_withdrawal_Context{
     withdrawal = #context_withdrawal_Withdrawal{
         withdrawal = V = #wthd_domain_Withdrawal{}
+    }
+}).
+
+-define(WITHDRAWAL_CLIENT_IDENTITY(V), #context_withdrawal_Context{
+    withdrawal = #context_withdrawal_Withdrawal{
+        withdrawal = #wthd_domain_Withdrawal{client_identity = V}
     }
 }).
 
@@ -155,4 +163,9 @@ get_destination_sender(_, _CtxWithdrawal) ->
 get_destination_receiver(withdrawal, ?SENDER_RECEIVER(#wthd_domain_SenderReceiverAuthData{receiver = Token})) ->
     {ok, lim_context_utils:base61_hash(Token)};
 get_destination_receiver(_, _CtxWithdrawal) ->
+    {error, notfound}.
+
+get_user(withdrawal, ?WITHDRAWAL_CLIENT_IDENTITY(#domain_ClientIdentity{user_id = UserID})) when UserID =/= undefined ->
+    {ok, UserID};
+get_user(_, _CtxWithdrawal) ->
     {error, notfound}.

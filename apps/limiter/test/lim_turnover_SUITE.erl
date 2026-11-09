@@ -58,10 +58,12 @@
 -export([hold_with_receiver_notfound/1]).
 -export([hold_with_destination_field_not_found/1]).
 -export([hold_with_destination_field_not_supported/1]).
+-export([hold_with_user_not_found/1]).
 -export([commit_with_sender_scope_ok/1]).
 -export([commit_with_receiver_scope_ok/1]).
 -export([commit_with_sender_receiver_scope_ok/1]).
 -export([commit_with_destination_field_scope_ok/1]).
+-export([commit_with_user_scope_ok/1]).
 
 -export([batch_hold_ok/1]).
 -export([batch_commit_ok/1]).
@@ -123,10 +125,12 @@ groups() ->
             commit_with_terminal_scope_ok,
             commit_with_email_scope_ok,
             commit_with_multi_scope_ok,
+            commit_with_user_scope_ok,
             hold_with_sender_notfound,
             hold_with_receiver_notfound,
             hold_with_destination_field_not_found,
-            hold_with_destination_field_not_supported
+            hold_with_destination_field_not_supported,
+            hold_with_user_not_found
         ]},
         {default, [], [
             {group, base},
@@ -156,7 +160,9 @@ groups() ->
             commit_with_receiver_scope_ok,
             commit_with_sender_receiver_scope_ok,
             commit_with_destination_field_scope_ok,
-            hold_with_destination_field_not_supported
+            commit_with_user_scope_ok,
+            hold_with_destination_field_not_supported,
+            hold_with_user_not_found
         ]},
         {cashless, [parallel], [
             commit_number_ok,
@@ -724,6 +730,16 @@ hold_with_destination_field_not_supported(C) ->
     Scopes = [?scope_destination_field([<<"opaque">>, <<"payload">>, <<"data">>])],
     hold_with_scope_unsupported(Scopes, C).
 
+-spec hold_with_user_not_found(config()) -> _.
+hold_with_user_not_found(C) ->
+    Scopes = [?scope_user()],
+    Context =
+        case get_group_name(C) of
+            withdrawals -> ?wthdproc_ctx(?withdrawal(?cash(0), ?bank_card(), ?string, undefined, undefined));
+            _Default -> ?payproc_ctx(?invoice(?string, ?string, ?cash(0), undefined), undefined)
+        end,
+    hold_with_scope_notfound(Scopes, Context, C).
+
 hold_with_scope_notfound(Scopes, C) ->
     Context =
         case get_group_name(C) of
@@ -781,6 +797,10 @@ commit_with_destination_field_scope_ok(C) ->
             _Default -> ?payproc_ctx_payment(?cash(10, <<"RUB">>), ?cash(10, <<"RUB">>))
         end,
     _ = commit_with_some_scope(?scopes(Scopes), Context, C).
+
+-spec commit_with_user_scope_ok(config()) -> _.
+commit_with_user_scope_ok(C) ->
+    _ = commit_with_some_scope(?scopes([?scope_party(), ?scope_user()]), C).
 
 %%
 

@@ -40,6 +40,7 @@
 -define(scope_wallet(), {wallet, #limiter_config_LimitScopeEmptyDetails{}}).
 -define(scope_sender(), {sender, #limiter_config_LimitScopeEmptyDetails{}}).
 -define(scope_receiver(), {receiver, #limiter_config_LimitScopeEmptyDetails{}}).
+-define(scope_user(), {user, #limiter_config_LimitScopeEmptyDetails{}}).
 -define(scope_destination_field(FieldPath),
     {destination_field, #limiter_config_LimitScopeDestinationFieldDetails{field_path = FieldPath}}
 ).
@@ -130,7 +131,11 @@
     }}
 ).
 
--define(invoice(OwnerID, ShopID, Cost), #domain_Invoice{
+-define(invoice(OwnerID, ShopID, Cost),
+    ?invoice(OwnerID, ShopID, Cost, #domain_ClientIdentity{customer_id = ?string, user_id = ?string})
+).
+
+-define(invoice(OwnerID, ShopID, Cost, ClientIdentity), #domain_Invoice{
     id = ?string,
     party_ref = #domain_PartyConfigRef{id = OwnerID},
     shop_ref = #domain_ShopConfigRef{id = ShopID},
@@ -139,7 +144,8 @@
     status = {unpaid, #domain_InvoiceUnpaid{}},
     details = #domain_InvoiceDetails{product = ?string},
     due = ?timestamp,
-    cost = Cost
+    cost = Cost,
+    client_identity = ClientIdentity
 }).
 
 -define(invoice_payment(Cost, CaptureCost),
@@ -248,12 +254,17 @@
 
 -define(withdrawal(Body, Destination, OwnerID), ?withdrawal(Body, Destination, OwnerID, undefined)).
 
--define(withdrawal(Body, Destination, OwnerID, AuthData), #wthd_domain_Withdrawal{
+-define(withdrawal(Body, Destination, OwnerID, AuthData),
+    ?withdrawal(Body, Destination, OwnerID, AuthData, #domain_ClientIdentity{customer_id = ?string, user_id = ?string})
+).
+
+-define(withdrawal(Body, Destination, OwnerID, AuthData, ClientIdentity), #wthd_domain_Withdrawal{
     body = Body,
     created_at = ?timestamp,
     destination = Destination,
     sender = #domain_PartyConfigRef{id = OwnerID},
-    auth_data = AuthData
+    auth_data = AuthData,
+    client_identity = ClientIdentity
 }).
 
 -define(op_withdrawal, {withdrawal, #context_withdrawal_OperationWithdrawal{}}).

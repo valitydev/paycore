@@ -37,6 +37,7 @@
     | provider
     | terminal
     | payer_contact_email
+    | user
     | {destination_field, [Field :: binary()]}.
 -type shard_size() :: pos_integer().
 -type shard_id() :: binary().
@@ -459,7 +460,8 @@ enumerate_context_bits(Types) ->
             %% tuple '{destination_field, [Field :: binary()]}'.
             destination_field,
             sender,
-            receiver
+            receiver,
+            user
         ],
     SortedTypes = lists:filtermap(
         fun
@@ -515,7 +517,9 @@ get_context_bits({destination_field, FieldPath}) ->
 get_context_bits(sender) ->
     [{prefix, <<"sender">>}, {from, sender}];
 get_context_bits(receiver) ->
-    [{prefix, <<"receiver">>}, {from, receiver}].
+    [{prefix, <<"receiver">>}, {from, receiver}];
+get_context_bits(user) ->
+    [{prefix, <<"user">>}, {from, user}].
 
 -spec extract_context_bit(context_bit(), context_type(), lim_context()) ->
     {ok, binary()} | {error, lim_context:context_error()}.
@@ -666,7 +670,9 @@ unmarshal_scope_type({destination_field, #limiter_config_LimitScopeDestinationFi
 unmarshal_scope_type({sender, _}) ->
     sender;
 unmarshal_scope_type({receiver, _}) ->
-    receiver.
+    receiver;
+unmarshal_scope_type({user, _}) ->
+    user.
 
 unmarshal_op_behaviour(#limiter_config_OperationLimitBehaviour{invoice_payment_refund = Refund}) ->
     genlib_map:compact(#{
@@ -827,7 +833,8 @@ check_calculate_year_shard_id_test() ->
     status = {unpaid, #domain_InvoiceUnpaid{}},
     details = #domain_InvoiceDetails{product = <<>>},
     due = <<"2222-02-02T12:12:12Z">>,
-    cost = #domain_Cash{amount = 42, currency = #domain_CurrencyRef{symbolic_code = <<"CNY">>}}
+    cost = #domain_Cash{amount = 42, currency = #domain_CurrencyRef{symbolic_code = <<"CNY">>}},
+    client_identity = #domain_ClientIdentity{customer_id = <<"customer">>, user_id = <<"user">>}
 }).
 
 -define(PAYMENT(Payer), #domain_InvoicePayment{
@@ -954,6 +961,15 @@ prefix_content_test_() ->
                     <<"Scope.prefix">> => <<"payer_contact_email">>
                 }}},
             mk_scope_prefix_impl(ordsets:from_list([payer_contact_email, payment_tool]), payment_processing, Context)
+        ),
+        ?_assertEqual(
+            {ok,
+                {<<"/token/2/2022/user/user">>, #{
+                    <<"Scope.user">> => <<"user">>,
+                    <<"Scope.payment_tool">> => <<"token/2/2022">>,
+                    <<"Scope.prefix">> => <<"user">>
+                }}},
+            mk_scope_prefix_impl(ordsets:from_list([user, payment_tool]), payment_processing, Context)
         )
     ].
 
