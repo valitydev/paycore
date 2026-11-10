@@ -308,8 +308,7 @@
 -type external_id() :: id() | undefined.
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type session_id() :: id().
-%% TODO Move type to dedicated module
--type risk_score() :: trusted | low | high | fatal.
+-type risk_score() :: ff_inspector:risk_score().
 -type destination_resource() :: ff_destination:resource().
 -type bin_data() :: ff_bin_data:bin_data().
 -type cash() :: ff_cash:cash().
