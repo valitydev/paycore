@@ -365,7 +365,8 @@
     | finish.
 
 -type fail_type() ::
-    limit_check
+    risk_score_is_too_high
+    | limit_check
     | withdrawal_routing:route_not_found()
     | {misconfiguration, term()}
     | {inconsistent_quote_route, route()}
@@ -899,11 +900,38 @@ do_process_transfer(compensate_routing_failure, Withdrawal) ->
     process_compensate_routing_failure(Withdrawal).
 
 -spec process_risk_scoring(withdrawal_state()) -> process_result().
-process_risk_scoring(_Withdrawal) ->
-    %% TODO Implement inspector's inspection call
-    RiskScore = trusted,
-    Events = [{risk_score_changed, RiskScore}],
-    {timeout, Events}.
+process_risk_scoring(Withdrawal) ->
+    %% TODO Rewrite w/ do+unwrap
+    DomainRevision = domain_revision(Withdrawal),
+    WalletID = wallet_id(Withdrawal),
+    Body = final_body(Withdrawal),
+    {ok, Wallet} = fetch_wallet(WalletID, party_id(Withdrawal), DomainRevision),
+    {ok, Destination} = get_destination(destination_id(Withdrawal)),
+    Resource = destination_resource(Withdrawal),
+    #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
+    VarsetParams = genlib_map:compact(#{
+        body => Body,
+        wallet_id => WalletID,
+        wallet => Wallet,
+        party_id => party_id(Withdrawal),
+        destination => Destination,
+        resource => Resource
+    }),
+    PartyVarset = build_party_varset(VarsetParams),
+    {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
+    case PaymentInstitution#domain_PaymentInstitution.inspector of
+        {value, InspectorRef} ->
+            Inspector = ff_inspector:get(InspectorRef, DomainRevision),
+            RiskScore = trusted,
+            case ff_inspector:inspect_withdrawal(Withdrawal, Inspector) of
+                'fatal' ->
+                    {idle, process_transfer_fail(risk_score_is_too_high, Withdrawal)};
+                RiskScore ->
+                    {timeout, [{risk_score_changed, RiskScore}]}
+            end;
+        Ambiguous ->
+            error({misconfiguration, {'Could not reduce selector to a value', {inspector, Ambiguous}}})
+    end.
 
 -spec process_routing(withdrawal_state()) -> process_result().
 process_routing(Withdrawal) ->

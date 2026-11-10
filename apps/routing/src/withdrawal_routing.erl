@@ -409,7 +409,7 @@ do_validate_terms(CombinedTerms, PartyVarset, _Route, _RoutingContext) ->
 
 validate_acceptable_risk({value, RiskCoverage}, PartyVarset) ->
     RiskScore = maps:get(risk_score, PartyVarset, undefined),
-    case paycore_inspector:compare_risk_score(RiskCoverage, RiskScore) >= 0 of
+    case ff_inspector:compare_risk_score(RiskCoverage, RiskScore) >= 0 of
         true ->
             {ok, valid};
         false ->

@@ -1,6 +1,7 @@
 -module(ff_inspector).
 
--export([inspect_withdrawal/4]).
+-export([get/2]).
+-export([inspect_withdrawal/2]).
 
 -export([compare_risk_score/2]).
 
@@ -9,20 +10,28 @@
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_proxy_inspector_thrift.hrl").
 
--type shop() :: dmsl_domain_thrift:'ShopConfig'().
--type invoice() :: dmsl_domain_thrift:'Invoice'().
--type payment() :: dmsl_domain_thrift:'InvoicePayment'().
+-type inspector_ref() :: dmsl_domain_thrift:'InspectorRef'().
 -type inspector() :: dmsl_domain_thrift:'Inspector'().
 -type risk_score() :: dmsl_domain_thrift:'RiskScore'().
 -type risk_magnitude() :: integer().
 
--spec inspect_withdrawal(shop(), invoice(), payment(), inspector()) -> risk_score() | no_return().
+%% Pipeline
+
+-import(ff_pipeline, [do/1, unwrap/1]).
+
+%%
+
+-spec get(inspector_ref(), ff_domain_config:revision()) ->
+    {ok, inspector()}
+    | {error, notfound}.
+get(InspectorRef, DomainRevision) ->
+    do(fun() ->
+        unwrap(ff_domain_config:object(DomainRevision, {inspector, InspectorRef}))
+    end).
+
+-spec inspect_withdrawal(ff_withdrawal:withdrawal(), inspector()) -> risk_score() | no_return().
 inspect_withdrawal(
-    Shop,
-    Invoice,
-    #domain_InvoicePayment{
-        domain_revision = Revision
-    } = Payment,
+    Withdrawal,
     #domain_Inspector{
         fallback_risk_score = FallBackRiskScore0,
         proxy =
@@ -32,7 +41,18 @@ inspect_withdrawal(
             }
     }
 ) ->
-    DeadLine = woody_deadline:from_timeout(genlib_app:env(hellgate, inspect_timeout, infinity)),
+    Inspector = ff_woody_client:new(#{
+        url => URL,
+        transport_opts => #{
+            recv_timeout => ?RECV_TIMEOUT
+        }
+                                     }),
+%% TODO
+    Request = {{dmsl_proxy_inspector_thrift, 'InspectorProxy'}, 'InspectWithdrawal', {WithdrawalContext}},
+    ff_woody_client:call(Inspector, Request).
+
+
+    DeadLine = woody_deadline:from_timeout(genlib_app:env(ff_transfer, inspect_timeout, infinity)),
     ProxyDef = get_proxy_def(ProxyRef, Revision),
     Context = #proxy_inspector_Context{
         payment = get_payment_info(Shop, Invoice, Payment),
@@ -46,7 +66,7 @@ inspect_withdrawal(
                 Score
         end,
     {ok, RiskScore} = issue_call(
-        'InspectPayment',
+        'InspectWithdrawal',
         {Context},
         hg_proxy:get_call_options(
             Proxy,
