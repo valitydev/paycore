@@ -24,13 +24,7 @@ request_test_() ->
 
 setup() ->
     {ok, _} = application:ensure_all_started(processing_server),
-    _ = prometheus_histogram:declare([
-        {name, woody_wrapper_processing_duration_ms},
-        {help, "Duration of processing handle_function in millisecond"},
-        {buckets, [50, 150, 300, 500, 750, 1000]},
-        {labels, [handler, function]}
-    ]),
-    ok.
+    processing_server_metrics:setup().
 
 request_context_lifetime() ->
     Options = options(lifetime),

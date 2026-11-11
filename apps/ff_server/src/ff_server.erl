@@ -38,7 +38,7 @@ start() ->
 
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
-    ok = setup_metrics(),
+    ok = processing_server_metrics:setup(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec stop(any()) -> ok.
@@ -127,16 +127,3 @@ get_handler(Service, Handler, WrapperOpts) ->
 wrap_handler(Handler, WrapperOpts) ->
     FullOpts = maps:merge(#{handler => Handler}, WrapperOpts),
     {ff_woody_wrapper, FullOpts}.
-
-%%
-
-setup_metrics() ->
-    ok = woody_ranch_prometheus_collector:setup(),
-    ok = woody_hackney_prometheus_collector:setup(),
-    _ = prometheus_histogram:declare([
-        {name, woody_wrapper_processing_duration_ms},
-        {help, "Duration of processing handle_function in millisecond"},
-        {buckets, [50, 150, 300, 500, 750, 1000]},
-        {labels, [handler, function]}
-    ]),
-    ok.
