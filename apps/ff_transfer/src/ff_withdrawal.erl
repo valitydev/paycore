@@ -901,37 +901,45 @@ do_process_transfer(compensate_routing_failure, Withdrawal) ->
 
 -spec process_risk_scoring(withdrawal_state()) -> process_result().
 process_risk_scoring(Withdrawal) ->
-    %% TODO Rewrite w/ do+unwrap
-    DomainRevision = domain_revision(Withdrawal),
-    WalletID = wallet_id(Withdrawal),
-    Body = final_body(Withdrawal),
-    {ok, Wallet} = fetch_wallet(WalletID, party_id(Withdrawal), DomainRevision),
-    {ok, Destination} = get_destination(destination_id(Withdrawal)),
-    Resource = destination_resource(Withdrawal),
-    #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
-    VarsetParams = genlib_map:compact(#{
-        body => Body,
-        wallet_id => WalletID,
-        wallet => Wallet,
-        party_id => party_id(Withdrawal),
-        destination => Destination,
-        resource => Resource
-    }),
-    PartyVarset = build_party_varset(VarsetParams),
-    {ok, PaymentInstitution} = ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision),
-    case PaymentInstitution#domain_PaymentInstitution.inspector of
-        {value, InspectorRef} ->
-            Inspector = ff_inspector:get(InspectorRef, DomainRevision),
-            RiskScore = trusted,
-            case ff_inspector:inspect_withdrawal(Withdrawal, Inspector) of
-                'fatal' ->
-                    {idle, process_transfer_fail(risk_score_is_too_high, Withdrawal)};
-                RiskScore ->
-                    {timeout, [{risk_score_changed, RiskScore}]}
-            end;
-        Ambiguous ->
-            error({misconfiguration, {'Could not reduce selector to a value', {inspector, Ambiguous}}})
+    case do_process_risk_scoring(Withdrawal) of
+        {ok, 'fatal'} ->
+            {idle, process_transfer_fail(risk_score_is_too_high, Withdrawal)};
+        {ok, RiskScore} ->
+            {timeout, [{risk_score_changed, RiskScore}]};
+        {error, Reason} ->
+            {idle, process_transfer_fail(Reason, Withdrawal)}
     end.
+
+-spec do_process_risk_scoring(withdrawal_state()) ->
+    {ok, risk_score()} | {error, Reason}
+when
+    Reason ::
+        {misconfiguration, term()}
+        | payinst_not_found
+        | notfound.
+do_process_risk_scoring(Withdrawal) ->
+    do(fun() ->
+        DomainRevision = domain_revision(Withdrawal),
+        WalletID = wallet_id(Withdrawal),
+        Body = final_body(Withdrawal),
+        Wallet = unwrap(fetch_wallet(WalletID, party_id(Withdrawal), DomainRevision)),
+        Destination = unwrap(get_destination(destination_id(Withdrawal))),
+        Resource = destination_resource(Withdrawal),
+        #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
+        VarsetParams = genlib_map:compact(#{
+            body => Body,
+            wallet_id => WalletID,
+            wallet => Wallet,
+            party_id => party_id(Withdrawal),
+            destination => Destination,
+            resource => Resource
+        }),
+        PartyVarset = build_party_varset(VarsetParams),
+        PaymentInstitution = unwrap(ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision)),
+        InspectorRef = unwrap(ff_payment_institution:inspector(PaymentInstitution)),
+        Inspector = unwrap(ff_inspector:get(InspectorRef, DomainRevision)),
+        ff_inspector:inspect_withdrawal(Withdrawal, Inspector)
+    end).
 
 -spec process_routing(withdrawal_state()) -> process_result().
 process_routing(Withdrawal) ->
@@ -2061,6 +2069,13 @@ update_adjusment_index(Updater, Value, Withdrawal) ->
 %% Failure helpers
 
 -spec build_failure(fail_type(), withdrawal_state()) -> failure().
+build_failure(risk_score_is_too_high, _Withdrawal) ->
+    #{
+        code => <<"no_route_found">>,
+        sub => #{
+            code => <<"risk_score_is_too_high">>
+        }
+    };
 build_failure(limit_check, Withdrawal) ->
     {failed, {wallet_sender, _WalletLimitDetails} = Details} = limit_check_status(Withdrawal),
     #{

@@ -6,6 +6,8 @@
 -export([compare_risk_score/2]).
 
 -export_type([risk_score/0]).
+-export_type([inspector_ref/0]).
+-export_type([inspector/0]).
 
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 -include_lib("damsel/include/dmsl_proxy_inspector_thrift.hrl").
@@ -29,135 +31,59 @@ get(InspectorRef, DomainRevision) ->
         unwrap(ff_domain_config:object(DomainRevision, {inspector, InspectorRef}))
     end).
 
--spec inspect_withdrawal(ff_withdrawal:withdrawal(), inspector()) -> risk_score() | no_return().
+-spec inspect_withdrawal(ff_withdrawal:withdrawal_state(), inspector()) -> risk_score().
 inspect_withdrawal(
     Withdrawal,
     #domain_Inspector{
-        fallback_risk_score = FallBackRiskScore0,
-        proxy =
-            Proxy = #domain_Proxy{
-                ref = ProxyRef,
-                additional = ProxyAdditional
-            }
+        fallback_risk_score = FallBackRiskScore,
+        proxy = #domain_Proxy{ref = ProxyRef, additional = ProxyAdditional}
     }
 ) ->
-    Inspector = ff_woody_client:new(#{
-        url => URL,
-        transport_opts => #{
-            recv_timeout => ?RECV_TIMEOUT
-        }
-                                     }),
-%% TODO
-    Request = {{dmsl_proxy_inspector_thrift, 'InspectorProxy'}, 'InspectWithdrawal', {WithdrawalContext}},
-    ff_woody_client:call(Inspector, Request).
-
-
-    DeadLine = woody_deadline:from_timeout(genlib_app:env(ff_transfer, inspect_timeout, infinity)),
-    ProxyDef = get_proxy_def(ProxyRef, Revision),
-    Context = #proxy_inspector_Context{
-        payment = get_payment_info(Shop, Invoice, Payment),
-        options = maps:merge(ProxyDef#domain_ProxyDefinition.options, ProxyAdditional)
+    %% TODO Rewrite with pipeline do+unwrap
+    InspectorConfig = genlib_app:env(ff_transfer, inspector, #{}),
+    #domain_ProxyDefinition{url = URL, options = ProxyOpts} =
+        unwrap(ff_domain_config:object({proxy, ProxyRef})),
+    WithdrawalContext = #proxy_inspector_WithdrawalContext{
+        party = #proxy_inspector_Party{party_ref = #domain_PartyConfigRef{id = ff_withdrawal:party_id(Withdrawal)}},
+        wallet_ref = #domain_WalletConfigRef{id = ff_withdrawal:wallet_id(Withdrawal)},
+        withdrawal_id = ff_withdrawal:id(Withdrawal),
+        withdrawal = ff_limiter:marshal_withdrawal(Withdrawal),
+        options = maps:merge(ProxyOpts, ProxyAdditional)
     },
-    FallBackRiskScore1 =
-        case FallBackRiskScore0 of
-            undefined ->
-                genlib_app:env(hellgate, inspect_score, high);
-            Score ->
-                Score
+    Default =
+        case FallBackRiskScore of
+            undefined -> maps:get(default_score, InspectorConfig, high);
+            Score -> Score
         end,
-    {ok, RiskScore} = issue_call(
-        'InspectWithdrawal',
-        {Context},
-        hg_proxy:get_call_options(
-            Proxy,
-            Revision
-        ),
-        FallBackRiskScore1,
-        DeadLine
-    ),
-    RiskScore.
-
-get_payment_info(
-    #domain_ShopConfig{
-        category = CategoryRef,
-        location = Location
-    } = Shop,
-    #domain_Invoice{
-        party_ref = PartyConfigRef,
-        shop_ref = ShopConfigRef,
-        id = InvoiceID,
-        created_at = InvoiceCreatedAt,
-        due = InvoiceDue,
-        details = InvoiceDetails,
-        client_info = ClientInfo,
-        client_identity = ClientIdentity
-    },
-    #domain_InvoicePayment{
-        id = PaymentID,
-        created_at = CreatedAt,
-        domain_revision = Revision,
-        payer = Payer,
-        cost = Cost,
-        make_recurrent = MakeRecurrent
-    }
-) ->
-    Party = #proxy_inspector_Party{
-        party_ref = PartyConfigRef
-    },
-    ShopCategory = hg_domain:get(
-        Revision,
-        {category, CategoryRef}
-    ),
-    ProxyShop = #proxy_inspector_Shop{
-        shop_ref = ShopConfigRef,
-        category = ShopCategory,
-        name = Shop#domain_ShopConfig.name,
-        description = Shop#domain_ShopConfig.description,
-        location = Location
-    },
-    ProxyInvoice = #proxy_inspector_Invoice{
-        id = InvoiceID,
-        created_at = InvoiceCreatedAt,
-        due = InvoiceDue,
-        details = InvoiceDetails,
-        client_info = ClientInfo,
-        client_identity = ClientIdentity
-    },
-    ProxyPayment = #proxy_inspector_InvoicePayment{
-        id = PaymentID,
-        created_at = CreatedAt,
-        payer = Payer,
-        cost = Cost,
-        make_recurrent = MakeRecurrent
-    },
-    #proxy_inspector_PaymentInfo{
-        party = Party,
-        shop = ProxyShop,
-        invoice = ProxyInvoice,
-        payment = ProxyPayment
-    }.
-
-issue_call(Func, Args, CallOpts, Default, DeadLine) ->
-    try hg_woody_wrapper:call(proxy_inspector, Func, Args, CallOpts, DeadLine) of
-        {ok, _} = RiskScore ->
+    try
+        ff_woody_client:call(
+            ff_woody_client:new(#{
+                url => URL,
+                transport_opts => maps:get(transport_opts, InspectorConfig, #{})
+            }),
+            {{dmsl_proxy_inspector_thrift, 'InspectorProxy'}, 'InspectWithdrawal', {WithdrawalContext}},
+            woody_context:set_deadline(
+                woody_deadline:from_timeout(maps:get(timeout, InspectorConfig, 3000)),
+                op_context:get_woody_context(op_context:load(op_context:key(fistful)))
+            )
+        )
+    of
+        {ok, RiskScore} ->
             RiskScore;
         {exception, Error} ->
             _ = logger:error("Fail to get RiskScore with error ~p", [Error]),
-            {ok, Default}
+            Default
     catch
         error:{woody_error, {_Source, Class, _Details}} = Reason when
             Class =:= resource_unavailable orelse
                 Class =:= result_unknown
         ->
             _ = logger:warning("Fail to get RiskScore with error ~p:~p", [error, Reason]),
-            {ok, Default};
+            Default;
         error:{woody_error, {_Source, result_unexpected, _Details}} = Reason ->
             _ = logger:error("Fail to get RiskScore with error ~p:~p", [error, Reason]),
-            {ok, Default}
+            Default
     end.
-
-get_proxy_def(Ref, Revision) ->
-    hg_domain:get(Revision, {proxy, Ref}).
 
 %%
 
