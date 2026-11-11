@@ -23,9 +23,6 @@
     transport_opts => [{_, _}]
 }.
 
-% 30 seconds
--define(DEFAULT_HANDLING_TIMEOUT, 30000).
-
 %% Callbacks
 
 -callback handle_function(woody:func(), woody:args(), handler_options()) -> {ok, woody:result()} | no_return().
@@ -33,46 +30,18 @@
 %% API
 
 -spec handle_function(woody:func(), woody:args(), woody_context:ctx(), options()) -> {ok, woody:result()} | no_return().
-handle_function(Func, Args, WoodyContext0, #{handler := Handler} = Opts) ->
-    WoodyContext = ensure_woody_deadline_set(WoodyContext0, Opts),
+handle_function(Func, Args, WoodyContext, #{handler := Handler} = Opts) ->
     {HandlerMod, HandlerOptions} = get_handler_opts(Handler),
-    ok = op_context:save(op_context:key(fistful), create_context(WoodyContext, Opts)),
-    F = fun() -> HandlerMod:handle_function(Func, Args, HandlerOptions) end,
-    try timer:tc(F) of
-        {DurationMicro, Result} ->
-            DurationMs = DurationMicro div 1000,
-            HandlerBin = erlang:atom_to_binary(HandlerMod),
-            FuncBin = erlang:atom_to_binary(Func),
-            Labels = [HandlerBin, FuncBin],
-            ok = prometheus_histogram:observe(
-                woody_wrapper_processing_duration_ms,
-                Labels,
-                DurationMs
-            ),
-            Result
-    after
-        op_context:cleanup(fistful)
-    end.
-
-%% Internal functions
-
-create_context(WoodyContext, Opts) ->
-    ContextOptions = #{
-        woody_context => WoodyContext,
+    RequestOptions = Opts#{
+        binding => op_context:binding(fistful),
+        handler => HandlerMod,
+        function => Func,
         party_client => maps:get(party_client, Opts)
     },
-    op_context:create(ContextOptions).
+    Handle = fun() -> HandlerMod:handle_function(Func, Args, HandlerOptions) end,
+    processing_request:run(WoodyContext, RequestOptions, Handle).
 
--spec ensure_woody_deadline_set(woody_context:ctx(), options()) -> woody_context:ctx().
-ensure_woody_deadline_set(WoodyContext, Opts) ->
-    case woody_context:get_deadline(WoodyContext) of
-        undefined ->
-            DefaultTimeout = maps:get(default_handling_timeout, Opts, ?DEFAULT_HANDLING_TIMEOUT),
-            Deadline = woody_deadline:from_timeout(DefaultTimeout),
-            woody_context:set_deadline(Deadline, WoodyContext);
-        _Other ->
-            WoodyContext
-    end.
+%% Internal functions
 
 -spec get_handler_opts(handler()) -> {module(), handler_options()}.
 get_handler_opts(Handler) when is_atom(Handler) ->
