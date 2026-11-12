@@ -127,6 +127,13 @@ start_processing_apps(Options) ->
                         }
                     },
                     {
+                        <<"/fraudinspector">>,
+                        {
+                            {dmsl_proxy_inspector_thrift, 'InspectorProxy'},
+                            {ff_ct_inspector_handler, [{handler, ff_ct_inspector}]}
+                        }
+                    },
+                    {
                         <<"/binbase">>,
                         {{binbase_binbase_thrift, 'Binbase'}, {ff_ct_binbase_handler, []}}
                     }
@@ -1017,7 +1024,7 @@ domain_config(Config, Options) ->
         ct_domain:system_account_set(?sas(1), <<"System">>, ?cur(<<"RUB">>)),
 
         ct_domain:inspector(?insp(1), <<"Low Life">>, ?prx(1), #{<<"risk_score">> => <<"low">>}),
-        ct_domain:proxy(?prx(1), <<"Inspector proxy">>),
+        ct_domain:proxy(?prx(1), <<"Inspector proxy">>, <<"http://localhost:8222/fraudinspector">>),
         ct_domain:proxy(?prx(2), <<"Mocket proxy">>, <<"http://localhost:8222/bank">>),
         ct_domain:proxy(?prx(3), <<"Quote proxy">>, <<"http://localhost:8222/quotebank">>),
         ct_domain:proxy(?prx(6), <<"Down proxy">>, <<"http://localhost:8222/downbank">>),

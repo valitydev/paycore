@@ -22,6 +22,7 @@
 -export([end_per_testcase/2]).
 
 %% Tests
+-export([risk_score_fatal_fail_test/1]).
 -export([session_fail_test/1]).
 -export([session_repair_test/1]).
 -export([quote_fail_test/1]).
@@ -96,6 +97,7 @@ all() ->
 groups() ->
     [
         {default, [parallel], [
+            risk_score_fatal_fail_test,
             session_fail_test,
             session_repair_test,
             quote_fail_test,
@@ -211,6 +213,34 @@ end_per_testcase(_Name, _C) ->
     ok = ct_helper:unset_context().
 
 %% Tests
+
+-spec risk_score_fatal_fail_test(config()) -> test_return().
+risk_score_fatal_fail_test(_C) ->
+    Env = ct_objects:prepare_standard_environment(ct_objects:build_default_ctx()),
+    Body = {100, <<"RUB">>},
+    PartyID = maps:get(party_id, Env),
+    WalletID = ct_objects:create_wallet(
+        PartyID,
+        <<"RUB">>,
+        #domain_TermSetHierarchyRef{id = 1},
+        #domain_PaymentInstitutionRef{id = 2}
+    ),
+    _ = ct_objects:create_deposit(PartyID, WalletID, maps:get(source_id, Env), Body),
+    ok = ct_objects:await_wallet_balance(Body, WalletID),
+    WithdrawalID = genlib:bsuuid(),
+    WithdrawalParams = #{
+        id => WithdrawalID,
+        party_id => PartyID,
+        destination_id => maps:get(destination_id, Env),
+        wallet_id => WalletID,
+        body => {100, <<"RUB">>},
+        %% NOTE Risk flag crutch via email from contact info; see it's rubber
+        %% tip in `ff_ct_inspector:inspect_withdrawal` implementation.
+        contact_info => #{email => <<"shang.tsung@out.world">>}
+    },
+    ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
+    Result = await_final_withdrawal_status(WithdrawalID),
+    ?assertMatch({failed, #{code := <<"no_route_found">>, sub := #{code := <<"risk_score_is_too_high">>}}}, Result).
 
 -spec session_fail_test(config()) -> test_return().
 session_fail_test(_C) ->
