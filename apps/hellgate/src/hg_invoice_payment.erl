@@ -4214,7 +4214,7 @@ get_route_provider(Route, Revision) ->
 inspect(#domain_InvoicePayment{domain_revision = Revision} = Payment, PaymentInstitution, Opts) ->
     InspectorRef = get_selector_value(inspector, PaymentInstitution#domain_PaymentInstitution.inspector),
     Inspector = hg_domain:get(Revision, {inspector, InspectorRef}),
-    hg_inspector:inspect(get_shop(Opts, Revision), get_invoice(Opts), Payment, Inspector).
+    hg_inspector:inspect_payment(get_shop(Opts, Revision), get_invoice(Opts), Payment, Inspector).
 
 repair_inspect(Payment, PaymentInstitution, Opts, #st{repair_scenario = Scenario}) ->
     case hg_invoice_repair:check_for_action(skip_inspector, Scenario) of

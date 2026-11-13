@@ -396,14 +396,29 @@ do_validate_terms(CombinedTerms, PartyVarset, _Route, _RoutingContext) ->
             allow = Allow,
             global_allow = GAllow,
             currencies = CurrenciesSelector,
-            cash_limit = CashLimitSelector
+            cash_limit = CashLimitSelector,
+            risk_coverage = RiskScoreSelector
         } = CombinedTerms,
+        valid = unwrap(validate_acceptable_risk(RiskScoreSelector, PartyVarset)),
         valid = unwrap(validate_selectors_defined(CombinedTerms)),
         valid = unwrap(validate_allow(global_allow, GAllow)),
         valid = unwrap(validate_allow(allow, Allow)),
         valid = unwrap(validate_currencies(CurrenciesSelector, PartyVarset)),
         valid = unwrap(validate_cash_limit(CashLimitSelector, PartyVarset))
     end).
+
+validate_acceptable_risk({value, RiskCoverage}, PartyVarset) ->
+    RiskScore = maps:get(risk_score, PartyVarset, undefined),
+    case ff_inspector:compare_risk_score(RiskCoverage, RiskScore) >= 0 of
+        true ->
+            {ok, valid};
+        false ->
+            {error, {terms_violation, {risk_coverage, {RiskCoverage, RiskScore}}}}
+    end;
+validate_acceptable_risk(undefined, _PartyVarset) ->
+    {ok, valid};
+validate_acceptable_risk(Ambiguous, _PartyVarset) ->
+    {error, {misconfiguration, {'Could not reduce predicate to a value', {risk_coverage, Ambiguous}}}}.
 
 -spec validate_selectors_defined(withdrawal_provision_terms()) ->
     {ok, valid}

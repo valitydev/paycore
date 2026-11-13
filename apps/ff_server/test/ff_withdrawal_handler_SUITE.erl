@@ -415,6 +415,7 @@ create_withdrawal_with_changed_body_test(C) ->
         #wthd_Event{change = {created, _}},
         #wthd_Event{change = {status_changed, _}},
         #wthd_Event{change = {resource, _}},
+        #wthd_Event{change = {risk_score_changed, _}},
         #wthd_Event{change = {route, _}},
         #wthd_Event{
             change =

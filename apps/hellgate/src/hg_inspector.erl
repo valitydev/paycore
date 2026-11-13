@@ -2,7 +2,7 @@
 
 -export([fill_blacklist/2]).
 -export([check_blacklist/1]).
--export([inspect/4]).
+-export([inspect_payment/4]).
 
 -export([compare_risk_score/2]).
 
@@ -90,8 +90,8 @@ check_blacklist(#{
 check_blacklist(_Ctx) ->
     false.
 
--spec inspect(shop(), invoice(), payment(), inspector()) -> risk_score() | no_return().
-inspect(
+-spec inspect_payment(shop(), invoice(), payment(), inspector()) -> risk_score() | no_return().
+inspect_payment(
     Shop,
     Invoice,
     #domain_InvoicePayment{

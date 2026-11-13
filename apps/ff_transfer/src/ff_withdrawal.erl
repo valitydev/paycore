@@ -4,6 +4,8 @@
 
 -module(ff_withdrawal).
 
+%% -typing([eqwalizer]).
+
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -type id() :: binary().
@@ -21,6 +23,7 @@
     attempts => attempts(),
     resource => destination_resource(),
     adjustments => adjustments_index(),
+    risk_score => risk_score(),
     status => status(),
     metadata => metadata(),
     external_id => id(),
@@ -101,6 +104,7 @@
 
 -type event() ::
     {created, withdrawal()}
+    | {risk_score_changed, risk_score()}
     | {resource_got, destination_resource()}
     | {route_changed, #{route := route(), candidates => routing_candidates()}}
     | {rollback, routing_rollback_data()}
@@ -304,6 +308,7 @@
 -type external_id() :: id() | undefined.
 -type p_transfer() :: ff_postings_transfer:transfer().
 -type session_id() :: id().
+-type risk_score() :: ff_inspector:risk_score().
 -type destination_resource() :: ff_destination:resource().
 -type bin_data() :: ff_bin_data:bin_data().
 -type cash() :: ff_cash:cash().
@@ -342,7 +347,8 @@
 }.
 
 -type activity() ::
-    routing
+    risk_scoring
+    | routing
     | p_transfer_start
     | p_transfer_recreate
     | p_transfer_prepare
@@ -359,7 +365,8 @@
     | finish.
 
 -type fail_type() ::
-    limit_check
+    risk_score_is_too_high
+    | limit_check
     | withdrawal_routing:route_not_found()
     | {misconfiguration, term()}
     | {inconsistent_quote_route, route()}
@@ -721,6 +728,10 @@ p_transfer_status(Withdrawal) ->
             ff_postings_transfer:status(Transfer)
     end.
 
+-spec risk_score(withdrawal_state()) -> undefined | risk_score().
+risk_score(Withdrawal) ->
+    maps:get(risk_score, Withdrawal, undefined).
+
 -spec route_selection_status(withdrawal_state()) -> unknown | found.
 route_selection_status(Withdrawal) ->
     case route(Withdrawal) of
@@ -762,6 +773,7 @@ operation_domain_revision(Withdrawal) ->
 -spec deduce_activity(withdrawal_state()) -> activity().
 deduce_activity(Withdrawal) ->
     Params = #{
+        risk_score => risk_score(Withdrawal),
         route => route_selection_status(Withdrawal),
         p_transfer => p_transfer_status(Withdrawal),
         validation => withdrawal_validation_status(Withdrawal),
@@ -784,6 +796,8 @@ do_deduce_activity(#{status := {failed, _}} = Params) ->
 
 do_pending_activity(#{routing_rollback_data := #{}}) ->
     compensate_routing_failure;
+do_pending_activity(#{risk_score := undefined, route := unknown, p_transfer := undefined}) ->
+    risk_scoring;
 do_pending_activity(#{route := unknown, p_transfer := undefined}) ->
     routing;
 do_pending_activity(#{route := found, p_transfer := undefined}) ->
@@ -823,6 +837,8 @@ do_finished_activity(#{status := {failed, _}}) ->
     rollback_routing.
 
 -spec do_process_transfer(activity(), withdrawal_state()) -> process_result().
+do_process_transfer(risk_scoring, Withdrawal) ->
+    process_risk_scoring(Withdrawal);
 do_process_transfer(routing, Withdrawal) ->
     process_routing(Withdrawal);
 do_process_transfer(p_transfer_start, Withdrawal) ->
@@ -882,6 +898,48 @@ do_process_transfer(rollback_routing, Withdrawal) ->
     process_rollback_routing(Withdrawal);
 do_process_transfer(compensate_routing_failure, Withdrawal) ->
     process_compensate_routing_failure(Withdrawal).
+
+-spec process_risk_scoring(withdrawal_state()) -> process_result().
+process_risk_scoring(Withdrawal) ->
+    case do_process_risk_scoring(Withdrawal) of
+        {ok, 'fatal'} ->
+            {idle, process_transfer_fail(risk_score_is_too_high, Withdrawal)};
+        {ok, RiskScore} ->
+            {timeout, [{risk_score_changed, RiskScore}]};
+        {error, Reason} ->
+            {idle, process_transfer_fail(Reason, Withdrawal)}
+    end.
+
+-spec do_process_risk_scoring(withdrawal_state()) ->
+    {ok, risk_score()} | {error, Reason}
+when
+    Reason ::
+        {misconfiguration, term()}
+        | payinst_not_found
+        | notfound.
+do_process_risk_scoring(Withdrawal) ->
+    do(fun() ->
+        DomainRevision = domain_revision(Withdrawal),
+        WalletID = wallet_id(Withdrawal),
+        Body = final_body(Withdrawal),
+        Wallet = unwrap(fetch_wallet(WalletID, party_id(Withdrawal), DomainRevision)),
+        Destination = unwrap(get_destination(destination_id(Withdrawal))),
+        Resource = destination_resource(Withdrawal),
+        #domain_WalletConfig{payment_institution = PaymentInstitutionRef} = Wallet,
+        VarsetParams = genlib_map:compact(#{
+            body => Body,
+            wallet_id => WalletID,
+            wallet => Wallet,
+            party_id => party_id(Withdrawal),
+            destination => Destination,
+            resource => Resource
+        }),
+        PartyVarset = build_party_varset(VarsetParams),
+        PaymentInstitution = unwrap(ff_payment_institution:get(PaymentInstitutionRef, PartyVarset, DomainRevision)),
+        InspectorRef = unwrap(ff_payment_institution:inspector(PaymentInstitution)),
+        Inspector = unwrap(ff_inspector:get(InspectorRef, DomainRevision)),
+        ff_inspector:inspect_withdrawal(Withdrawal, Inspector)
+    end).
 
 -spec process_routing(withdrawal_state()) -> process_result().
 process_routing(Withdrawal) ->
@@ -1016,7 +1074,8 @@ make_routing_varset_and_context(Withdrawal) ->
         wallet => Wallet,
         party_id => PartyID,
         destination => Destination,
-        resource => Resource
+        resource => Resource,
+        risk_score => risk_score(Withdrawal)
     }),
     Context = #{
         domain_revision => DomainRevision,
@@ -1304,6 +1363,7 @@ build_party_varset(#{body := Body, wallet_id := WalletID, party_id := PartyID} =
             {_, Resource} ->
                 construct_payment_tool(Resource)
         end,
+    RiskScore = maps:get(risk_score, Params, undefined),
     genlib_map:compact(#{
         currency => ff_dmsl_codec:marshal(currency_ref, CurrencyID),
         cost => ff_dmsl_codec:marshal(cash, Body),
@@ -1311,7 +1371,8 @@ build_party_varset(#{body := Body, wallet_id := WalletID, party_id := PartyID} =
         wallet_id => WalletID,
         % TODO it's not fair, because it's PAYOUT not PAYMENT tool.
         payment_tool => PaymentTool,
-        bin_data => ff_dmsl_codec:marshal(bin_data, BinData)
+        bin_data => ff_dmsl_codec:marshal(bin_data, BinData),
+        risk_score => RiskScore
     }).
 
 -spec construct_payment_tool(ff_destination:resource() | ff_destination:resource_params()) ->
@@ -2008,6 +2069,13 @@ update_adjusment_index(Updater, Value, Withdrawal) ->
 %% Failure helpers
 
 -spec build_failure(fail_type(), withdrawal_state()) -> failure().
+build_failure(risk_score_is_too_high, _Withdrawal) ->
+    #{
+        code => <<"no_route_found">>,
+        sub => #{
+            code => <<"risk_score_is_too_high">>
+        }
+    };
 build_failure(limit_check, Withdrawal) ->
     {failed, {wallet_sender, _WalletLimitDetails} = Details} = limit_check_status(Withdrawal),
     #{
@@ -2073,6 +2141,8 @@ apply_event(Ev, T0) ->
 -spec apply_event_(event(), ff_maybe:'maybe'(withdrawal_state())) -> withdrawal_state().
 apply_event_({created, T}, undefined) ->
     make_state(T);
+apply_event_({risk_score_changed, RiskScore}, T) ->
+    maps:put(risk_score, RiskScore, T);
 apply_event_({status_changed, Status}, T0) ->
     T1 = maps:remove(routing_rollback_data, T0),
     maps:put(status, Status, T1);
@@ -2530,6 +2600,9 @@ with_routing_mocks(Routes, Fun) ->
         ok = meck:expect(ff_payouts_provider, get, 2, {ok, #{accounts => #{}}}),
         ok = meck:expect(ff_payment_institution, get, 3, {ok, #{withdrawal_routing_rules => undefined}}),
         ok = meck:expect(ff_payment_institution, system_accounts, 2, {ok, #{}}),
+        ok = meck:expect(ff_payment_institution, inspector, 1, {ok, #domain_InspectorRef{id = 5}}),
+        ok = meck:expect(ff_inspector, get, 2, {ok, test_inspector()}),
+        ok = meck:expect(ff_inspector, inspect_withdrawal, 2, 'high'),
         ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) ->
             Candidates = [
                 hg_route:new(1, #domain_ProviderRef{id = P}, #domain_TerminalRef{id = T}, 0, 1000, 0)
@@ -2541,6 +2614,13 @@ with_routing_mocks(Routes, Fun) ->
     after
         ok = meck:unload(Modules)
     end.
+
+test_inspector() ->
+    #domain_Inspector{
+        name = <<>>,
+        description = <<>>,
+        proxy = #domain_Proxy{ref = #domain_ProxyRef{id = 1}, additional = #{}}
+    }.
 
 test_route_terms() ->
     {ok, #domain_ProvisionTermSet{
@@ -2599,6 +2679,7 @@ test_withdrawal_state() ->
         domain_revision => 42,
         attempts => ff_withdrawal_route_attempt_utils:new(),
         status => pending,
+        risk_score => 'high',
         validation => #{},
         resource =>
             {bank_card, #{
