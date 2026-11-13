@@ -2600,6 +2600,9 @@ with_routing_mocks(Routes, Fun) ->
         ok = meck:expect(ff_payouts_provider, get, 2, {ok, #{accounts => #{}}}),
         ok = meck:expect(ff_payment_institution, get, 3, {ok, #{withdrawal_routing_rules => undefined}}),
         ok = meck:expect(ff_payment_institution, system_accounts, 2, {ok, #{}}),
+        ok = meck:expect(ff_payment_institution, inspector, 1, {ok, #domain_InspectorRef{id = 5}}),
+        ok = meck:expect(ff_inspector, get, 2, {ok, test_inspector()}),
+        ok = meck:expect(ff_inspector, inspect_withdrawal, 2, 'high'),
         ok = meck:expect(hg_route_collector, get_routes, fun(_, _, _, _) ->
             Candidates = [
                 hg_route:new(1, #domain_ProviderRef{id = P}, #domain_TerminalRef{id = T}, 0, 1000, 0)
@@ -2611,6 +2614,13 @@ with_routing_mocks(Routes, Fun) ->
     after
         ok = meck:unload(Modules)
     end.
+
+test_inspector() ->
+    #domain_Inspector{
+        name = <<>>,
+        description = <<>>,
+        proxy = #domain_Proxy{ref = #domain_ProxyRef{id = 1}, additional = #{}}
+    }.
 
 test_route_terms() ->
     {ok, #domain_ProvisionTermSet{
@@ -2669,6 +2679,7 @@ test_withdrawal_state() ->
         domain_revision => 42,
         attempts => ff_withdrawal_route_attempt_utils:new(),
         status => pending,
+        risk_score => 'high',
         validation => #{},
         resource =>
             {bank_card, #{
