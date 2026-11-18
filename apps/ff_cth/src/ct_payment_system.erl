@@ -580,6 +580,10 @@ domain_config(Config, Options) ->
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 33)
                 ),
                 delegate(
+                    condition(cost_in, {950000, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 34)
+                ),
+                delegate(
                     condition(cost_in, {1358, <<"RUB">>}),
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 60)
                 ),
@@ -792,6 +796,13 @@ domain_config(Config, Options) ->
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 33),
             {candidates, [
                 candidate({constant, true}, ?trm(3300))
+            ]}
+        ),
+
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 34),
+            {candidates, [
+                candidate({constant, true}, ?trm(3400))
             ]}
         ),
 
@@ -1329,6 +1340,19 @@ domain_config(Config, Options) ->
                 wallet = #domain_WalletProvisionTerms{
                     withdrawals = #domain_WithdrawalProvisionTerms{
                         global_allow = {constant, false}
+                    }
+                }
+            }
+        ),
+
+        ct_domain:withdrawal_terminal(
+            ?trm(3400),
+            ?prv(1),
+            #domain_ProvisionTermSet{
+                wallet = #domain_WalletProvisionTerms{
+                    withdrawals = #domain_WithdrawalProvisionTerms{
+                        allow = {constant, true},
+                        risk_coverage = {value, 'trusted'}
                     }
                 }
             }

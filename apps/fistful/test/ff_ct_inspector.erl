@@ -14,15 +14,11 @@
     dmsl_domain_thrift:'WalletConfigRef'(),
     dmsl_domain_thrift:'ProxyOptions'() | undefined
 ) -> dmsl_domain_thrift:'RiskScore'() | no_return().
-inspect_withdrawal(
-    _ID,
-    #wthd_domain_Withdrawal{contact_info = #wthd_domain_ContactInfo{email = <<"shang.tsung@out.world">>}},
-    _PartyConfigRef,
-    _WalletConfigRef,
-    _Options
-) ->
+inspect_withdrawal(_, Withdrawal, _, _, _) when
+    Withdrawal#wthd_domain_Withdrawal.contact_info#wthd_domain_ContactInfo.email =:= <<"shang.tsung@out.world">>
+->
     'fatal';
-inspect_withdrawal(_ID, _Withdrawal, _PartyConfigRef, _WalletConfigRef, Options) ->
+inspect_withdrawal(_, _, _, _, Options) ->
     binary_to_existing_atom(maps:get(<<"risk_score">>, Options, <<"high">>)).
 
 %%
