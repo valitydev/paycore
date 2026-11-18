@@ -27,6 +27,8 @@
 -type proxy_intent() ::
     dmsl_proxy_provider_thrift:'Intent'().
 
+-define(DEFAULT_RETRY_POLICY, #{max_attempts => 1, interval_ms => 0}).
+
 %%
 
 -spec collect_proxy_options(route()) -> dmsl_domain_thrift:'ProxyOptions'().
@@ -71,12 +73,23 @@ handle_recurrent_token_callback(Payload, ProxyContext, Route) ->
 
 -spec issue_call(woody:func(), woody:args(), route()) -> term().
 issue_call(Func, Args, Route) ->
+    ProxyOpts = genlib_app:env(hellgate, proxy_opts, #{}),
+    #{
+        max_attempts := Attempts,
+        interval_ms := Interval
+    } = maps:get(retry_policy, ProxyOpts, ?DEFAULT_RETRY_POLICY),
+    issue_call(Func, Args, Route, Interval, Attempts).
+
+issue_call(Func, Args, Route, Interval, Attempts) ->
     CallID = hg_utils:unique_id(),
     try hg_woody_wrapper:call(proxy_provider, Func, Args, get_call_options(Route)) of
         Result ->
             _ = notify_fault_detector(finish, Route, CallID),
             Result
     catch
+        error:{woody_error, {internal, resource_unavailable, _}}:_St when Attempts > 1 ->
+            timer:sleep(Interval),
+            issue_call(Func, Args, Route, Interval, Attempts - 1);
         error:{woody_error, _ErrorType} = Reason:St ->
             _ = notify_fault_detector(error, Route, CallID),
             erlang:raise(error, Reason, St)

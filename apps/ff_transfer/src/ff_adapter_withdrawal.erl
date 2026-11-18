@@ -109,6 +109,8 @@
 -export_type([quote_data/0]).
 -export_type([handle_callback_result/0]).
 
+-define(DEFAULT_RETRY_POLICY, #{max_attempts => 1, interval_ms => 0}).
+
 %%
 %% Accessors
 %%
@@ -160,7 +162,24 @@ get_quote(Adapter, Params, AOpt) ->
 
 call(Adapter, Function, Args) ->
     Request = {{dmsl_wthd_provider_thrift, 'Adapter'}, Function, Args},
-    ff_woody_client:call(Adapter, Request).
+    ProxyOpts = genlib_app:env(fistful, proxy_opts, #{}),
+    #{
+        max_attempts := Attempts,
+        interval_ms := Interval
+    } = maps:get(retry_policy, ProxyOpts, ?DEFAULT_RETRY_POLICY),
+    call(Adapter, Request, Interval, Attempts).
+
+call(Adapter, Request, Interval, Attempts) ->
+    try ff_woody_client:call(Adapter, Request) of
+        Result ->
+            Result
+    catch
+        error:{woody_error, {internal, resource_unavailable, _}}:_St when Attempts > 1 ->
+            timer:sleep(Interval),
+            call(Adapter, Request, Interval, Attempts - 1);
+        error:{woody_error, _ErrorType} = Reason:St ->
+            erlang:raise(error, Reason, St)
+    end.
 
 -spec decode_result
     (dmsl_wthd_provider_thrift:'ProcessResult'()) -> {ok, process_result()};
