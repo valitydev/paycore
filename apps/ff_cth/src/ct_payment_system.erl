@@ -584,6 +584,10 @@ domain_config(Config, Options) ->
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 34)
                 ),
                 delegate(
+                    condition(cost_in, {960000, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 35)
+                ),
+                delegate(
                     condition(cost_in, {1358, <<"RUB">>}),
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 60)
                 ),
@@ -803,6 +807,14 @@ domain_config(Config, Options) ->
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 34),
             {candidates, [
                 candidate({constant, true}, ?trm(3400))
+            ]}
+        ),
+
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 35),
+            {candidates, [
+                candidate({constant, true}, ?trm(3400)),
+                candidate({constant, true}, ?trm(3000))
             ]}
         ),
 
