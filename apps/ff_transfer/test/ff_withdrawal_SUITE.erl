@@ -235,7 +235,7 @@ risk_score_fatal_fail_test(_C) ->
         wallet_id => WalletID,
         body => {100, <<"RUB">>},
         %% NOTE Risk flag crutch via email from contact info; see it's rubber
-        %% tip in `ff_ct_inspector:inspect_withdrawal` implementation.
+        %% tip in `ff_ct_inspector_handler:inspect_withdrawal` implementation.
         contact_info => #{email => <<"shang.tsung@out.world">>}
     },
     ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),

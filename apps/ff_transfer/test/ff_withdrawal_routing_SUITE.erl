@@ -186,10 +186,6 @@ not_reduced_allow_route_test(C) ->
 
 -spec not_global_allow_route_test(config()) -> test_return().
 not_global_allow_route_test(C) ->
-    %% Cash amount value signals routing ruleset selection for terminal with
-    %% terms that accept only 'trusted' risk score. Thus, that single route must
-    %% be rejected and no route for transfer be found.
-    %% See `ct_payment_system:domain_config/2` body.
     Currency = <<"RUB">>,
     Cash = {940000, Currency},
     #{
@@ -214,6 +210,10 @@ not_global_allow_route_test(C) ->
 
 -spec risk_unacceptable_no_route_test(config()) -> test_return().
 risk_unacceptable_no_route_test(C) ->
+    %% Cash amount value signals routing ruleset selection for terminal with
+    %% terms that accept only 'trusted' risk score. Thus, that single route must
+    %% be rejected and no route for transfer be found.
+    %% See `ct_payment_system:domain_config/2` body.
     Currency = <<"RUB">>,
     Cash = {950000, Currency},
     #{

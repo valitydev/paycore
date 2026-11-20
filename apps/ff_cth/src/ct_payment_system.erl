@@ -130,7 +130,7 @@ start_processing_apps(Options) ->
                         <<"/fraudinspector">>,
                         {
                             {dmsl_proxy_inspector_thrift, 'InspectorProxy'},
-                            {ff_ct_inspector_handler, [{handler, ff_ct_inspector}]}
+                            {ff_ct_inspector_handler, []}
                         }
                     },
                     {
