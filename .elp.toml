@@ -1,0 +1,3 @@
+[eqwalizer]
+# NOTE Too many issues in a project
+enable_all = false

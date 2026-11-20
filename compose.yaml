@@ -33,7 +33,7 @@ services:
     command: /sbin/init
 
   dmt:
-    image: ghcr.io/valitydev/dominant-v2:sha-e9cd2a8
+    image: ghcr.io/valitydev/dominant-v2:sha-0c6e0ba-epic-XYZ-657-ft-withdrawal-risk-coverage
     command: /opt/dmt/bin/dmt foreground
     environment:
       DMT_KAFKA_ENABLED: "0"
@@ -115,7 +115,7 @@ services:
       retries: 20
 
   party-management:
-    image: ghcr.io/valitydev/party-management:sha-2690a46
+    image: ghcr.io/valitydev/party-management:sha-b06041e-epic-XYZ-657-ft-withdrawal-risk-coverage
     command: /opt/party-management/bin/party-management foreground
     volumes:
       - ./test/party-management/sys.config:/opt/party-management/releases/0.1/sys.config

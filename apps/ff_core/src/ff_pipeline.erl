@@ -7,6 +7,8 @@
 
 -module(ff_pipeline).
 
+%% -typing([eqwalizer]).
+
 -export([do/1]).
 -export([do/2]).
 -export([unwrap/1]).
