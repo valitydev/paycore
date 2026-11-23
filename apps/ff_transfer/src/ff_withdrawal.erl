@@ -4,8 +4,6 @@
 
 -module(ff_withdrawal).
 
-%% -typing([eqwalizer]).
-
 -include_lib("damsel/include/dmsl_domain_thrift.hrl").
 
 -type id() :: binary().
