@@ -174,6 +174,8 @@ validate_candidate(#domain_RoutingCandidate{allowed = {constant, true}}) ->
 validate_candidate(Candidate) ->
     throw({misconfiguration, {routing_candidate, Candidate}}).
 
+%% FIXME `hg_inspector` is from another (hellgate) app that requires this one
+%% (routing). Thus it must not use it here, but vice versa.
 -spec fill_blacklist(hg_inspector:blacklist_context(), [hg_route:t()]) -> [hg_route:t()].
 fill_blacklist(_BlCtx, []) ->
     [];
@@ -555,6 +557,8 @@ fill_blacklist_timeout_raises_transient_error() ->
     BlCtx = test_blacklist_context(hd(Routes)),
     HgCtx = op_context:create(#{woody_context => woody_context:new()}),
     ok = op_context:save(op_context:key(hellgate), HgCtx),
+    %% FIXME Routing should not read env entries for another (hellgate) application!
+    %% Maybe move tests into separate module in hellgate app.
     PrevTimeout = application:get_env(hellgate, inspect_timeout, infinity),
     PrevLimit = application:get_env(hellgate, inspect_parallel_limit, 10),
     ok = application:set_env(hellgate, inspect_timeout, 100),

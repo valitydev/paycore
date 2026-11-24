@@ -20,6 +20,8 @@
 -export([not_allow_route_test/1]).
 -export([not_reduced_allow_route_test/1]).
 -export([not_global_allow_route_test/1]).
+-export([risk_unacceptable_no_route_test/1]).
+-export([risk_unacceptable_alternative_route_test/1]).
 -export([adapter_unreachable_route_test/1]).
 -export([adapter_unreachable_route_retryable_test/1]).
 -export([adapter_unreachable_quote_test/1]).
@@ -66,6 +68,8 @@ groups() ->
                 not_allow_route_test,
                 not_reduced_allow_route_test,
                 not_global_allow_route_test,
+                risk_unacceptable_no_route_test,
+                risk_unacceptable_alternative_route_test,
                 adapter_unreachable_route_test
             ]},
             adapter_unreachable_route_retryable_test,
@@ -205,6 +209,55 @@ not_global_allow_route_test(C) ->
         {failed, #{code := <<"no_route_found">>}},
         await_final_withdrawal_status(WithdrawalID)
     ).
+
+-spec risk_unacceptable_no_route_test(config()) -> test_return().
+risk_unacceptable_no_route_test(C) ->
+    %% Cash amount value signals routing ruleset selection for terminal with
+    %% terms that accept only 'trusted' risk score. Thus, that single route must
+    %% be rejected and no route for transfer be found.
+    %% See `ct_payment_system:domain_config/2` body.
+    Currency = <<"RUB">>,
+    Cash = {950000, Currency},
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment(Cash, C),
+    WithdrawalID = genlib:bsuuid(),
+    WithdrawalParams = #{
+        id => WithdrawalID,
+        destination_id => DestinationID,
+        wallet_id => WalletID,
+        party_id => PartyID,
+        body => Cash,
+        external_id => WithdrawalID
+    },
+    ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
+    ?assertMatch(
+        {failed, #{code := <<"no_route_found">>}},
+        await_final_withdrawal_status(WithdrawalID)
+    ).
+
+-spec risk_unacceptable_alternative_route_test(config()) -> test_return().
+risk_unacceptable_alternative_route_test(C) ->
+    Currency = <<"RUB">>,
+    Cash = {960000, Currency},
+    #{
+        wallet_id := WalletID,
+        destination_id := DestinationID,
+        party_id := PartyID
+    } = prepare_standard_environment(Cash, C),
+    WithdrawalID = genlib:bsuuid(),
+    WithdrawalParams = #{
+        id => WithdrawalID,
+        destination_id => DestinationID,
+        wallet_id => WalletID,
+        party_id => PartyID,
+        body => Cash,
+        external_id => WithdrawalID
+    },
+    ok = ff_withdrawal_machine:create(WithdrawalParams, ff_entity_context:new()),
+    ?assertEqual(succeeded, await_final_withdrawal_status(WithdrawalID)).
 
 -spec adapter_unreachable_route_test(config()) -> test_return().
 adapter_unreachable_route_test(C) ->

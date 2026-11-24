@@ -127,6 +127,13 @@ start_processing_apps(Options) ->
                         }
                     },
                     {
+                        <<"/fraudinspector">>,
+                        {
+                            {dmsl_proxy_inspector_thrift, 'InspectorProxy'},
+                            {ff_ct_inspector_handler, []}
+                        }
+                    },
+                    {
                         <<"/binbase">>,
                         {{binbase_binbase_thrift, 'Binbase'}, {ff_ct_binbase_handler, []}}
                     }
@@ -573,6 +580,14 @@ domain_config(Config, Options) ->
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 33)
                 ),
                 delegate(
+                    condition(cost_in, {950000, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 34)
+                ),
+                delegate(
+                    condition(cost_in, {960000, <<"RUB">>}),
+                    ?ruleset(?PAYINST1_ROUTING_POLICIES + 35)
+                ),
+                delegate(
                     condition(cost_in, {1358, <<"RUB">>}),
                     ?ruleset(?PAYINST1_ROUTING_POLICIES + 60)
                 ),
@@ -785,6 +800,21 @@ domain_config(Config, Options) ->
             ?ruleset(?PAYINST1_ROUTING_POLICIES + 33),
             {candidates, [
                 candidate({constant, true}, ?trm(3300))
+            ]}
+        ),
+
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 34),
+            {candidates, [
+                candidate({constant, true}, ?trm(3400))
+            ]}
+        ),
+
+        routing_ruleset(
+            ?ruleset(?PAYINST1_ROUTING_POLICIES + 35),
+            {candidates, [
+                candidate({constant, true}, ?trm(3400)),
+                candidate({constant, true}, ?trm(3000))
             ]}
         ),
 
@@ -1017,7 +1047,7 @@ domain_config(Config, Options) ->
         ct_domain:system_account_set(?sas(1), <<"System">>, ?cur(<<"RUB">>)),
 
         ct_domain:inspector(?insp(1), <<"Low Life">>, ?prx(1), #{<<"risk_score">> => <<"low">>}),
-        ct_domain:proxy(?prx(1), <<"Inspector proxy">>),
+        ct_domain:proxy(?prx(1), <<"Inspector proxy">>, <<"http://localhost:8222/fraudinspector">>),
         ct_domain:proxy(?prx(2), <<"Mocket proxy">>, <<"http://localhost:8222/bank">>),
         ct_domain:proxy(?prx(3), <<"Quote proxy">>, <<"http://localhost:8222/quotebank">>),
         ct_domain:proxy(?prx(6), <<"Down proxy">>, <<"http://localhost:8222/downbank">>),
@@ -1322,6 +1352,19 @@ domain_config(Config, Options) ->
                 wallet = #domain_WalletProvisionTerms{
                     withdrawals = #domain_WithdrawalProvisionTerms{
                         global_allow = {constant, false}
+                    }
+                }
+            }
+        ),
+
+        ct_domain:withdrawal_terminal(
+            ?trm(3400),
+            ?prv(1),
+            #domain_ProvisionTermSet{
+                wallet = #domain_WalletProvisionTerms{
+                    withdrawals = #domain_WithdrawalProvisionTerms{
+                        allow = {constant, true},
+                        risk_coverage = {value, 'trusted'}
                     }
                 }
             }

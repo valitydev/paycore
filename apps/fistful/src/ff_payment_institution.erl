@@ -11,6 +11,7 @@
 -type payment_institution() :: #{
     id := id(),
     realm := realm(),
+    inspector := dmsl_domain_thrift:'InspectorSelector'(),
     system_accounts := dmsl_domain_thrift:'SystemAccountSetSelector'(),
     withdrawal_routing_rules := dmsl_domain_thrift:'RoutingRules'(),
     payment_system => dmsl_domain_thrift:'PaymentSystemSelector'()
@@ -37,6 +38,7 @@
 
 -export([ref/1]).
 -export([get/3]).
+-export([inspector/1]).
 -export([get_realm/2]).
 -export([system_accounts/2]).
 -export([payment_system/1]).
@@ -71,6 +73,10 @@ get(#domain_PaymentInstitutionRef{id = ID} = Ref, VS, DomainRevision) ->
     end);
 get(PaymentInstitutionID, VS, DomainRevision) ->
     get(ref(PaymentInstitutionID), VS, DomainRevision).
+
+-spec inspector(payment_institution()) -> {ok, ff_inspector:inspector_ref()} | {error, {misconfiguration, term()}}.
+inspector(#{inspector := Inspector}) ->
+    get_selector_value(inspector, Inspector).
 
 -spec get_realm(payinst_ref(), domain_revision()) ->
     {ok, realm()}
@@ -121,6 +127,7 @@ system_accounts(PaymentInstitution, DomainRevision) ->
 %%
 
 decode(ID, #domain_PaymentInstitution{
+    inspector = Inspector,
     wallet_system_account_set = SystemAccounts,
     withdrawal_routing_rules = WithdrawalRoutingRules,
     payment_system = PaymentSystem,
@@ -129,6 +136,7 @@ decode(ID, #domain_PaymentInstitution{
     genlib_map:compact(#{
         id => ID,
         realm => Realm,
+        inspector => Inspector,
         system_accounts => SystemAccounts,
         withdrawal_routing_rules => WithdrawalRoutingRules,
         payment_system => PaymentSystem

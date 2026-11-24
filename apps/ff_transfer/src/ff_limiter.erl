@@ -208,7 +208,8 @@ marshal_withdrawal(Withdrawal) ->
         %% TODO: change proto
         sender = #domain_PartyConfigRef{id = ff_account:party_id(WalletAccount)},
         receiver = #domain_PartyConfigRef{id = ff_account:party_id(DestinationAccount)},
-        client_identity = marshal_client_identity(ff_withdrawal:client_identity(Withdrawal))
+        client_identity = marshal_client_identity(ff_withdrawal:client_identity(Withdrawal)),
+        contact_info = marshal_contact_info(ff_withdrawal:contact_info(Withdrawal))
     }.
 
 -spec get_batch(request(), context()) -> [limit()] | no_return().
@@ -286,4 +287,12 @@ marshal_client_identity(#{customer_id := CustomerID} = ClientIdentity) ->
     #domain_ClientIdentity{
         customer_id = CustomerID,
         user_id = maps:get(user_id, ClientIdentity, undefined)
+    }.
+
+marshal_contact_info(undefined) ->
+    undefined;
+marshal_contact_info(ContactInfo) ->
+    #wthd_domain_ContactInfo{
+        phone_number = maps:get(phone_number, ContactInfo, undefined),
+        email = maps:get(email, ContactInfo, undefined)
     }.
