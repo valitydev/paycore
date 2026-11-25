@@ -88,7 +88,7 @@ endpoint(Name, Handler) ->
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
     ok = hg_customer_metrics:setup(),
-    ok = processing_server_metrics:setup(),
+    ok = processing_server:setup_metrics(),
     supervisor:start_link(?MODULE, []).
 
 -spec stop(any()) -> ok.

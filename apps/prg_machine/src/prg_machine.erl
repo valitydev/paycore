@@ -565,19 +565,16 @@ map_client_error(_Type, _NS, Error) ->
 -include_lib("eunit/include/eunit.hrl").
 
 -define(AUX_STATE_TEST_NS, aux_state_test_ns).
--define(TABLE, prg_machine_dispatch).
 -define(TEST_TIMEOUT, 5000).
 
 -spec test() -> _.
 
 -spec process_uses_registered_binding_test() -> _.
 process_uses_registered_binding_test() ->
-    {ok, _} = application:ensure_all_started(prg_machine),
     %% The namespace would have selected Hellgate under the old prefix rule.
     Binding = op_context:binding(fistful),
     #{registry_key := Key} = Binding,
-    Registration = #{handler => prg_machine_aux_state_test_handler, binding => Binding},
-    {ok, Registry} = prg_machine_registry:start_link([Registration]),
+    Registry = start_test_registry(Binding),
     try
         Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
         Process = #{process_id => <<"context-test">>, last_event_id => 0, history => [], aux_state => undefined},
@@ -589,7 +586,7 @@ process_uses_registered_binding_test() ->
 
 -spec aux_state_runtime_test_() -> _.
 aux_state_runtime_test_() ->
-    {setup, fun setup_aux_state/0, fun cleanup_aux_state/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(marshal_intent_omits_aux_state_without_auxst()),
         ?_test(collapse_survives_non_map_aux_state()),
         ?_test(business_exception_then_signal_does_not_corrupt_aux_state()),
@@ -598,44 +595,25 @@ aux_state_runtime_test_() ->
 
 -spec registry_runtime_test_() -> _.
 registry_runtime_test_() ->
-    {setup, fun setup_registry/0, fun cleanup_registry/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(lookup_unknown_namespace_returns_error()),
         ?_test(process_unknown_namespace_returns_error())
     ]}.
 
 -spec process_exception_test_() -> _.
 process_exception_test_() ->
-    {setup, fun setup_aux_state/0, fun cleanup_aux_state/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
-release_test_dispatch_table() ->
-    case {ets:info(?TABLE, owner), ets:info(?TABLE, size)} of
-        {Owner, 0} when Owner =:= self() ->
-            true = ets:delete(?TABLE),
-            ok;
-        _ ->
-            ok
-    end.
+setup_test_registry() ->
+    start_test_registry(op_context:binding(hellgate)).
 
--spec setup_aux_state() -> ok.
-setup_aux_state() ->
-    _ = application:load(prg_machine),
-    {ok, _} = application:ensure_all_started(progressor),
-    ok = prg_machine_registry:ensure_table(),
-    true = ets:insert(
-        ?TABLE,
-        {?AUX_STATE_TEST_NS, #{
-            handler => prg_machine_aux_state_test_handler,
-            binding => op_context:binding(hellgate)
-        }}
-    ),
-    ok.
-
--spec cleanup_aux_state(_) -> ok.
-cleanup_aux_state(_) ->
-    _ = ets:delete(?TABLE, ?AUX_STATE_TEST_NS),
-    release_test_dispatch_table().
+start_test_registry(Binding) ->
+    {ok, _} = application:ensure_all_started(prg_machine),
+    Registration = #{handler => prg_machine_aux_state_test_handler, binding => Binding},
+    {ok, Registry} = prg_machine_registry:start_link([Registration]),
+    Registry.
 
 -spec marshal_intent_omits_aux_state_without_auxst() -> _.
 marshal_intent_omits_aux_state_without_auxst() ->
@@ -699,15 +677,6 @@ notify_noop_omits_aux_state() ->
     },
     {ok, NotifyIntent} = process({notify, term_to_binary(#{payload => test}), Process}, Opts, <<>>),
     ?assertNot(maps:is_key(aux_state, NotifyIntent)).
-
--spec setup_registry() -> ok.
-setup_registry() ->
-    ok = prg_machine_registry:ensure_table(),
-    ok.
-
--spec cleanup_registry(_) -> ok.
-cleanup_registry(_) ->
-    release_test_dispatch_table().
 
 -spec lookup_unknown_namespace_returns_error() -> _.
 lookup_unknown_namespace_returns_error() ->

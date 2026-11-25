@@ -1,6 +1,7 @@
 -module(processing_server).
 
 -export([child_spec/2]).
+-export([setup_metrics/0]).
 
 -type endpoint() :: {woody:path(), woody:service(), module() | {module(), term()}}.
 -type health_check() :: {liveness | readiness, erl_health:check()}.
@@ -20,6 +21,18 @@ child_spec(ID, #{options := Options, endpoints := Endpoints, wrapper := Wrapper,
         handlers => [wrap_endpoint(Endpoint, Wrapper) || Endpoint <- Endpoints],
         additional_routes => [{"/metrics/[:registry]", prometheus_cowboy2_handler, []} | HealthRoutes]
     }).
+
+-spec setup_metrics() -> ok.
+setup_metrics() ->
+    ok = woody_ranch_prometheus_collector:setup(),
+    ok = woody_hackney_prometheus_collector:setup(),
+    _ = prometheus_histogram:declare([
+        {name, woody_wrapper_processing_duration_ms},
+        {help, "Duration of processing handle_function in millisecond"},
+        {buckets, [50, 150, 300, 500, 750, 1000]},
+        {labels, [handler, function]}
+    ]),
+    ok.
 
 wrap_endpoint({Path, Service, Handler}, {Wrapper, Options}) ->
     {Path, {Service, {Wrapper, Options#{handler => Handler}}}}.

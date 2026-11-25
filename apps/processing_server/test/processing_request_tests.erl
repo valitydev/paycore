@@ -2,7 +2,13 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+-export([handle_function/3]).
+
 -spec test() -> _.
+
+-spec handle_function(woody:func(), {fun((term()) -> term())}, term()) -> term().
+handle_function(_Function, {Handle}, Options) ->
+    Handle(Options).
 
 -spec request_contract_test_() -> _.
 request_contract_test_() ->
@@ -10,10 +16,10 @@ request_contract_test_() ->
 
 setup() ->
     {ok, _} = application:ensure_all_started(processing_server),
-    processing_server_metrics:setup().
+    processing_server:setup_metrics().
 
 hg_reply() ->
-    Options = #{handler => processing_request_test_handler, ns => <<"test">>},
+    Options = #{handler => ?MODULE, ns => <<"test">>},
     Deadline = woody_deadline:from_timeout(60000),
     Context = woody_context:set_deadline(Deadline, woody_context:new()),
     Handle = fun(HandlerOptions) ->
@@ -27,7 +33,7 @@ hg_reply() ->
 ff_reply() ->
     PartyClient = party_client:create_client(),
     HandlerOptions = #{setting => value},
-    Options = #{handler => {processing_request_test_handler, HandlerOptions}, party_client => PartyClient},
+    Options = #{handler => {?MODULE, HandlerOptions}, party_client => PartyClient},
     Handle = fun(ActualOptions) ->
         ?assertEqual(HandlerOptions, ActualOptions),
         Context = op_context:load(op_context:key(fistful)),
@@ -41,7 +47,7 @@ ff_reply() ->
 
 hg_exception_clears_context() ->
     Handle = fun throw_business_failure/1,
-    Options = #{handler => processing_request_test_handler},
+    Options = #{handler => ?MODULE},
     ?assertThrow(
         business_failure,
         hg_woody_service_wrapper:handle_function(hg_failure, {Handle}, woody_context:new(), Options)

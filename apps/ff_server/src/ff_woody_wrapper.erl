@@ -30,13 +30,12 @@
 %% API
 
 -spec handle_function(woody:func(), woody:args(), woody_context:ctx(), options()) -> {ok, woody:result()} | no_return().
-handle_function(Func, Args, WoodyContext, #{handler := Handler} = Opts) ->
+handle_function(Func, Args, WoodyContext, #{handler := Handler, party_client := _} = Opts) ->
     {HandlerMod, HandlerOptions} = get_handler_opts(Handler),
     RequestOptions = Opts#{
         binding => op_context:binding(fistful),
         handler => HandlerMod,
-        function => Func,
-        party_client => maps:get(party_client, Opts)
+        function => Func
     },
     Handle = fun() -> HandlerMod:handle_function(Func, Args, HandlerOptions) end,
     processing_request:run(WoodyContext, RequestOptions, Handle).

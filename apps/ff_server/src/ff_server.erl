@@ -38,7 +38,7 @@ start() ->
 
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
-    ok = processing_server_metrics:setup(),
+    ok = processing_server:setup_metrics(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec stop(any()) -> ok.

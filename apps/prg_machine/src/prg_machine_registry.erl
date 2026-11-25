@@ -11,14 +11,11 @@
 -export([start_link/1]).
 -export([lookup/1]).
 -export([lookup_registration/1]).
--export([ensure_table/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -type registration() :: #{handler := module(), binding := op_context:binding()}.
 -type entry() :: {prg_machine:namespace(), registration()}.
-
--export_type([registration/0]).
 
 -record(state, {}).
 
@@ -67,19 +64,9 @@ prepare_entries([#{handler := Handler, binding := _Binding} = Registration | Res
         false -> prepare_entries(Rest, Entries#{NS => Registration})
     end.
 
--spec ensure_table() -> ok.
-ensure_table() ->
-    case ets:info(?TABLE) of
-        undefined ->
-            _ = ets:new(?TABLE, [named_table, set, protected, {read_concurrency, true}]),
-            ok;
-        _ ->
-            ok
-    end.
-
 -spec init([entry()]) -> {ok, state()}.
 init(Entries) ->
-    ok = ensure_table(),
+    _ = ets:new(?TABLE, [named_table, set, protected, {read_concurrency, true}]),
     true = ets:insert(?TABLE, Entries),
     {ok, #state{}}.
 

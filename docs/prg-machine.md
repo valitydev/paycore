@@ -221,10 +221,9 @@ meck:expect(prg_machine, process, fun process/3).
 
 1. `sys.config` — `client => prg_machine`
 2. `-behaviour(prg_machine)` + callbacks (`apply_event/4` для `collapse/2`)
-3. Для HG регистрируется доменный модуль, для FF — модуль `*_machine`, который вызывает домен
+3. Запись `#{handler => Handler, binding => Binding}` в `hellgate.erl` или `ff_server.erl`. Для HG handler — доменный модуль, для FF — `*_machine`
 4. Клиентский слой — только `prg_machine:*` (или `ff_machine_lib` для FF)
-5. Запись `#{handler => Handler, binding => Binding}` в списке для `prg_machine_registry:get_child_spec/1` в `hellgate.erl` или `ff_server.erl`
-6. CT suite
+5. CT suite
 
 ---
 
@@ -246,7 +245,7 @@ rg 'prg_machine_client|prg_machine_processor|prg_machine_env' apps/  # 0
 | Путь | Зачем |
 |------|-------|
 | `apps/prg_machine/src/prg_machine.erl` | behaviour, client API, `process/3`, marshal_intent, eunit |
-| `apps/prg_machine/src/prg_machine_registry.erl` | namespace → handler |
+| `apps/prg_machine/src/prg_machine_registry.erl` | namespace → handler и binding |
 | `apps/prg_machine/src/prg_action.erl` | timer → wire |
 | `apps/op_context/src/op_context.erl` | woody/party context, env scoping |
 | `apps/ff_transfer/src/ff_machine_lib.erl` | FF repair/history/helpers |

@@ -1,10 +1,6 @@
 -module(processing_request).
 
 -export([run/3]).
--export([create_context/2]).
--export([ensure_deadline/2]).
-
--export_type([options/0]).
 
 -type options() :: #{
     binding := op_context:binding(),
@@ -22,7 +18,8 @@
 run(WoodyContext0, #{binding := Binding, handler := Handler, function := Function} = Options, Handle) ->
     #{registry_key := Key, cleanup_mode := CleanupMode} = Binding,
     WoodyContext = ensure_deadline(WoodyContext0, Options),
-    Context = create_context(WoodyContext, Options),
+    ContextOptions = maps:with([party_client], Options),
+    Context = op_context:create(ContextOptions#{woody_context => WoodyContext}),
     ok = op_context:save(Key, Context),
     try
         measure(Handler, Function, Handle)
@@ -30,12 +27,6 @@ run(WoodyContext0, #{binding := Binding, handler := Handler, function := Functio
         op_context:cleanup(Key, CleanupMode)
     end.
 
--spec create_context(woody_context:ctx(), map()) -> op_context:context().
-create_context(WoodyContext, Options) ->
-    ContextOptions = maps:with([party_client], Options),
-    op_context:create(ContextOptions#{woody_context => WoodyContext}).
-
--spec ensure_deadline(woody_context:ctx(), map()) -> woody_context:ctx().
 ensure_deadline(WoodyContext, Options) ->
     case woody_context:get_deadline(WoodyContext) of
         undefined ->
