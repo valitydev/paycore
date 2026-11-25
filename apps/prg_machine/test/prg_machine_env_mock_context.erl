@@ -7,11 +7,11 @@ reset() ->
     persistent_term:put({?MODULE, events}, []),
     ok.
 
--spec events() -> [{context_bound, op_context:scope()}].
+-spec events() -> [{context_bound, op_context:binding()}].
 events() ->
     persistent_term:get({?MODULE, events}, []).
 
--spec record({context_bound, op_context:scope()}) -> ok.
+-spec record({context_bound, op_context:binding()}) -> ok.
 record(Event) ->
     Events = persistent_term:get({?MODULE, events}, []),
     persistent_term:put({?MODULE, events}, Events ++ [Event]).

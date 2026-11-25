@@ -10,8 +10,6 @@
 -export([set_hook/2]).
 -export([clear_hook/1]).
 
--define(DISPATCH_TABLE, prg_machine_dispatch).
-
 -spec load_per_suite() -> ok.
 load_per_suite() ->
     case lists:member(prg_machine, meck:mocked()) of
@@ -59,9 +57,9 @@ call_original_process(Call, Opts, BinCtx) ->
 -dialyzer({nowarn_function, call_original_process/3}).
 
 handler_module(NS) ->
-    case ets:lookup(?DISPATCH_TABLE, NS) of
-        [{NS, Handler}] ->
+    case prg_machine_registry:lookup(NS) of
+        {ok, Handler} ->
             Handler;
-        [] ->
-            erlang:error({unknown_namespace, NS})
+        {error, Reason} ->
+            erlang:error(Reason)
     end.

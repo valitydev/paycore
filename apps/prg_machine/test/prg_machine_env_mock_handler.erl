@@ -21,24 +21,28 @@ namespace() ->
     env_test_ns.
 
 -spec init(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
-init(_Args, #{namespace := NS}) ->
-    Scope = op_context:scope_for_namespace(NS),
-    try
-        _ = op_context:load(op_context:key(Scope)),
-        prg_machine_env_mock_context:record({context_bound, Scope})
-    catch
-        _:_ ->
-            ok
-    end,
+init(_Args, Machine) ->
+    ok = record_context(Machine),
     #{events => [], action => idle}.
 
 -spec process_signal(prg_machine:signal(), prg_machine:machine()) -> prg_machine:result().
-process_signal(_Signal, _Machine) ->
+process_signal(_Signal, Machine) ->
+    ok = record_context(Machine),
     #{events => [], action => idle}.
 
 -spec process_call(prg_machine:call(), prg_machine:machine()) -> {prg_machine:response(), prg_machine:result()}.
-process_call(_Call, _Machine) ->
+process_call({raise, Class, Reason}, Machine) ->
+    ok = record_context(Machine),
+    erlang:raise(Class, Reason, []);
+process_call(_Call, Machine) ->
+    ok = record_context(Machine),
     {ok, #{events => [], action => idle}}.
+
+record_context(#{namespace := NS}) ->
+    {ok, #{binding := Binding}} = prg_machine_registry:lookup_registration(NS),
+    #{registry_key := Key} = Binding,
+    _ = op_context:load(Key),
+    prg_machine_env_mock_context:record({context_bound, Binding}).
 
 -spec process_repair(prg_machine:args(), prg_machine:machine()) -> prg_machine:result() | {error, term()}.
 process_repair(_Args, _Machine) ->

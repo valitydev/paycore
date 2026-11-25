@@ -1,6 +1,6 @@
 -module(prg_machine_registry).
 
-%%% Namespace -> handler module registry (ETS owner).
+%%% Namespace -> handler and operation context binding (ETS owner).
 
 -behaviour(gen_server).
 
@@ -10,38 +10,61 @@
 -export([get_child_spec/1]).
 -export([start_link/1]).
 -export([lookup/1]).
+-export([lookup_registration/1]).
 -export([ensure_table/0]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--record(state, {
-    handlers :: [module()]
-}).
+-type registration() :: #{handler := module(), binding := op_context:binding()}.
+-type entry() :: {prg_machine:namespace(), registration()}.
+
+-export_type([registration/0]).
+
+-record(state, {}).
 
 -type state() :: #state{}.
 
--spec get_child_spec([module()]) -> supervisor:child_spec().
-get_child_spec(Handlers) ->
+-spec get_child_spec([registration()]) -> supervisor:child_spec().
+get_child_spec(Registrations) ->
     #{
         id => prg_machine_registry,
-        start => {?MODULE, start_link, [Handlers]},
+        start => {?MODULE, start_link, [Registrations]},
         restart => permanent,
         shutdown => 5000,
         type => worker,
         modules => [?MODULE]
     }.
 
--spec start_link([module()]) -> {ok, pid()} | {error, term()}.
-start_link(Handlers) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Handlers, []).
+-spec start_link([registration()]) -> {ok, pid()} | {error, term()}.
+start_link(Registrations) ->
+    case prepare_entries(Registrations, #{}) of
+        {ok, Entries} -> gen_server:start_link({local, ?SERVER}, ?MODULE, Entries, []);
+        {error, _} = Error -> Error
+    end.
 
 -spec lookup(prg_machine:namespace()) -> {ok, module()} | {error, {unknown_namespace, prg_machine:namespace()}}.
 lookup(NS) ->
+    case lookup_registration(NS) of
+        {ok, #{handler := Handler}} -> {ok, Handler};
+        {error, _} = Error -> Error
+    end.
+
+-spec lookup_registration(prg_machine:namespace()) ->
+    {ok, registration()} | {error, {unknown_namespace, prg_machine:namespace()}}.
+lookup_registration(NS) ->
     case ets:lookup(?TABLE, NS) of
-        [{NS, Handler}] ->
-            {ok, Handler};
-        [] ->
-            {error, {unknown_namespace, NS}}
+        [{NS, Registration}] -> {ok, Registration};
+        [] -> {error, {unknown_namespace, NS}}
+    end.
+
+%% Resolve and validate all namespaces before starting the owner or publishing entries.
+prepare_entries([], Entries) ->
+    {ok, maps:to_list(Entries)};
+prepare_entries([#{handler := Handler, binding := _Binding} = Registration | Rest], Entries) ->
+    NS = prg_machine:handler_namespace(Handler),
+    case maps:is_key(NS, Entries) of
+        true -> {error, {duplicate_namespace, NS}};
+        false -> prepare_entries(Rest, Entries#{NS => Registration})
     end.
 
 -spec ensure_table() -> ok.
@@ -54,11 +77,11 @@ ensure_table() ->
             ok
     end.
 
--spec init([module()]) -> {ok, state()}.
-init(Handlers) ->
+-spec init([entry()]) -> {ok, state()}.
+init(Entries) ->
     ok = ensure_table(),
-    true = ets:insert(?TABLE, [{prg_machine:handler_namespace(H), H} || H <- Handlers]),
-    {ok, #state{handlers = Handlers}}.
+    true = ets:insert(?TABLE, Entries),
+    {ok, #state{}}.
 
 -spec handle_call(term(), {pid(), term()}, state()) -> {reply, term(), state()}.
 handle_call(_Request, _From, State) ->

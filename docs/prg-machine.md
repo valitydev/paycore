@@ -47,7 +47,7 @@ sequenceDiagram
 | Модуль | Роль |
 |--------|------|
 | `prg_machine` | behaviour, client API (`start` / `call` / `get` / `repair` / `notify` / `remove`), `process/3`, `collapse` / `emit_events`, term codec, event marshal, env scoping |
-| `prg_machine_registry` | ETS `{Namespace, Handler}`; owner-процесс + `get_child_spec/1` |
+| `prg_machine_registry` | ETS `{Namespace, #{handler := Handler, binding := Binding}}`, owner-процесс и `get_child_spec/1` |
 | `prg_action` | `{timeout, Sec}` / `{deadline, Dt}` → wire `action()`; scheduling helpers |
 | `ff_machine_lib` | общие FF-хелперы: create/get/repair/history, `to_prg_result`, event/aux_state codec |
 
@@ -56,10 +56,10 @@ sequenceDiagram
 ### `process/3`
 
 ```
-registry lookup
+registry lookup_registration: handler + binding
   → decode_rpc_context + attach otel
-  → ensure_deadline_set (default 30s, `default_handling_timeout` в opts)
-  → run_scoped: op_context:env_enter / env_leave (если `context_binding` в opts)
+  → ensure_deadline_set (ограничение по `handling_timeout` от Progressor)
+  → run_scoped: op_context:env_enter / env_leave с binding из registry
   → unmarshal_machine
   → dispatch (init | call | repair | notify | timeout)
   → marshal_process_result
@@ -69,7 +69,7 @@ registry lookup
 - Исключение в домене → `{error, {exception, Class, Reason}}` + log (stacktrace только в логах).
 - `env_leave` в `after`, ошибки leave логируются, не маскируют результат dispatch.
 
-**Контекст RPC:** `op_context:current_woody_context/0` — hellgate-binding, затем fistful-binding, иначе fresh ctx + warning (заменяет старый `woody_context_loader` app-env hook). В `process/3` — `env_enter`/`env_leave` по `context_binding` из `sys.config` (HG strict / FF lenient).
+**Контекст RPC.** `process/3` получает handler и binding одной записью из registry. `hellgate:init/1` регистрирует машины с `op_context:binding(hellgate)` и строгой очисткой, `ff_server:init/1` — с `op_context:binding(fistful)` и мягкой очисткой. Для исходящих вызовов `current_woody_context/0` ищет контекст HG, затем FF, а при отсутствии обоих создаёт новый контекст и пишет предупреждение.
 
 **События:** timestamp пишется в progressor как microsecond integer; при чтении — machinery-формат `{calendar:datetime(), Micro}`. Metadata пишет оба ключа `<<"format_version">>` и `<<"format">>`. FF payload — legacy `term_to_binary({bin, ThriftBin})`; HG payload — `term_to_binary(msgpack)`.
 
@@ -141,9 +141,7 @@ Orphan NS (`ff/identity`, `ff/wallet_v2`, HG `customer`, `recurrent_paytools`) �
 processor => #{
     client => prg_machine,
     options => #{
-        ns => <atom>,
-        context_binding => #{registry_key => ..., cleanup_mode => strict | lenient},
-        default_handling_timeout => 30000   %% optional, woody deadline default
+        ns => <atom>
     }
 }
 ```
@@ -192,7 +190,7 @@ meck:expect(prg_machine, process, fun process/3).
 
 ### Runtime eunit в `prg_machine.erl`
 
-- `context_binding` scopes `env_enter`/`env_leave`
+- `env_enter` и `env_leave` используют binding из registry независимо от префикса namespace
 - aux_state omit при noop notify / business exception
 - `{unknown_namespace, NS}` на lookup и process
 - exception conform progressor wire format
@@ -221,11 +219,11 @@ meck:expect(prg_machine, process, fun process/3).
 
 ## 6. Новый namespace
 
-1. `sys.config` — `client => prg_machine`, `context_binding`
+1. `sys.config` — `client => prg_machine`
 2. `-behaviour(prg_machine)` + callbacks (`apply_event/4` для `collapse/2`)
-3. HG: доменный модуль в `prg_machine_registry:get_child_spec/1`. FF: тонкий `*_machine` + домен
+3. Для HG регистрируется доменный модуль, для FF — модуль `*_machine`, который вызывает домен
 4. Клиентский слой — только `prg_machine:*` (или `ff_machine_lib` для FF)
-5. Handler в `get_child_spec` (`hellgate.erl` / `ff_server.erl`)
+5. Запись `#{handler => Handler, binding => Binding}` в списке для `prg_machine_registry:get_child_spec/1` в `hellgate.erl` или `ff_server.erl`
 6. CT suite
 
 ---
