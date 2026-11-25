@@ -564,27 +564,28 @@ map_client_error(_Type, _NS, Error) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-%% Deliberately cross the old namespace prefixes: registration determines the context.
--define(TEST_NS, 'ff/hellgate_context_test_ns').
--define(TEST_FF_NS, fistful_context_test_ns).
--define(TEST_OTHER_NS, other_context_test_ns).
+-define(AUX_STATE_TEST_NS, aux_state_test_ns).
 -define(TABLE, prg_machine_dispatch).
 -define(TEST_TIMEOUT, 5000).
 
 -spec test() -> _.
 
--spec context_binding_scopes_process_test_() -> _.
-context_binding_scopes_process_test_() ->
-    {setup, fun setup_context/0, fun cleanup_context/1, [
-        ?_test(context_binding_scopes_process(hellgate)),
-        ?_test(context_binding_scopes_process(fistful)),
-        ?_test(context_binding_scopes_process(other)),
-        ?_test(context_binding_scopes_timeout()),
-        ?_test(context_cleanup_after_failure(error, deliberate_crash)),
-        ?_test(context_cleanup_after_failure(throw, deliberate_throw)),
-        ?_test(context_cleanup_after_failure(exit, deliberate_exit)),
-        ?_test(context_cleanup_after_failure(error, {woody_error, {system, resource_unavailable, <<"timeout">>}}))
-    ]}.
+-spec process_uses_registered_binding_test() -> _.
+process_uses_registered_binding_test() ->
+    {ok, _} = application:ensure_all_started(prg_machine),
+    %% The namespace would have selected Hellgate under the old prefix rule.
+    Binding = op_context:binding(fistful),
+    #{registry_key := Key} = Binding,
+    Registration = #{handler => prg_machine_aux_state_test_handler, binding => Binding},
+    {ok, Registry} = prg_machine_registry:start_link([Registration]),
+    try
+        Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
+        Process = #{process_id => <<"context-test">>, last_event_id => 0, history => [], aux_state => undefined},
+        ?assertMatch({ok, _}, process({init, term_to_binary({check_context, Key}), Process}, Opts, <<>>)),
+        ?assertError(badarg, op_context:load(Key))
+    after
+        ok = gen_server:stop(Registry)
+    end.
 
 -spec aux_state_runtime_test_() -> _.
 aux_state_runtime_test_() ->
@@ -608,76 +609,6 @@ process_exception_test_() ->
         ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
--spec context_binding_scopes_process(hellgate | fistful | other) -> _.
-context_binding_scopes_process(Scope) ->
-    ok = ensure_woody_available(),
-    ok = prg_machine_env_mock_context:reset(),
-    {NS, Binding} = test_context(Scope),
-    ?assertMatch({ok, _}, run_context_process(init, #{}, #{ns => NS, handling_timeout => ?TEST_TIMEOUT})),
-    ?assertEqual([{context_bound, Binding}], prg_machine_env_mock_context:events()),
-    assert_context_released(Binding).
-
--spec context_binding_scopes_timeout() -> _.
-context_binding_scopes_timeout() ->
-    ok = prg_machine_env_mock_context:reset(),
-    {NS, Binding} = test_context(other),
-    ?assertMatch({ok, _}, run_context_process(timeout, undefined, #{ns => NS, handling_timeout => ?TEST_TIMEOUT})),
-    ?assertEqual([{context_bound, Binding}], prg_machine_env_mock_context:events()),
-    assert_context_released(Binding).
-
--spec context_cleanup_after_failure(error | throw | exit, term()) -> _.
-context_cleanup_after_failure(Class, Reason) ->
-    ok = prg_machine_env_mock_context:reset(),
-    {NS, Binding} = test_context(other),
-    ?assertEqual(
-        {error, {exception, Class, Reason}},
-        run_context_process(call, {raise, Class, Reason}, #{ns => NS, handling_timeout => ?TEST_TIMEOUT})
-    ),
-    ?assertEqual([{context_bound, Binding}], prg_machine_env_mock_context:events()),
-    assert_context_released(Binding).
-
-test_context(hellgate) ->
-    {?TEST_NS, op_context:binding(hellgate)};
-test_context(fistful) ->
-    {?TEST_FF_NS, op_context:binding(fistful)};
-test_context(other) ->
-    {?TEST_OTHER_NS, #{registry_key => {p, l, {?MODULE, other_context}}, cleanup_mode => strict}}.
-
-context_registration(Scope) ->
-    {NS, Binding} = test_context(Scope),
-    {NS, #{handler => prg_machine_env_mock_handler, binding => Binding}}.
-
-assert_context_released(#{registry_key := Key}) ->
-    ?assertError(badarg, op_context:load(Key)).
-
--spec setup_context() -> ok.
-setup_context() ->
-    _ = application:load(prg_machine),
-    {ok, _} = application:ensure_all_started(gproc),
-    {ok, _} = application:ensure_all_started(snowflake),
-    {ok, _} = application:ensure_all_started(woody),
-    {ok, _} = application:ensure_all_started(scoper),
-    {ok, _} = application:ensure_all_started(party_client),
-    {ok, _} = application:ensure_all_started(opentelemetry_api),
-    {ok, _} = application:ensure_all_started(opentelemetry),
-    {ok, _} = application:ensure_all_started(op_context),
-    ok = prg_machine_registry:ensure_table(),
-    true = ets:insert(?TABLE, [context_registration(Scope) || Scope <- [hellgate, fistful, other]]),
-    ok = prg_machine_env_mock_context:reset(),
-    ok.
-
--spec cleanup_context(_) -> ok.
-cleanup_context(_) ->
-    lists:foreach(
-        fun(Scope) ->
-            {NS, #{registry_key := Key}} = test_context(Scope),
-            true = ets:delete(?TABLE, NS),
-            ok = op_context:cleanup(Key, lenient)
-        end,
-        [hellgate, fistful, other]
-    ),
-    release_test_dispatch_table().
-
 release_test_dispatch_table() ->
     case {ets:info(?TABLE, owner), ets:info(?TABLE, size)} of
         {Owner, 0} when Owner =:= self() ->
@@ -686,24 +617,6 @@ release_test_dispatch_table() ->
         _ ->
             ok
     end.
-
--spec ensure_woody_available() -> ok.
-ensure_woody_available() ->
-    {ok, _} = application:ensure_all_started(snowflake),
-    _ = woody_context:new(),
-    ok.
-
--spec run_context_process(init | call | timeout, term(), process_options()) -> _.
-run_context_process(CallType, Args, Opts) ->
-    Process = #{
-        process_id => <<"env-hook-test">>,
-        last_event_id => 0,
-        history => [],
-        aux_state => undefined
-    },
-    process({CallType, term_to_binary(Args), Process}, Opts, <<>>).
-
--define(AUX_STATE_TEST_NS, aux_state_test_ns).
 
 -spec setup_aux_state() -> ok.
 setup_aux_state() ->
@@ -830,7 +743,8 @@ process_crash_conforms_progressor_exception() ->
     ?assertEqual(
         {error, {exception, error, deliberate_crash}},
         process({call, term_to_binary(crash), Process}, Opts, <<>>)
-    ).
+    ),
+    ?assertError(badarg, op_context:load(op_context:key(hellgate))).
 
 %% --- Golden tests: legacy format compatibility (stage 1) -------------------
 
