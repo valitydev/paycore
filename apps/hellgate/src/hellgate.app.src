@@ -12,6 +12,7 @@
         progressor,
         op_context,
         prg_machine,
+        processing_server,
         hg_proto,
         exrates_proto,
         routing,

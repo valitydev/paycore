@@ -285,14 +285,14 @@ history_range(Offset, Limit, Direction) ->
     {ok, map()} | {error, term()}.
 process({CallType, BinArgs, Process}, #{ns := NS} = Opts, BinCtx) ->
     try
-        case prg_machine_registry:lookup(NS) of
+        case prg_machine_registry:lookup_registration(NS) of
             {error, _} = Error ->
                 Error;
-            {ok, Handler} ->
+            {ok, #{handler := Handler, binding := Binding}} ->
                 {WoodyCtx0, OtelCtx} = decode_rpc_context(BinCtx),
                 ok = woody_rpc_helper:attach_otel_context(OtelCtx),
                 WoodyCtx = ensure_deadline_set(WoodyCtx0, Opts),
-                run_scoped(Opts, WoodyCtx, fun() ->
+                run_scoped(Binding, WoodyCtx, fun() ->
                     LastEventID = maps:get(last_event_id, Process),
                     Machine = unmarshal_machine(Handler, NS, Process),
                     Result = dispatch(Handler, CallType, BinArgs, Machine),
@@ -501,8 +501,7 @@ decode_rpc_context(<<>>) ->
 decode_rpc_context(Bin) ->
     woody_rpc_helper:decode_rpc_context(decode_term(Bin)).
 
-run_scoped(#{ns := NS}, WoodyCtx, Fun) when is_function(Fun, 0) ->
-    Binding = op_context:binding_for_namespace(NS),
+run_scoped(Binding, WoodyCtx, Fun) when is_function(Fun, 0) ->
     ok = op_context:env_enter(WoodyCtx, Binding),
     try
         Fun()
@@ -565,23 +564,29 @@ map_client_error(_Type, _NS, Error) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
--define(TEST_NS, env_test_ns).
--define(TEST_FF_NS, 'ff/env_test_ns').
--define(TABLE, prg_machine_dispatch).
+-define(AUX_STATE_TEST_NS, aux_state_test_ns).
 -define(TEST_TIMEOUT, 5000).
 
 -spec test() -> _.
 
--spec context_binding_scopes_process_test_() -> _.
-context_binding_scopes_process_test_() ->
-    {setup, fun setup_env_hook_test/0, fun cleanup_env_hook_test/1, [
-        ?_test(context_binding_scopes_process(hellgate)),
-        ?_test(context_binding_scopes_process(fistful))
-    ]}.
+-spec process_uses_registered_binding_test() -> _.
+process_uses_registered_binding_test() ->
+    %% The namespace would have selected Hellgate under the old prefix rule.
+    Binding = op_context:binding(fistful),
+    #{registry_key := Key} = Binding,
+    Registry = start_test_registry(Binding),
+    try
+        Opts = #{ns => ?AUX_STATE_TEST_NS, handling_timeout => ?TEST_TIMEOUT},
+        Process = #{process_id => <<"context-test">>, last_event_id => 0, history => [], aux_state => undefined},
+        ?assertMatch({ok, _}, process({init, term_to_binary({check_context, Key}), Process}, Opts, <<>>)),
+        ?assertError(badarg, op_context:load(Key))
+    after
+        ok = gen_server:stop(Registry)
+    end.
 
 -spec aux_state_runtime_test_() -> _.
 aux_state_runtime_test_() ->
-    {setup, fun setup_aux_state_test/0, fun cleanup_aux_state_test/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(marshal_intent_omits_aux_state_without_auxst()),
         ?_test(collapse_survives_non_map_aux_state()),
         ?_test(business_exception_then_signal_does_not_corrupt_aux_state()),
@@ -590,94 +595,25 @@ aux_state_runtime_test_() ->
 
 -spec registry_runtime_test_() -> _.
 registry_runtime_test_() ->
-    {setup, fun setup_registry_test/0, fun cleanup_registry_test/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(lookup_unknown_namespace_returns_error()),
         ?_test(process_unknown_namespace_returns_error())
     ]}.
 
 -spec process_exception_test_() -> _.
 process_exception_test_() ->
-    {setup, fun setup_aux_state_test/0, fun cleanup_aux_state_test/1, [
+    {setup, fun setup_test_registry/0, fun gen_server:stop/1, [
         ?_test(process_crash_conforms_progressor_exception())
     ]}.
 
--spec context_binding_scopes_process(hellgate | fistful) -> _.
-context_binding_scopes_process(Scope) ->
-    ok = ensure_woody_available(),
-    ok = prg_machine_env_mock_context:reset(),
-    NS =
-        case Scope of
-            hellgate -> ?TEST_NS;
-            fistful -> ?TEST_FF_NS
-        end,
-    ?assertMatch({ok, _}, run_env_hook_process(#{ns => NS, handling_timeout => ?TEST_TIMEOUT})),
-    ?assertEqual([{context_bound, Scope}], prg_machine_env_mock_context:events()).
+setup_test_registry() ->
+    start_test_registry(op_context:binding(hellgate)).
 
--spec setup_env_hook_test() -> ok.
-setup_env_hook_test() ->
-    _ = application:load(prg_machine),
-    {ok, _} = application:ensure_all_started(gproc),
-    {ok, _} = application:ensure_all_started(snowflake),
-    {ok, _} = application:ensure_all_started(woody),
-    {ok, _} = application:ensure_all_started(scoper),
-    {ok, _} = application:ensure_all_started(party_client),
-    {ok, _} = application:ensure_all_started(opentelemetry_api),
-    {ok, _} = application:ensure_all_started(opentelemetry),
-    {ok, _} = application:ensure_all_started(op_context),
-    _ = ensure_env_hook_dispatch_table(),
-    true = ets:insert(?TABLE, [
-        {?TEST_NS, prg_machine_env_mock_handler},
-        {?TEST_FF_NS, prg_machine_env_mock_handler}
-    ]),
-    ok = prg_machine_env_mock_context:reset(),
-    ok.
-
--spec cleanup_env_hook_test(_) -> ok.
-cleanup_env_hook_test(_) ->
-    _ = ets:delete(?TABLE, ?TEST_NS),
-    _ = ets:delete(?TABLE, ?TEST_FF_NS),
-    ok = op_context:cleanup(op_context:key(hellgate), lenient),
-    ok = op_context:cleanup(fistful),
-    ok.
-
--spec ensure_woody_available() -> ok.
-ensure_woody_available() ->
-    {ok, _} = application:ensure_all_started(snowflake),
-    _ = woody_context:new(),
-    ok.
-
--spec ensure_env_hook_dispatch_table() -> ok.
-ensure_env_hook_dispatch_table() ->
-    prg_machine_registry:ensure_table().
-
--spec run_env_hook_process(process_options()) -> _.
-run_env_hook_process(Opts) ->
-    run_env_hook_process(Opts, <<>>).
-
--spec run_env_hook_process(process_options(), binary()) -> _.
-run_env_hook_process(Opts, BinCtx) ->
-    Process = #{
-        process_id => <<"env-hook-test">>,
-        last_event_id => 0,
-        history => [],
-        aux_state => undefined
-    },
-    process({init, term_to_binary(#{}), Process}, Opts, BinCtx).
-
--define(AUX_STATE_TEST_NS, aux_state_test_ns).
-
--spec setup_aux_state_test() -> ok.
-setup_aux_state_test() ->
-    _ = application:load(prg_machine),
-    {ok, _} = application:ensure_all_started(progressor),
-    _ = ensure_env_hook_dispatch_table(),
-    true = ets:insert(?TABLE, {?AUX_STATE_TEST_NS, prg_machine_aux_state_test_handler}),
-    ok.
-
--spec cleanup_aux_state_test(_) -> ok.
-cleanup_aux_state_test(_) ->
-    _ = ets:delete(?TABLE, ?AUX_STATE_TEST_NS),
-    ok.
+start_test_registry(Binding) ->
+    {ok, _} = application:ensure_all_started(prg_machine),
+    Registration = #{handler => prg_machine_aux_state_test_handler, binding => Binding},
+    {ok, Registry} = prg_machine_registry:start_link([Registration]),
+    Registry.
 
 -spec marshal_intent_omits_aux_state_without_auxst() -> _.
 marshal_intent_omits_aux_state_without_auxst() ->
@@ -742,15 +678,6 @@ notify_noop_omits_aux_state() ->
     {ok, NotifyIntent} = process({notify, term_to_binary(#{payload => test}), Process}, Opts, <<>>),
     ?assertNot(maps:is_key(aux_state, NotifyIntent)).
 
--spec setup_registry_test() -> ok.
-setup_registry_test() ->
-    ok = prg_machine_registry:ensure_table(),
-    ok.
-
--spec cleanup_registry_test(_) -> ok.
-cleanup_registry_test(_) ->
-    ok.
-
 -spec lookup_unknown_namespace_returns_error() -> _.
 lookup_unknown_namespace_returns_error() ->
     ?assertEqual(
@@ -785,7 +712,8 @@ process_crash_conforms_progressor_exception() ->
     ?assertEqual(
         {error, {exception, error, deliberate_crash}},
         process({call, term_to_binary(crash), Process}, Opts, <<>>)
-    ).
+    ),
+    ?assertError(badarg, op_context:load(op_context:key(hellgate))).
 
 %% --- Golden tests: legacy format compatibility (stage 1) -------------------
 

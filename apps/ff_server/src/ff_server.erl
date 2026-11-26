@@ -38,7 +38,7 @@ start() ->
 
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
-    ok = setup_metrics(),
+    ok = processing_server:setup_metrics(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 -spec stop(any()) -> ok.
@@ -49,12 +49,6 @@ stop(_State) ->
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
-    IpEnv = genlib_app:env(?MODULE, ip, "::1"),
-    Port = genlib_app:env(?MODULE, port, 8022),
-    HealthCheckReadiness = genlib_app:env(?MODULE, health_check_readiness, #{}),
-    HealthCheckLiveness = genlib_app:env(?MODULE, health_check_liveness, #{}),
-    WoodyOptsEnv = genlib_app:env(?MODULE, woody_opts, #{}),
-
     PartyClient = party_client:create_client(),
     DefaultTimeout = genlib_app:env(?MODULE, default_woody_handling_timeout, ?DEFAULT_HANDLING_TIMEOUT),
     WrapperOpts = #{
@@ -62,81 +56,50 @@ init([]) ->
         default_handling_timeout => DefaultTimeout
     },
 
-    {ok, Ip} = inet:parse_address(IpEnv),
-    WoodyOpts = maps:with([net_opts, handler_limits], WoodyOptsEnv),
-
-    Services =
-        [
-            {ff_withdrawal_adapter_host, ff_withdrawal_adapter_host},
-            {destination_management, ff_destination_handler},
-            {source_management, ff_source_handler},
-            {withdrawal_management, ff_withdrawal_handler},
-            {withdrawal_session_management, ff_withdrawal_session_handler},
-            {deposit_management, ff_deposit_handler},
-            {withdrawal_session_repairer, ff_withdrawal_session_repair},
-            {withdrawal_repairer, ff_withdrawal_repair},
-            {deposit_repairer, ff_deposit_repair},
-            {progressor_trace, ff_progressor_trace_handler}
-        ],
-    WoodyHandlers = [get_handler(Service, Handler, WrapperOpts) || {Service, Handler} <- Services],
-
-    ServicesChildSpec = woody_server:child_spec(
-        ?MODULE,
-        maps:merge(
-            WoodyOpts,
-            #{
-                ip => Ip,
-                port => Port,
-                handlers => WoodyHandlers,
-                event_handler => ff_woody_event_handler,
-                additional_routes =>
-                    get_prometheus_routes() ++
-                    [
-                        erl_health_handle:get_readiness_route(enable_health_logging(HealthCheckReadiness)),
-                        erl_health_handle:get_liveness_route(enable_health_logging(HealthCheckLiveness))
-                    ]
-            }
-        )
-    ),
     PartyClientSpec = party_client:child_spec(party_client, PartyClient),
-    PrgMachineSpec = prg_machine_registry:get_child_spec([
-        ff_deposit_machine,
-        ff_source_machine,
-        ff_destination_machine,
-        ff_withdrawal_machine,
-        ff_withdrawal_session_machine
-    ]),
+    Binding = op_context:binding(fistful),
+    Registrations = [
+        #{handler => Handler, binding => Binding}
+     || Handler <- [
+            ff_deposit_machine,
+            ff_source_machine,
+            ff_destination_machine,
+            ff_withdrawal_machine,
+            ff_withdrawal_session_machine
+        ]
+    ],
+    PrgMachineSpec = prg_machine_registry:get_child_spec(Registrations),
     % TODO
     %  - Zero thoughts given while defining this strategy.
-    {ok, {#{strategy => one_for_one}, [PartyClientSpec, PrgMachineSpec, ServicesChildSpec]}}.
+    {ok, {#{strategy => one_for_one}, [PartyClientSpec, PrgMachineSpec, get_listener_child_spec(WrapperOpts)]}}.
 
--spec enable_health_logging(erl_health:check()) -> erl_health:check().
-enable_health_logging(Check) ->
-    EvHandler = {erl_health_event_handler, []},
-    maps:map(fun(_, {_, _, _} = V) -> #{runner => V, event_handler => EvHandler} end, Check).
+get_listener_child_spec(WrapperOpts) ->
+    WoodyOpts = maps:with([net_opts, handler_limits], genlib_app:env(?MODULE, woody_opts, #{})),
+    processing_server:child_spec(?MODULE, #{
+        options => WoodyOpts#{
+            ip => genlib_app:env(?MODULE, ip, "::1"),
+            port => genlib_app:env(?MODULE, port, 8022),
+            event_handler => ff_woody_event_handler
+        },
+        endpoints => [
+            endpoint(ff_withdrawal_adapter_host, ff_withdrawal_adapter_host),
+            endpoint(destination_management, ff_destination_handler),
+            endpoint(source_management, ff_source_handler),
+            endpoint(withdrawal_management, ff_withdrawal_handler),
+            endpoint(withdrawal_session_management, ff_withdrawal_session_handler),
+            endpoint(deposit_management, ff_deposit_handler),
+            endpoint(withdrawal_session_repairer, ff_withdrawal_session_repair),
+            endpoint(withdrawal_repairer, ff_withdrawal_repair),
+            endpoint(deposit_repairer, ff_deposit_repair),
+            endpoint(progressor_trace, ff_progressor_trace_handler)
+        ],
+        wrapper => {ff_woody_wrapper, WrapperOpts},
+        health_checks => [
+            {readiness, genlib_app:env(?MODULE, health_check_readiness, #{})},
+            {liveness, genlib_app:env(?MODULE, health_check_liveness, #{})}
+        ]
+    }).
 
--spec get_prometheus_routes() -> [{iodata(), module(), _Opts :: any()}].
-get_prometheus_routes() ->
-    [{"/metrics/[:registry]", prometheus_cowboy2_handler, []}].
-
--spec get_handler(ff_services:service_name(), woody:handler(_), map()) -> woody:http_handler(woody:th_handler()).
-get_handler(Service, Handler, WrapperOpts) ->
-    {Path, ServiceSpec} = ff_services:get_service_spec(Service),
-    {Path, {ServiceSpec, wrap_handler(Handler, WrapperOpts)}}.
-
-wrap_handler(Handler, WrapperOpts) ->
-    FullOpts = maps:merge(#{handler => Handler}, WrapperOpts),
-    {ff_woody_wrapper, FullOpts}.
-
-%%
-
-setup_metrics() ->
-    ok = woody_ranch_prometheus_collector:setup(),
-    ok = woody_hackney_prometheus_collector:setup(),
-    _ = prometheus_histogram:declare([
-        {name, woody_wrapper_processing_duration_ms},
-        {help, "Duration of processing handle_function in millisecond"},
-        {buckets, [50, 150, 300, 500, 750, 1000]},
-        {labels, [handler, function]}
-    ]),
-    ok.
+endpoint(Name, Handler) ->
+    {Path, Service} = ff_services:get_service_spec(Name),
+    {Path, Service, Handler}.

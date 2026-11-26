@@ -1,0 +1,17 @@
+{application, processing_server, [
+    {description, "Common RPC request processing and listener setup"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        woody,
+        prometheus,
+        prometheus_cowboy,
+        erl_health,
+        op_context
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

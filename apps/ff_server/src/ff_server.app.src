@@ -16,6 +16,7 @@
         ff_validator,
         fistful,
         prg_machine,
+        processing_server,
         ff_transfer,
         thrift
     ]},

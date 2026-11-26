@@ -25,6 +25,9 @@ namespace() ->
     ?NS.
 
 -spec init(prg_machine:args(), prg_machine:machine()) -> prg_machine:result().
+init({check_context, Key}, Machine) ->
+    _ = op_context:load(Key),
+    init(#{}, Machine);
 init(_Args, _Machine) ->
     #{
         events => [],

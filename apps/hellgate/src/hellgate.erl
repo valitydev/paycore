@@ -41,6 +41,8 @@ init([]) ->
         party_client => PartyClient,
         default_handling_timeout => DefaultTimeout
     },
+    Binding = op_context:binding(hellgate),
+    Registrations = [#{handler => Handler, binding => Binding} || Handler <- [hg_invoice, hg_invoice_template]],
     {ok,
         {
             #{strategy => one_for_all, intensity => 6, period => 30},
@@ -48,76 +50,47 @@ init([]) ->
                 %% for debugging only
                 %% hg_profiler:get_child_spec(),
                 party_client:child_spec(party_client, PartyClient),
-                prg_machine_registry:get_child_spec([hg_invoice, hg_invoice_template]),
-                get_api_child_spec(Opts)
+                prg_machine_registry:get_child_spec(Registrations),
+                get_listener_child_spec(Opts)
             ]
         }}.
 
-get_api_child_spec(Opts) ->
-    {ok, Ip} = inet:parse_address(genlib_app:env(?MODULE, ip, "::")),
-    HealthRoutes =
-        construct_health_routes(liveness, genlib_app:env(?MODULE, health_check_liveness, #{})) ++
-            construct_health_routes(readiness, genlib_app:env(?MODULE, health_check_readiness, #{})),
+get_listener_child_spec(WrapperOpts) ->
     EventHandlerOpts = genlib_app:env(?MODULE, scoper_event_handler_options, #{}),
-    PrometeusRoute = get_prometheus_route(),
-    woody_server:child_spec(
-        ?MODULE,
-        #{
-            ip => Ip,
+    processing_server:child_spec(?MODULE, #{
+        options => #{
+            ip => genlib_app:env(?MODULE, ip, "::"),
             port => genlib_app:env(?MODULE, port, 8022),
             transport_opts => genlib_app:env(?MODULE, transport_opts, #{}),
             protocol_opts => genlib_app:env(?MODULE, protocol_opts, #{}),
             event_handler => {scoper_woody_event_handler, EventHandlerOpts},
-            handlers => [
-                construct_service_handler(invoicing, hg_invoice_handler, Opts),
-                construct_service_handler(invoice_templating, hg_invoice_template, Opts),
-                construct_service_handler(proxy_host_provider, hg_proxy_host_provider, Opts),
-                construct_service_handler(progressor_trace, hg_progressor_trace_handler, Opts)
-            ],
-            additional_routes => [PrometeusRoute | HealthRoutes],
             shutdown_timeout => genlib_app:env(?MODULE, shutdown_timeout, 0)
-        }
-    ).
+        },
+        endpoints => [
+            endpoint(invoicing, hg_invoice_handler),
+            endpoint(invoice_templating, hg_invoice_template),
+            endpoint(proxy_host_provider, hg_proxy_host_provider),
+            endpoint(progressor_trace, hg_progressor_trace_handler)
+        ],
+        wrapper => {hg_woody_service_wrapper, WrapperOpts},
+        health_checks => [
+            {liveness, genlib_app:env(?MODULE, health_check_liveness, #{})},
+            {readiness, genlib_app:env(?MODULE, health_check_readiness, #{})}
+        ]
+    }).
 
-construct_health_routes(liveness, Check) ->
-    [erl_health_handle:get_liveness_route(enable_health_logging(Check))];
-construct_health_routes(readiness, Check) ->
-    [erl_health_handle:get_readiness_route(enable_health_logging(Check))].
-
-enable_health_logging(Check) ->
-    EvHandler = {erl_health_event_handler, []},
-    maps:map(fun(_, {_, _, _} = V) -> #{runner => V, event_handler => EvHandler} end, Check).
-
-construct_service_handler(Name, Module, Opts) ->
-    FullOpts = maps:merge(#{handler => Module}, Opts),
+endpoint(Name, Handler) ->
     {Path, Service} = hg_proto:get_service_spec(Name),
-    {Path, {Service, {hg_woody_service_wrapper, FullOpts}}}.
-
--spec get_prometheus_route() -> {iodata(), module(), _Opts :: any()}.
-get_prometheus_route() ->
-    {"/metrics/[:registry]", prometheus_cowboy2_handler, []}.
+    {Path, Service, Handler}.
 
 %% Application callbacks
 
 -spec start(normal, any()) -> {ok, pid()} | {error, any()}.
 start(_StartType, _StartArgs) ->
-    ok = setup_metrics(),
+    ok = hg_customer_metrics:setup(),
+    ok = processing_server:setup_metrics(),
     supervisor:start_link(?MODULE, []).
 
 -spec stop(any()) -> ok.
 stop(_State) ->
-    ok.
-
-%%
-
-setup_metrics() ->
-    ok = hg_customer_metrics:setup(),
-    ok = woody_ranch_prometheus_collector:setup(),
-    ok = woody_hackney_prometheus_collector:setup(),
-    _ = prometheus_histogram:declare([
-        {name, woody_wrapper_processing_duration_ms},
-        {help, "Duration of processing handle_function in millisecond"},
-        {buckets, [50, 150, 300, 500, 750, 1000]},
-        {labels, [handler, function]}
-    ]),
     ok.
